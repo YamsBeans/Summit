@@ -25,17 +25,14 @@ export const db = {
   // Auth
   signUp: async (email: string, password: string, username: string) => {
     if (canUseSupabase()) {
-      const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
+      // The public.users profile row is created by a database trigger (handle_new_user,
+      // see supabase/migrations) from the username passed here as metadata.
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { username } },
+      });
       if (signUpError) return { data: null, error: signUpError };
-      if (data.user) {
-        const { error: insertError } = await supabase.from("users").insert({
-          user_id: data.user.id,
-          username,
-          email,
-          password_hash: "managed_by_supabase_auth",
-        });
-        if (insertError) return { data: null, error: insertError };
-      }
       return { data, error: null };
     }
     return localDb.signUp(email, password, username);
