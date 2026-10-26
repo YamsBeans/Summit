@@ -1,6 +1,6 @@
 // components/ExerciseSearchModal.tsx
 import React, { useMemo, useState } from 'react';
-import { searchExercisesByName } from '../app/utils/exerciseSearch';
+import { searchExercisesByName } from '@/utils/exerciseSearch';
 import {
   Modal,
   View,
@@ -10,7 +10,7 @@ import {
   FlatList,
   StyleSheet,
 } from 'react-native';
-import exercisesData from '../assets/data/exercises.json';
+import exercisesData from '@/assets/data/exercises.json';
 
 export interface ExerciseItem {
   id: string;

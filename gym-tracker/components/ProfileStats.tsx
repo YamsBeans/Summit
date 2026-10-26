@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
-import { useTheme } from "../theme/ThemeContext";
-import { useUnits } from "../utils/units";
+import { useTheme } from "@/theme/ThemeContext";
+import { useUnits } from "@/utils/units";
 
 type ProfileStatsProps = {
   totalWorkouts: number;

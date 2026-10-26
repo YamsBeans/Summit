@@ -16,12 +16,12 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Routine, RoutineCardio, Exercise, WorkoutLog, Set as WorkoutSet } from '../../types';
-import exercisesData from '../../assets/data/exercises.json';
+import { Routine, RoutineCardio, Exercise, WorkoutLog, Set as WorkoutSet } from '@/types';
+import exercisesData from '@/assets/data/exercises.json';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '../backend/supabaseClient';
-import ExerciseSearchModal from '../../components/ExerciseSearchModal';
-import WorkoutKeyboard from '../../components/WorkoutKeyboard';
+import { supabase } from '@/backend/supabaseClient';
+import ExerciseSearchModal from '@/components/ExerciseSearchModal';
+import WorkoutKeyboard from '@/components/WorkoutKeyboard';
 
 const STORAGE_KEY = '@workout_logs';
 const SESSION_KEY = '@currentSessionId';
@@ -453,7 +453,6 @@ export default function TodayScreen() {
     setLoading(true);
     try {
       const storedUserId = await AsyncStorage.getItem('userId');
-      console.log('Reading userid on index.tsx:', storedUserId);
       setUserId(storedUserId);
 
       const storedSessionId = await AsyncStorage.getItem(SESSION_KEY);
@@ -545,7 +544,7 @@ export default function TodayScreen() {
       setElapsedSeconds(Math.max(0, Math.floor((Date.now() - initialTimerOrigin) / 1000)));
       setIsTimerRunning(false);
 
-      const transformedExercises: Exercise[] = sessionExercises.map(ex => ({
+      const transformedExercises: Exercise[] = sessionExercises.map((ex: any) => ({
         id: ex.session_exercise_id,
         name: ex.exercise_name,
         muscleGroup: 'General',
@@ -589,8 +588,6 @@ export default function TodayScreen() {
 
     setLoading(true);
     try {
-      console.log('Starting session for routine:', selectedRoutine.name);
-      console.log('User ID:', userId);
 
       const parsedRoutineId = Number(selectedRoutine.id);
       if (!Number.isInteger(parsedRoutineId) || parsedRoutineId <= 0) {
@@ -671,7 +668,6 @@ export default function TodayScreen() {
         throw sessionError;
       }
       
-      console.log('Session created:', session);
 
       const sessionExercises = selectedRoutine.exercises.map((ex, index) => ({
         session_id: session.session_id,
@@ -680,7 +676,6 @@ export default function TodayScreen() {
         exercise_order: index + 1,
       }));
 
-      console.log('Creating exercises:', sessionExercises);
 
       const { data: createdExercises, error: exercisesError } = await supabase
         .from('session_exercises')
@@ -692,10 +687,9 @@ export default function TodayScreen() {
         throw exercisesError;
       }
 
-      console.log('Exercises created:', createdExercises);
 
       // Create sets using saved data if available
-      const allSets = createdExercises.flatMap((ex, index) => {
+      const allSets = createdExercises.flatMap((ex: any, index: number) => {
         const routineEx = selectedRoutine.exercises[index];
         const presetSets = buildPresetSetsFromRoutine(routineEx);
 
@@ -709,7 +703,6 @@ export default function TodayScreen() {
         }));
       });
 
-      console.log('Creating sets:', allSets);
 
       const { error: setsError } = await supabase
         .from('session_exercise_sets')
@@ -720,7 +713,6 @@ export default function TodayScreen() {
         throw setsError;
       }
 
-      console.log('Sets created successfully');
 
       const cardioTpl = (selectedRoutine.cardio ?? []).map(normalizeCardioRow);
       if (cardioTpl.length > 0) {
@@ -750,7 +742,7 @@ export default function TodayScreen() {
       setCurrentSessionId(persistedSessionId);
 
       // Build exercise state directly from routine data so reps/weight are preloaded
-      const transformedExercises: Exercise[] = createdExercises.map((ex, index) => {
+      const transformedExercises: Exercise[] = createdExercises.map((ex: any, index: number) => {
         const routineEx = selectedRoutine.exercises[index];
         const sets = buildPresetSetsFromRoutine(routineEx).map((set) => ({
           ...set,
@@ -794,7 +786,6 @@ export default function TodayScreen() {
       setElapsedSeconds(Math.max(0, Math.floor((Date.now() - initialTimerOrigin) / 1000)));
       setIsTimerRunning(false);
 
-      console.log('Session loaded successfully');
     } catch (error: any) {
       console.error('Failed to start session:', error);
       Alert.alert('Error', error.message || 'Failed to start workout session');
@@ -1785,7 +1776,7 @@ export default function TodayScreen() {
             </View>
 
             <View style={styles.noteFieldBlock}>
-              <Text style={styles.noteFieldLabel}>Today's Nutrition</Text>
+              <Text style={styles.noteFieldLabel}>Today&apos;s Nutrition</Text>
               <View style={styles.nutritionPillsRow}>
                 {(['good', 'ok', 'bad'] as NutritionQuality[]).map((level) => {
                   const selected = nutritionDraft === level;

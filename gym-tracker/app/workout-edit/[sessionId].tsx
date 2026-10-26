@@ -14,9 +14,9 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { db } from "../backend/db";
-import { useTheme } from "../theme/ThemeContext";
-import ExercisePicker from "../components/ExercisePicker";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import ExercisePicker from "@/components/ExercisePicker";
 
 type EditSet = {
   session_set_id: number;

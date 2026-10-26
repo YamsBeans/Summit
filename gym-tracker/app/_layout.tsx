@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
-import { db } from "./backend/db";
-import { ThemeProvider, useTheme } from "./theme/ThemeContext";
+import { db } from "@/backend/db";
+import { ThemeProvider, useTheme } from "@/theme/ThemeContext";
 
 function RootNav() {
   const [session, setSession] = useState<any>(null);
@@ -64,7 +64,6 @@ function RootNav() {
         <Stack.Screen name="auth" />
         <Stack.Screen name="reset-password" />
         <Stack.Screen name="settings" options={{ animation: "slide_from_bottom", animationDuration: 280 }} />
-        <Stack.Screen name="test" options={{ animation: "slide_from_right", animationDuration: 280 }} />
       </Stack>
     </View>
   );

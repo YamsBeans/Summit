@@ -1,6 +1,6 @@
 // app/(tabs)/routines.tsx
 import React, { useState, useEffect } from 'react';
-import ExerciseSearchModal from '../../components/ExerciseSearchModal';
+import ExerciseSearchModal from '@/components/ExerciseSearchModal';
 import {
   StyleSheet,
   View,
@@ -14,10 +14,10 @@ import {
   Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Routine, RoutineCardio, RoutineExercise } from '../../types';
+import { Routine, RoutineCardio, RoutineExercise } from '@/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { supabase } from '../backend/supabaseClient';
+import { supabase } from '@/backend/supabaseClient';
 
 const STORAGE_KEY = '@routines';
 const CARDIO_TYPES: RoutineCardio["type"][] = [

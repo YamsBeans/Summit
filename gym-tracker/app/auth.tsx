@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db } from "./backend/db";
-import { useTheme } from "./theme/ThemeContext";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
 
 export default function AuthScreen() {
   const router = useRouter();
@@ -25,12 +25,8 @@ export default function AuthScreen() {
     }
 
     const currentUserId: string | undefined = result.data?.user?.id;
-    console.log("Current user ID from DB:", currentUserId);
     if (currentUserId) {
-      console.log("Storing user ID in AsyncStorage:", currentUserId);
       await AsyncStorage.setItem("userId", currentUserId);
-      const testUserId = await AsyncStorage.getItem("userId");
-      console.log("Verified stored user ID from AsyncStorage:", testUserId);
     }
   };
 

@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Text, View } from "react-native";
-import { useTheme } from "../theme/ThemeContext";
+import { useTheme } from "@/theme/ThemeContext";
 import WorkoutHistoryCard from "./WorkoutHistoryCard";
 
 export type SessionWithMeta = {

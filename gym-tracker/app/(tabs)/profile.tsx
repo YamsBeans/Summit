@@ -3,11 +3,11 @@ import { ActivityIndicator, Image, Modal, Pressable, RefreshControl, ScrollView,
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db, isOnline } from "../backend/db";
-import { useTheme } from "../theme/ThemeContext";
-import { useUnits } from "../utils/units";
-import WorkoutHistoryList, { SessionWithMeta } from "../components/WorkoutHistoryList";
-import WorkoutChart from "../components/WorkoutChart";
+import { db, isOnline } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useUnits } from "@/utils/units";
+import WorkoutHistoryList, { SessionWithMeta } from "@/components/WorkoutHistoryList";
+import WorkoutChart from "@/components/WorkoutChart";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 

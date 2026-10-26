@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
-import { db } from "./backend/db";
-import { useTheme } from "./theme/ThemeContext";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
