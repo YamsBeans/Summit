@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import { localDb } from "./localDb";
 import { networkStatus } from "./networkStatus";
@@ -118,6 +119,34 @@ export const db = {
       return supabase.auth.updateUser({ password: newPassword });
     }
     return { data: null, error: { message: "Password changes require an internet connection." } };
+  },
+
+  // Permanently deletes the signed-in user's data and login.
+  // Needs the delete_my_account() function from supabase/migrations.
+  deleteAccount: async (): Promise<{ error: string | null }> => {
+    if (!canUseSupabase()) {
+      return { error: "Deleting your account requires an internet connection." };
+    }
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return { error: "You're not signed in." };
+
+      // Remove avatar files first (storage objects can't be deleted from SQL).
+      const { data: files } = await supabase.storage.from("avatars").list(userId);
+      if (files && files.length > 0) {
+        await supabase.storage.from("avatars").remove(files.map((f: { name: string }) => `${userId}/${f.name}`));
+      }
+
+      const { error } = await supabase.rpc("delete_my_account");
+      if (error) return { error: error.message };
+
+      await supabase.auth.signOut();
+      await AsyncStorage.clear().catch(() => {});
+      return { error: null };
+    } catch (e: any) {
+      return { error: e?.message ?? "Failed to delete account" };
+    }
   },
 
   onAuthStateChange: (callback: (event: string, session: any) => void) => {
