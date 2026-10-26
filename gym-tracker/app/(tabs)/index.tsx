@@ -10,11 +10,11 @@ import {
   Platform,
   TextInput,
   SafeAreaView,
-  Alert,
   ActivityIndicator,
   Modal,
   KeyboardAvoidingView,
 } from 'react-native';
+import { showAlert } from "@/utils/alert";
 import { LinearGradient } from 'expo-linear-gradient';
 import { Routine, RoutineCardio, Exercise, WorkoutLog, Set as WorkoutSet } from '@/types';
 import exercisesData from '@/assets/data/exercises.json';
@@ -473,7 +473,7 @@ export default function TodayScreen() {
       }
     } catch (error) {
       console.error('Failed to initialize screen:', error);
-      Alert.alert('Error', 'Failed to load data');
+      showAlert('Error', 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -490,7 +490,7 @@ export default function TodayScreen() {
       }
     } catch (error) {
       console.error('Failed to load routines:', error);
-      Alert.alert('Error', 'Failed to load routines');
+      showAlert('Error', 'Failed to load routines');
     }
   };
 
@@ -565,7 +565,7 @@ export default function TodayScreen() {
       setSessionRoutineTemplateId(routineTemplateId);
     } catch (error) {
       console.error('Failed to load session:', error);
-      Alert.alert('Error', 'Failed to load session');
+      showAlert('Error', 'Failed to load session');
       await AsyncStorage.removeItem(SESSION_KEY);
       await AsyncStorage.removeItem(sessionCardioStorageKey(sessionId));
       setSessionCardio([]);
@@ -577,12 +577,12 @@ export default function TodayScreen() {
 
   const handleStartSession = async () => {
     if (!selectedRoutine) {
-      Alert.alert('Error', 'Please select a routine');
+      showAlert('Error', 'Please select a routine');
       return;
     }
     
     if (!userId) {
-      Alert.alert('Not Logged In', 'Please log in first to start a workout session');
+      showAlert('Not Logged In', 'Please log in first to start a workout session');
       return;
     }
 
@@ -591,7 +591,7 @@ export default function TodayScreen() {
 
       const parsedRoutineId = Number(selectedRoutine.id);
       if (!Number.isInteger(parsedRoutineId) || parsedRoutineId <= 0) {
-        Alert.alert('Error', 'Selected routine has an invalid ID.');
+        showAlert('Error', 'Selected routine has an invalid ID.');
         return;
       }
       let routineId = parsedRoutineId;
@@ -788,7 +788,7 @@ export default function TodayScreen() {
 
     } catch (error: any) {
       console.error('Failed to start session:', error);
-      Alert.alert('Error', error.message || 'Failed to start workout session');
+      showAlert('Error', error.message || 'Failed to start workout session');
     } finally {
       setLoading(false);
     }
@@ -834,7 +834,7 @@ export default function TodayScreen() {
       await loadRoutines(userId);
     } catch (error) {
       console.error('Failed to end session:', error);
-      Alert.alert('Error', 'Failed to end session');
+      showAlert('Error', 'Failed to end session');
     }
   };
 
@@ -919,7 +919,7 @@ export default function TodayScreen() {
       setExercises((prev) => [...prev, newExercise]);
     } catch (error: any) {
       console.error('Failed to add exercise:', error);
-      Alert.alert('Error', 'Failed to add exercise');
+      showAlert('Error', 'Failed to add exercise');
     }
   };
 
@@ -942,7 +942,7 @@ export default function TodayScreen() {
       );
     } catch (error: any) {
       console.error('Failed to replace exercise:', error);
-      Alert.alert('Error', 'Failed to replace exercise');
+      showAlert('Error', 'Failed to replace exercise');
     }
   };
 
@@ -997,7 +997,7 @@ export default function TodayScreen() {
       );
     } catch (error) {
       console.error('Failed to add set:', error);
-      Alert.alert('Error', 'Failed to add set');
+      showAlert('Error', 'Failed to add set');
     }
   };
 
@@ -1007,7 +1007,7 @@ export default function TodayScreen() {
       if (!exercise) return;
 
       if (exercise.sets.length <= 1) {
-        Alert.alert('Minimum Reached', 'Each exercise needs at least 1 set.');
+        showAlert('Minimum Reached', 'Each exercise needs at least 1 set.');
         return;
       }
 
@@ -1045,7 +1045,7 @@ export default function TodayScreen() {
       }
     } catch (error) {
       console.error('Failed to remove set:', error);
-      Alert.alert('Error', 'Failed to remove set');
+      showAlert('Error', 'Failed to remove set');
     }
   };
 
@@ -1172,10 +1172,10 @@ export default function TodayScreen() {
       setElapsedSeconds(0);
       setIsTimerRunning(false);
       
-      Alert.alert('Signed Out', 'You have been signed out successfully');
+      showAlert('Signed Out', 'You have been signed out successfully');
     } catch (error) {
       console.error('Failed to sign out:', error);
-      Alert.alert('Error', 'Failed to sign out');
+      showAlert('Error', 'Failed to sign out');
     }
   };
 
@@ -1307,7 +1307,7 @@ export default function TodayScreen() {
       normalizedSleepHoursInput !== '' &&
       (Number.isNaN(parsedSleepHours) || (parsedSleepHours as number) < 0 || (parsedSleepHours as number) > 24)
     ) {
-      Alert.alert('Invalid Sleep', 'Sleep hours must be a whole number between 0 and 24.');
+      showAlert('Invalid Sleep', 'Sleep hours must be a whole number between 0 and 24.');
       return;
     }
 
@@ -1343,7 +1343,7 @@ export default function TodayScreen() {
       setShowNotesModal(false);
     } catch (error: any) {
       console.error('Failed to save notes:', error);
-      Alert.alert('Error', error.message || 'Failed to save workout note');
+      showAlert('Error', error.message || 'Failed to save workout note');
     } finally {
       setSavingNote(false);
     }

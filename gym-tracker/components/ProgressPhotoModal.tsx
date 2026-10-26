@@ -1,7 +1,7 @@
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { showAlert } from "@/utils/alert";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as ImagePicker from "expo-image-picker";
-import { Alert } from "react-native";
 import { useTheme } from "@/theme/ThemeContext";
 
 type Props = {
@@ -17,7 +17,7 @@ export default function ProgressPhotoModal({ visible, isUploading, onPhoto, onSk
   const handleCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission needed", "Allow camera access to take a progress photo.");
+      showAlert("Permission needed", "Allow camera access to take a progress photo.");
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -33,7 +33,7 @@ export default function ProgressPhotoModal({ visible, isUploading, onPhoto, onSk
   const handleLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission needed", "Allow photo library access to pick a progress photo.");
+      showAlert("Permission needed", "Allow photo library access to pick a progress photo.");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({

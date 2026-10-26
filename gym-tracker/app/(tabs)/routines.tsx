@@ -11,8 +11,8 @@ import {
   Modal,
   TextInput,
   SafeAreaView,
-  Alert,
-} from 'react-native';
+  } from 'react-native';
+import { showAlert } from "@/utils/alert";
 import { LinearGradient } from 'expo-linear-gradient';
 import { Routine, RoutineCardio, RoutineExercise } from '@/types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -307,15 +307,15 @@ const CreateEditRoutineModal = ({ visible, onClose, onSave, editingRoutine }: Cr
 
   const handleSave = () => {
     if (!routineName.trim()) {
-      Alert.alert('Error', 'Please enter a routine name');
+      showAlert('Error', 'Please enter a routine name');
       return;
     }
     if (selectedExercises.length === 0) {
-      Alert.alert('Error', 'Please add at least one exercise');
+      showAlert('Error', 'Please add at least one exercise');
       return;
     }
     if (selectedDay === 'Custom' && !customDayName.trim()) {
-      Alert.alert('Error', 'Please enter a custom day name');
+      showAlert('Error', 'Please enter a custom day name');
       return;
     }
 
@@ -634,7 +634,7 @@ export default function RoutinesScreen() {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(newRoutines));
       setRoutines(newRoutines);
     } catch (error) {
-      Alert.alert('Error', 'Failed to save routine');
+      showAlert('Error', 'Failed to save routine');
     }
   };
 
@@ -668,7 +668,7 @@ export default function RoutinesScreen() {
       }
     } catch (error) {
       console.error('Failed to save routine to DB:', error);
-      Alert.alert('Sync Warning', 'Routine saved locally, but failed to sync to the database.');
+      showAlert('Sync Warning', 'Routine saved locally, but failed to sync to the database.');
     }
 
     const updated = [...routines, routineToPersist];
@@ -698,7 +698,7 @@ export default function RoutinesScreen() {
       }
     } catch (error) {
       console.error('Failed to update routine in DB:', error);
-      Alert.alert('Sync Warning', 'Routine updated locally, but failed to sync update to the database.');
+      showAlert('Sync Warning', 'Routine updated locally, but failed to sync update to the database.');
     }
 
     const updated = routines.map(r => 
@@ -723,23 +723,14 @@ export default function RoutinesScreen() {
         }
       } catch (error) {
         console.error('Failed to delete routine in DB:', error);
-        Alert.alert('Sync Warning', 'Routine deleted locally, but failed to sync delete to the database.');
+        showAlert('Sync Warning', 'Routine deleted locally, but failed to sync delete to the database.');
       }
 
       const updated = routines.filter((r) => r.id !== routineId);
       await saveRoutines(updated);
     };
 
-    // react-native-web's Alert.alert with multiple buttons is unreliable: the dialog
-    // may not show or button onPress callbacks may never run. Native Alert works fine.
-    if (Platform.OS === 'web') {
-      if (typeof window !== 'undefined' && window.confirm('Delete this routine?')) {
-        performDelete();
-      }
-      return;
-    }
-
-    Alert.alert('Delete Routine', 'Are you sure you want to delete this routine?', [
+    showAlert('Delete Routine', 'Are you sure you want to delete this routine?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: performDelete },
     ]);
