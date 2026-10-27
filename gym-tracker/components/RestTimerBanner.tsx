@@ -1,5 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useTheme } from "../theme/ThemeContext";
+import { useTheme } from "@/theme/ThemeContext";
 
 type Props = {
   remaining: number;

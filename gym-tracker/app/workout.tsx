@@ -3,24 +3,24 @@ import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
-import ConfirmModal from "./components/ConfirmModal";
-import ProgressPhotoModal from "./components/ProgressPhotoModal";
+import ConfirmModal from "@/components/ConfirmModal";
+import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useActiveWorkout } from "./utils/ActiveWorkoutContext";
+import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { db } from "./backend/db";
-import { useTheme } from "./theme/ThemeContext";
-import { useGuardedPress } from "./utils/pressGuard";
-import ExercisePicker from "./components/ExercisePicker";
-import RestTimerBanner from "./components/RestTimerBanner";
-import { useRestTimer } from "./utils/useRestTimer";
-import { detectPRs, detectCardioPRs } from "./utils/prDetection";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useGuardedPress } from "@/utils/pressGuard";
+import ExercisePicker from "@/components/ExercisePicker";
+import RestTimerBanner from "@/components/RestTimerBanner";
+import { useRestTimer } from "@/utils/useRestTimer";
+import { detectPRs, detectCardioPRs } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { scheduleRestDoneNotification, cancelRestDoneNotification } from "./utils/notifications";
-import { useUnits } from "./utils/units";
-import { logError } from "./utils/log";
-import CardioSetRow from "./components/CardioSetRow";
-import { computePace, formatDistance, formatDuration, metersToDisplay, parseDistanceToMeters, parseDuration, formatDurationShort } from "./utils/cardioUtils";
+import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
+import { useUnits } from "@/utils/units";
+import { logError } from "@/utils/log";
+import CardioSetRow from "@/components/CardioSetRow";
+import { computePace, formatDistance, formatDuration, metersToDisplay, parseDistanceToMeters, parseDuration, formatDurationShort } from "@/utils/cardioUtils";
 
 export default function WorkoutScreen() {
   const router = useRouter();

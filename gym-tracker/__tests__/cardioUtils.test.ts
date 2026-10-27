@@ -16,7 +16,7 @@ import {
   formatPace,
   computeSpeed,
   computeCardioSummary,
-} from "../app/utils/cardioUtils";
+} from "../utils/cardioUtils";
 
 // ─── Duration digit helpers ───────────────────────────────────────────────────
 

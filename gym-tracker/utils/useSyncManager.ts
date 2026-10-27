@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import NetInfo from "@react-native-community/netinfo";
-import { db, isOnline } from "../backend/db";
+import { db, isOnline } from "@/backend/db";
 
 export function useSyncManager(userId: string | null) {
   const [isSyncing, setIsSyncing] = useState(false);

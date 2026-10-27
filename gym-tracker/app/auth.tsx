@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from "react-native";
-import { db, isOnline } from "./backend/db";
-import { useTheme } from "./theme/ThemeContext";
+import { db, isOnline } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
 
 type AuthMode = "signin" | "signup" | "forgot-password";
 

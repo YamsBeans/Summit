@@ -2,7 +2,7 @@ import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "rea
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as ImagePicker from "expo-image-picker";
 import { Alert } from "react-native";
-import { useTheme } from "../theme/ThemeContext";
+import { useTheme } from "@/theme/ThemeContext";
 
 type Props = {
   visible: boolean;

@@ -1,5 +1,5 @@
 import { renderHook, act } from "@testing-library/react-native";
-import { useRestTimer } from "../app/utils/useRestTimer";
+import { useRestTimer } from "../utils/useRestTimer";
 
 jest.mock("@react-native-async-storage/async-storage", () => ({
   getItem: jest.fn(() => Promise.resolve(null)),

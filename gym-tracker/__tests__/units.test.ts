@@ -1,5 +1,5 @@
 import { renderHook, act } from "@testing-library/react-native";
-import { useUnits } from "../app/utils/units";
+import { useUnits } from "../utils/units";
 
 // Mock AsyncStorage so tests never touch the filesystem / native layer
 jest.mock("@react-native-async-storage/async-storage", () => ({

@@ -1,8 +1,8 @@
 import { FlatList, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useEffect, useState } from "react";
-import { useTheme } from "../theme/ThemeContext";
-import exercisesData from "../../assets/data/exercises.json";
-import { db } from "../backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import exercisesData from "@/assets/data/exercises.json";
+import { db } from "@/backend/db";
 
 type ExerciseType = 'strength' | 'cardio' | 'stretching';
 

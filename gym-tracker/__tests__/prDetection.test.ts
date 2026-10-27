@@ -1,4 +1,4 @@
-import { detectPRs, PRResult } from "../app/utils/prDetection";
+import { detectPRs, PRResult } from "../utils/prDetection";
 
 // Helper to build exercise entries
 function makeExercise(id: number, exerciseId: string, name: string) {

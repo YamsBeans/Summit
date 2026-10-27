@@ -2,10 +2,10 @@ import { memo, useState } from "react";
 import { Alert, Image, Modal, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
-import { db } from "../backend/db";
-import { useTheme } from "../theme/ThemeContext";
-import { useUnits } from "../utils/units";
-import { formatDistance, formatDurationShort } from "../utils/cardioUtils";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useUnits } from "@/utils/units";
+import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
 type WorkoutHistoryCardProps = {
   session_id: number;

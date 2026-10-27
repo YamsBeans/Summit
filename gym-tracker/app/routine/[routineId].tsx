@@ -5,12 +5,12 @@ import {
 } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { db } from "../backend/db";
-import { useTheme } from "../theme/ThemeContext";
-import { useGuardedPress } from "../utils/pressGuard";
-import ExercisePicker from "../components/ExercisePicker";
-import ConfirmModal from "../components/ConfirmModal";
-import { digitsToSeconds, formatDigits, formatDistance, formatDuration, metersToMiles, milesToMeters, secondsToDigits } from "../utils/cardioUtils";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useGuardedPress } from "@/utils/pressGuard";
+import ExercisePicker from "@/components/ExercisePicker";
+import ConfirmModal from "@/components/ConfirmModal";
+import { digitsToSeconds, formatDigits, formatDistance, formatDuration, metersToMiles, milesToMeters, secondsToDigits } from "@/utils/cardioUtils";
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 

@@ -5,10 +5,10 @@ import {
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { db, isOnline } from "../backend/db";
-import { useTheme } from "../theme/ThemeContext";
-import { useGuardedPress } from "../utils/pressGuard";
-import ConfirmModal from "../components/ConfirmModal";
+import { db, isOnline } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useGuardedPress } from "@/utils/pressGuard";
+import ConfirmModal from "@/components/ConfirmModal";
 
 export default function WorkoutsScreen() {
   const router = useRouter();

@@ -3,14 +3,14 @@ import { ActivityIndicator, FlatList, Image, Modal, Pressable, RefreshControl, S
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db, isOnline } from "../backend/db";
-import { useTheme } from "../theme/ThemeContext";
-import { useUnits } from "../utils/units";
-import { logError } from "../utils/log";
-import WorkoutHistoryCard from "../components/WorkoutHistoryCard";
-import { SessionWithMeta } from "../components/WorkoutHistoryList";
-import WorkoutChart from "../components/WorkoutChart";
-import { formatDistance, formatDurationShort, formatPace } from "../utils/cardioUtils";
+import { db, isOnline } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useUnits } from "@/utils/units";
+import { logError } from "@/utils/log";
+import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
+import { SessionWithMeta } from "@/components/WorkoutHistoryList";
+import WorkoutChart from "@/components/WorkoutChart";
+import { formatDistance, formatDurationShort, formatPace } from "@/utils/cardioUtils";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 

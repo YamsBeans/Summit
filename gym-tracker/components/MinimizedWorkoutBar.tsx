@@ -3,10 +3,10 @@ import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter, useSegments } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useTheme } from "../theme/ThemeContext";
-import { useActiveWorkout } from "../utils/ActiveWorkoutContext";
-import { db } from "../backend/db";
-import { cancelRestDoneNotification } from "../utils/notifications";
+import { useTheme } from "@/theme/ThemeContext";
+import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
+import { db } from "@/backend/db";
+import { cancelRestDoneNotification } from "@/utils/notifications";
 import ConfirmModal from "./ConfirmModal";
 
 const TAB_BAR_HEIGHT = 60;

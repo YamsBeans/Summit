@@ -5,9 +5,9 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useTheme } from "./theme/ThemeContext";
-import { db } from "./backend/db";
-import { PROGRAMS, Program, ProgramRoutine } from "./utils/programsData";
+import { useTheme } from "@/theme/ThemeContext";
+import { db } from "@/backend/db";
+import { PROGRAMS, Program, ProgramRoutine } from "@/utils/programsData";
 
 type LevelFilter = 'all' | 'beginner' | 'intermediate';
 type GoalFilter = 'all' | 'strength' | 'hypertrophy' | 'weight_loss';

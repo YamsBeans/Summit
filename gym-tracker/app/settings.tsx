@@ -5,11 +5,11 @@ import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db } from "./backend/db";
-import { useTheme } from "./theme/ThemeContext";
-import { useUnits, UnitSystem } from "./utils/units";
-import { useRestTimer } from "./utils/useRestTimer";
-import { requestNotificationPermissions } from "./utils/notifications";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useUnits, UnitSystem } from "@/utils/units";
+import { useRestTimer } from "@/utils/useRestTimer";
+import { requestNotificationPermissions } from "@/utils/notifications";
 
 const NOTIF_KEY = "@gym_tracker_notifications";
 

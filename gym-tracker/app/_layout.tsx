@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
-import { db } from "./backend/db";
-import { ThemeProvider, useTheme } from "./theme/ThemeContext";
-import { useSyncManager } from "./utils/useSyncManager";
-import { ActiveWorkoutProvider } from "./utils/ActiveWorkoutContext";
-import MinimizedWorkoutBar from "./components/MinimizedWorkoutBar";
+import { db } from "@/backend/db";
+import { ThemeProvider, useTheme } from "@/theme/ThemeContext";
+import { useSyncManager } from "@/utils/useSyncManager";
+import { ActiveWorkoutProvider } from "@/utils/ActiveWorkoutContext";
+import MinimizedWorkoutBar from "@/components/MinimizedWorkoutBar";
 
 function RootNav() {
   const [session, setSession] = useState<any>(null);

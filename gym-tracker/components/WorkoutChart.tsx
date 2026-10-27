@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { BarChart } from "react-native-gifted-charts";
-import { useTheme } from "../theme/ThemeContext";
-import { useUnits } from "../utils/units";
+import { useTheme } from "@/theme/ThemeContext";
+import { useUnits } from "@/utils/units";
 import { SessionWithMeta } from "./WorkoutHistoryList";
 
 // ─── Types ────────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { useTheme } from "../theme/ThemeContext";
+import { useTheme } from "@/theme/ThemeContext";
 import {
   computePace,
   digitsToSeconds,
@@ -9,7 +9,7 @@ import {
   metersToDisplay,
   parseDistanceToMeters,
   secondsToDigits,
-} from "../utils/cardioUtils";
+} from "@/utils/cardioUtils";
 
 type Props = {
   set: any;
