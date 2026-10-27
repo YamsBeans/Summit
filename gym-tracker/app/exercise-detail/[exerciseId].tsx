@@ -3,9 +3,9 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LineChart } from "react-native-gifted-charts";
-import { db } from "../backend/db";
-import { useTheme } from "../theme/ThemeContext";
-import { useUnits } from "../utils/units";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useUnits } from "@/utils/units";
 
 type HistoryPoint = {
   session_date: string;

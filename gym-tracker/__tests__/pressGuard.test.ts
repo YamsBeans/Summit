@@ -1,5 +1,5 @@
 import { renderHook, act } from "@testing-library/react-native";
-import { useGuardedPress } from "../app/utils/pressGuard";
+import { useGuardedPress } from "../utils/pressGuard";
 
 describe("useGuardedPress", () => {
   beforeEach(() => {

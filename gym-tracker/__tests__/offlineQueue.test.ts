@@ -7,7 +7,7 @@ import {
   getSessionOrigin,
   clearSessionOrigin,
   PendingSession,
-} from "../app/backend/offlineQueue";
+} from "../backend/offlineQueue";
 
 // ─── AsyncStorage mock ────────────────────────────────────────────────────────
 // Use jest.fn() stubs and wire up a real in-memory store in beforeEach so each

@@ -3,7 +3,7 @@ import {
   readCache,
   clearReadCache,
   cachedRead,
-} from "../app/backend/readCache";
+} from "../backend/readCache";
 
 // ─── AsyncStorage mock ────────────────────────────────────────────────────────
 // Mirror the in-memory-store pattern used by offlineQueue.test.ts.

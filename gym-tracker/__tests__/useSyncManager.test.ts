@@ -1,7 +1,7 @@
 import { renderHook, act, waitFor } from "@testing-library/react-native";
 import NetInfo from "@react-native-community/netinfo";
-import { db } from "../app/backend/db";
-import { useSyncManager } from "../app/utils/useSyncManager";
+import { db } from "../backend/db";
+import { useSyncManager } from "../utils/useSyncManager";
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 // NetInfo is a native module — mock its two methods used by the hook.
@@ -13,7 +13,7 @@ jest.mock("@react-native-community/netinfo", () => ({
 
 // db is mocked so we control what "pending sessions" and "sync" return.
 // isOnline is set to true so the hook's early-return guard does not fire.
-jest.mock("../app/backend/db", () => ({
+jest.mock("../backend/db", () => ({
   isOnline: true,
   db: {
     getPendingSessionCount: jest.fn(),

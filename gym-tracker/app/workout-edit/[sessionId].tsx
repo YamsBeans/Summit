@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -13,12 +12,14 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { showAlert } from "@/utils/alert";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { db } from "../backend/db";
-import { useTheme } from "../theme/ThemeContext";
-import ExercisePicker from "../components/ExercisePicker";
-import ProgressPhotoModal from "../components/ProgressPhotoModal";
+import { db } from "@/backend/db";
+import { useTheme } from "@/theme/ThemeContext";
+import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
+import ExercisePicker from "@/components/ExercisePicker";
+import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 
 type EditSet = {
   session_set_id: number;
@@ -52,6 +53,7 @@ export default function WorkoutEditScreen() {
   const [exercises, setExercises] = useState<EditExercise[]>([]);
 
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const photoSrc = useProgressPhotoUrl(photoUrl);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
 
@@ -139,7 +141,7 @@ export default function WorkoutEditScreen() {
     if (userId) {
       const { url, error: uploadError } = await db.uploadProgressPhoto(userId, sid, uri);
       if (uploadError) {
-        Alert.alert("Upload Failed", uploadError);
+        showAlert("Upload Failed", uploadError);
         setPhotoUploading(false);
         setShowPhotoModal(false);
         return;
@@ -156,7 +158,7 @@ export default function WorkoutEditScreen() {
   }
 
   async function handleRemovePhoto() {
-    Alert.alert("Remove Photo", "Remove the progress photo from this workout?", [
+    showAlert("Remove Photo", "Remove the progress photo from this workout?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Remove",
@@ -369,7 +371,7 @@ export default function WorkoutEditScreen() {
           {/* Progress photo */}
           {photoUrl ? (
             <View>
-              <Image source={{ uri: photoUrl }} style={styles.photoPreview} resizeMode="contain" />
+              <Image source={{ uri: photoSrc ?? undefined }} style={styles.photoPreview} resizeMode="contain" />
               <View style={styles.photoActions}>
                 <Pressable
                   style={[styles.photoBtn, { backgroundColor: colors.surfaceSecondary }]}

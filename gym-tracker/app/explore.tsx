@@ -1,13 +1,14 @@
 import { useState } from "react";
 import {
-  ActivityIndicator, Alert, Pressable, ScrollView,
+  ActivityIndicator, Pressable, ScrollView,
   StyleSheet, Text, View,
 } from "react-native";
+import { showAlert } from "@/utils/alert";
 import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useTheme } from "./theme/ThemeContext";
-import { db } from "./backend/db";
-import { PROGRAMS, Program, ProgramRoutine } from "./utils/programsData";
+import { useTheme } from "@/theme/ThemeContext";
+import { db } from "@/backend/db";
+import { PROGRAMS, Program, ProgramRoutine } from "@/utils/programsData";
 
 type LevelFilter = 'all' | 'beginner' | 'intermediate';
 type GoalFilter = 'all' | 'strength' | 'hypertrophy' | 'weight_loss';
@@ -55,7 +56,7 @@ export default function ExploreScreen() {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
       if (!userId) {
-        Alert.alert("Not signed in", "Please sign in to add programs.");
+        showAlert("Not signed in", "Please sign in to add programs.");
         setImporting(false);
         return;
       }
@@ -67,7 +68,7 @@ export default function ExploreScreen() {
           user_id: userId,
         });
         if (routineErr || !newRoutine) {
-          Alert.alert("Error", routineErr?.message ?? "Failed to create routine.");
+          showAlert("Error", routineErr?.message ?? "Failed to create routine.");
           setImporting(false);
           return;
         }
@@ -96,14 +97,14 @@ export default function ExploreScreen() {
       }
 
       setImporting(false);
-      Alert.alert(
+      showAlert(
         "Program Added!",
         `${program.routines.length} routine${program.routines.length > 1 ? 's' : ''} from "${program.name}" have been added to My Routines.`,
         [{ text: "Got it", onPress: () => router.back() }]
       );
     } catch (e: any) {
       setImporting(false);
-      Alert.alert("Error", e?.message ?? "Something went wrong.");
+      showAlert("Error", e?.message ?? "Something went wrong.");
     }
   };
 

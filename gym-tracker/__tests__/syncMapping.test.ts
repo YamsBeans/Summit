@@ -2,8 +2,8 @@ import {
   buildExerciseIdMap,
   remapSetsForInsert,
   InsertedExercise,
-} from "../app/backend/syncMapping";
-import type { PendingSession } from "../app/backend/offlineQueue";
+} from "../backend/syncMapping";
+import type { PendingSession } from "../backend/offlineQueue";
 
 type QueuedExercise = PendingSession["exercises"][number];
 type QueuedSet = PendingSession["sets"][number];
