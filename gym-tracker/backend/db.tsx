@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Linking from "expo-linking";
 import { supabase } from "./supabaseClient";
 import { logError } from "@/utils/log";
 import { localDb } from "./localDb";
@@ -54,8 +55,43 @@ export const db = {
 
   resetPassword: async (email: string) => {
     if (!shouldUseSupabase()) return { error: { message: "Requires internet connection to reset password." } };
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    // The email link opens the reset-password screen (gymtracker://reset-password on
+    // phones, <site>/reset-password on web). Both must be in Supabase's Redirect URLs.
+    const redirectTo = Linking.createURL("/reset-password");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
     return { error };
+  },
+
+  // Signs the user in from a password-recovery link so they can set a new password.
+  // Handles both link styles Supabase can send: tokens in the #fragment, or a ?code=.
+  recoverSessionFromUrl: async (url: string): Promise<{ error: string | null }> => {
+    if (!shouldUseSupabase()) return { error: "Requires an internet connection." };
+    try {
+      const [beforeHash, hash = ""] = url.split("#");
+      const query = beforeHash.includes("?") ? beforeHash.slice(beforeHash.indexOf("?") + 1) : "";
+      const params = new URLSearchParams(query);
+      new URLSearchParams(hash).forEach((value, key) => params.set(key, value));
+
+      const linkError = params.get("error_description") ?? params.get("error");
+      if (linkError) return { error: linkError.replace(/\+/g, " ") };
+
+      const accessToken = params.get("access_token");
+      const refreshToken = params.get("refresh_token");
+      if (accessToken && refreshToken) {
+        const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+        return { error: error?.message ?? null };
+      }
+
+      const code = params.get("code");
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        return { error: error?.message ?? null };
+      }
+
+      return { error: "This reset link is invalid or has expired. Request a new one." };
+    } catch (e: any) {
+      return { error: e?.message ?? "Couldn't open the reset link." };
+    }
   },
 
   signOut: async () => {

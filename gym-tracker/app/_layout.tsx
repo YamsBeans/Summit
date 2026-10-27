@@ -41,10 +41,13 @@ function RootNav() {
     if (loading) return;
 
     const inAuthScreen = segments[0] === "auth";
+    // The reset-password screen signs the user in from the email link itself,
+    // so it must stay reachable whether or not there's a session yet.
+    const inResetPassword = segments[0] === "reset-password";
 
     if (session && inAuthScreen) {
       router.replace("/(tabs)");
-    } else if (!session && !inAuthScreen) {
+    } else if (!session && !inAuthScreen && !inResetPassword) {
       router.replace("/auth");
     }
   }, [session, loading, segments]);
@@ -75,6 +78,7 @@ function RootNav() {
       >
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="auth" />
+        <Stack.Screen name="reset-password" />
         <Stack.Screen name="workout" options={{ animation: "slide_from_bottom", animationDuration: 280 }} />
         <Stack.Screen name="settings" options={{ animation: "slide_from_bottom", animationDuration: 280 }} />
         <Stack.Screen name="routine/[routineId]" options={{ animation: "slide_from_bottom", animationDuration: 280 }} />
