@@ -1,4 +1,6 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabaseClient";
+import { logError } from "@/utils/log";
 import { localDb } from "./localDb";
 import { networkStatus } from "./networkStatus";
 import {
@@ -149,6 +151,40 @@ export const db = {
       return supabase.auth.updateUser({ password: newPassword });
     }
     return { data: null, error: { message: "Password changes require an internet connection." } };
+  },
+
+  // Permanently deletes the signed-in user's data, photos and login.
+  // Needs the delete_my_account() function from supabase/migrations.
+  deleteAccount: async (): Promise<{ error: string | null }> => {
+    if (!shouldUseSupabase()) {
+      return { error: "Deleting your account requires an internet connection." };
+    }
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return { error: "You're not signed in." };
+
+      // Storage files can't be deleted from SQL, so remove them through the Storage API first.
+      for (const bucket of ["avatars", "progress-photos"]) {
+        const { data: files } = await supabase.storage.from(bucket).list(userId, { limit: 1000 });
+        if (files && files.length > 0) {
+          const { error: removeError } = await supabase.storage
+            .from(bucket)
+            .remove(files.map((f: { name: string }) => `${userId}/${f.name}`));
+          if (removeError) logError(`deleteAccount.remove.${bucket}`, removeError);
+        }
+      }
+
+      const { error } = await supabase.rpc("delete_my_account");
+      if (error) return { error: error.message };
+
+      await supabase.auth.signOut().catch(() => {});
+      await clearReadCache();
+      await AsyncStorage.clear().catch(() => {});
+      return { error: null };
+    } catch (e: any) {
+      return { error: e?.message ?? "Failed to delete account" };
+    }
   },
 
   onAuthStateChange: (callback: (event: string, session: any) => void) => {

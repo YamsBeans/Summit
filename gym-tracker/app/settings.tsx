@@ -579,7 +579,15 @@ export default function SettingsScreen() {
             "All your routines, workouts, and progress will be lost forever.",
             [
               { text: "Cancel", style: "cancel" },
-              { text: "Yes, Delete", style: "destructive", onPress: async () => { await db.signOut(); } },
+              {
+                text: "Yes, Delete",
+                style: "destructive",
+                onPress: async () => {
+                  const { error } = await db.deleteAccount();
+                  if (error) showAlert("Couldn't delete account", error);
+                  // On success the auth listener sees the sign-out and routes to /auth.
+                },
+              },
             ]
           ),
         },
