@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -13,6 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { showAlert } from "@/utils/alert";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
@@ -139,7 +139,7 @@ export default function WorkoutEditScreen() {
     if (userId) {
       const { url, error: uploadError } = await db.uploadProgressPhoto(userId, sid, uri);
       if (uploadError) {
-        Alert.alert("Upload Failed", uploadError);
+        showAlert("Upload Failed", uploadError);
         setPhotoUploading(false);
         setShowPhotoModal(false);
         return;
@@ -156,7 +156,7 @@ export default function WorkoutEditScreen() {
   }
 
   async function handleRemovePhoto() {
-    Alert.alert("Remove Photo", "Remove the progress photo from this workout?", [
+    showAlert("Remove Photo", "Remove the progress photo from this workout?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Remove",

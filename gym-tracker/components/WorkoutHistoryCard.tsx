@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
-import { Alert, Image, Modal, Pressable, Share, StyleSheet, Text, View } from "react-native";
+import { Image, Modal, Pressable, Share, StyleSheet, Text, View } from "react-native";
+import { showAlert } from "@/utils/alert";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { db } from "@/backend/db";
@@ -118,7 +119,7 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
 
   const handleDelete = () => {
     setMenuOpen(false);
-    Alert.alert(
+    showAlert(
       "Delete Workout",
       `Delete "${sessionName}"? This cannot be undone.`,
       [

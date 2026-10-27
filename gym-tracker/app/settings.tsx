@@ -1,4 +1,5 @@
-import { Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, Alert } from "react-native";
+import { Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { showAlert } from "@/utils/alert";
 import * as ImagePicker from "expo-image-picker";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
@@ -248,7 +249,7 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
   const handlePickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission needed", "Allow access to your photo library to set a profile picture.");
+      showAlert("Permission needed", "Allow access to your photo library to set a profile picture.");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -543,7 +544,7 @@ export default function SettingsScreen() {
     if (val) {
       const granted = await requestNotificationPermissions();
       if (!granted) {
-        Alert.alert(
+        showAlert(
           "Permission Required",
           "Enable notifications in your device settings to receive rest timer alerts.",
           [{ text: "OK" }]
@@ -558,14 +559,14 @@ export default function SettingsScreen() {
   const appearanceLabel = mode === "light" ? "Light" : mode === "dark" ? "Dark" : "System";
 
   const handleSignOut = () => {
-    Alert.alert("Sign Out", "Are you sure you want to sign out?", [
+    showAlert("Sign Out", "Are you sure you want to sign out?", [
       { text: "Cancel", style: "cancel" },
       { text: "Sign Out", style: "destructive", onPress: async () => { await db.signOut(); } },
     ]);
   };
 
   const handleDeleteAccount = () => {
-    Alert.alert(
+    showAlert(
       "Delete Account",
       "This will permanently delete your account and all workout data. This cannot be undone.",
       [
@@ -573,7 +574,7 @@ export default function SettingsScreen() {
         {
           text: "Delete",
           style: "destructive",
-          onPress: () => Alert.alert(
+          onPress: () => showAlert(
             "Are you absolutely sure?",
             "All your routines, workouts, and progress will be lost forever.",
             [
@@ -588,12 +589,12 @@ export default function SettingsScreen() {
 
   const handleContactUs = () => {
     Linking.openURL("mailto:support@gymtracker.app?subject=Gym Tracker Feedback").catch(() => {
-      Alert.alert("Contact Us", "Reach us at: support@gymtracker.app");
+      showAlert("Contact Us", "Reach us at: support@gymtracker.app");
     });
   };
 
   const handleRateApp = () => {
-    Alert.alert("Rate Gym Tracker", "Enjoying the app? We'd love your feedback!\n\nLeave us a review on the App Store to help others find us.", [
+    showAlert("Rate Gym Tracker", "Enjoying the app? We'd love your feedback!\n\nLeave us a review on the App Store to help others find us.", [
       { text: "Not Now", style: "cancel" },
       { text: "Rate Now", onPress: () => {} },
     ]);
