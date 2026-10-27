@@ -1,5 +1,6 @@
 import { Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { showAlert } from "@/utils/alert";
+import { APP_NAME, APP_VERSION, SUPPORT_EMAIL } from "@/utils/appInfo";
 import * as ImagePicker from "expo-image-picker";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
@@ -596,13 +597,13 @@ export default function SettingsScreen() {
   };
 
   const handleContactUs = () => {
-    Linking.openURL("mailto:support@gymtracker.app?subject=Gym Tracker Feedback").catch(() => {
-      showAlert("Contact Us", "Reach us at: support@gymtracker.app");
+    Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(`${APP_NAME} Feedback`)}`).catch(() => {
+      showAlert("Contact Us", `Reach us at: ${SUPPORT_EMAIL}`);
     });
   };
 
   const handleRateApp = () => {
-    showAlert("Rate Gym Tracker", "Enjoying the app? We'd love your feedback!\n\nLeave us a review on the App Store to help others find us.", [
+    showAlert(`Rate ${APP_NAME}`, "Enjoying the app? We'd love your feedback!\n\nLeave us a review on the App Store to help others find us.", [
       { text: "Not Now", style: "cancel" },
       { text: "Rate Now", onPress: () => {} },
     ]);
@@ -707,7 +708,7 @@ export default function SettingsScreen() {
         </View>
 
         <Text style={{ textAlign: "center", color: colors.textTertiary, fontSize: 12, marginTop: 20, fontWeight: "500" }}>
-          Gym Tracker v1.0.0
+          {APP_NAME} v{APP_VERSION}
         </Text>
       </ScrollView>
 
