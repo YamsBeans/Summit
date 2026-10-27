@@ -7,6 +7,7 @@ import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits } from "@/utils/units";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
+import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 
 type WorkoutHistoryCardProps = {
   session_id: number;
@@ -82,6 +83,7 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   distanceUnit = 'km',
 }: WorkoutHistoryCardProps) {
   const { colors } = useTheme();
+  const photoSrc = useProgressPhotoUrl(photo_url);
   const { toDisplay, label: unitLabel } = useUnits();
   const router = useRouter();
 
@@ -214,16 +216,16 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
         <Text style={[styles.notes, { color: colors.textTertiary }]} numberOfLines={2}>{notes}</Text>
       ) : null}
 
-      {photo_url ? (
+      {photoSrc ? (
         <Pressable onPress={() => setPhotoOpen(true)} style={styles.progressPhotoContainer}>
-          <Image source={{ uri: photo_url }} style={styles.progressPhoto} resizeMode="contain" />
+          <Image source={{ uri: photoSrc }} style={styles.progressPhoto} resizeMode="contain" />
         </Pressable>
       ) : null}
 
       {/* ── Photo lightbox ── */}
       <Modal visible={photoOpen} transparent animationType="fade" onRequestClose={() => setPhotoOpen(false)}>
         <Pressable style={styles.lightboxOverlay} onPress={() => setPhotoOpen(false)}>
-          <Image source={{ uri: photo_url ?? undefined }} style={styles.lightboxImage} resizeMode="contain" />
+          <Image source={{ uri: photoSrc ?? undefined }} style={styles.lightboxImage} resizeMode="contain" />
         </Pressable>
       </Modal>
 

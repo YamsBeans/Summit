@@ -22,6 +22,11 @@ const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 // isOnline = Supabase is configured (build-time check)
 export const isOnline = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
 
+// How progress photos are referenced in workout_sessions.photo_url.
+const PROGRESS_PHOTO_PREFIX = "progress-photos/";
+const LEGACY_PUBLIC_PHOTO_MARKER = "/storage/v1/object/public/progress-photos/";
+const signedPhotoCache = new Map<string, { url: string; expiresAt: number }>();
+
 // shouldUseSupabase = Supabase configured AND network available (runtime check)
 const shouldUseSupabase = () => isOnline && networkStatus.isConnected;
 
@@ -29,17 +34,14 @@ export const db = {
   // Auth
   signUp: async (email: string, password: string, username: string) => {
     if (shouldUseSupabase()) {
-      const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
+      // The public.users profile row is created by a database trigger (handle_new_user,
+      // see supabase/migrations) from the username passed here as sign-up metadata.
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { username } },
+      });
       if (signUpError) return { data: null, error: signUpError };
-      if (data.user) {
-        const { error: insertError } = await supabase.from("users").insert({
-          user_id: data.user.id,
-          username,
-          email,
-          password_hash: "managed_by_supabase_auth",
-        });
-        if (insertError) return { data: null, error: insertError };
-      }
       return { data, error: null };
     }
     return localDb.signUp(email, password, username);
@@ -168,11 +170,44 @@ export const db = {
         .from("progress-photos")
         .upload(path, formData, { upsert: true, contentType: mimeType });
       if (uploadError) return { url: null, error: uploadError.message };
-      const { data } = supabase.storage.from("progress-photos").getPublicUrl(path);
-      return { url: `${data.publicUrl}?t=${Date.now()}`, error: null };
+      // Progress photos are private. Save the storage path (not a public link);
+      // getProgressPhotoUrl turns it into a short-lived signed link for display.
+      // ?v= changes on every upload so a replaced photo isn't served from cache.
+      return { url: `${PROGRESS_PHOTO_PREFIX}${path}?v=${Date.now()}`, error: null };
     } catch (e: any) {
       return { url: null, error: e.message ?? "Upload failed" };
     }
+  },
+
+  // Turns a saved photo_url into something an <Image> can show. Handles:
+  //  - private storage paths ("progress-photos/<user>/<session>.jpg?v=..."), signed for 1 hour
+  //  - older public links to the progress-photos bucket, which stop working once it's private
+  //  - local file URIs saved while offline, returned unchanged
+  getProgressPhotoUrl: async (photoUrl: string | null | undefined): Promise<string | null> => {
+    if (!photoUrl) return null;
+
+    let path: string | null = null;
+    if (photoUrl.startsWith(PROGRESS_PHOTO_PREFIX)) {
+      path = photoUrl.slice(PROGRESS_PHOTO_PREFIX.length);
+    } else {
+      const legacy = photoUrl.indexOf(LEGACY_PUBLIC_PHOTO_MARKER);
+      if (legacy !== -1) path = photoUrl.slice(legacy + LEGACY_PUBLIC_PHOTO_MARKER.length);
+    }
+    if (path === null) return photoUrl; // local file or other URL
+    path = path.split("?")[0];
+
+    const cached = signedPhotoCache.get(photoUrl);
+    if (cached && cached.expiresAt > Date.now()) return cached.url;
+    if (!shouldUseSupabase()) return null;
+
+    const { data, error } = await supabase.storage.from("progress-photos").createSignedUrl(path, 60 * 60);
+    if (error || !data?.signedUrl) {
+      logError("getProgressPhotoUrl", error);
+      return null;
+    }
+    // Refresh a few minutes before Supabase's link expires.
+    signedPhotoCache.set(photoUrl, { url: data.signedUrl, expiresAt: Date.now() + 55 * 60 * 1000 });
+    return data.signedUrl;
   },
 
   updateSessionPhotoUrl: async (sessionId: number, photoUrl: string | null) => {

@@ -17,6 +17,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 import ExercisePicker from "@/components/ExercisePicker";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 
@@ -52,6 +53,7 @@ export default function WorkoutEditScreen() {
   const [exercises, setExercises] = useState<EditExercise[]>([]);
 
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const photoSrc = useProgressPhotoUrl(photoUrl);
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
 
@@ -369,7 +371,7 @@ export default function WorkoutEditScreen() {
           {/* Progress photo */}
           {photoUrl ? (
             <View>
-              <Image source={{ uri: photoUrl }} style={styles.photoPreview} resizeMode="contain" />
+              <Image source={{ uri: photoSrc ?? undefined }} style={styles.photoPreview} resizeMode="contain" />
               <View style={styles.photoActions}>
                 <Pressable
                   style={[styles.photoBtn, { backgroundColor: colors.surfaceSecondary }]}
