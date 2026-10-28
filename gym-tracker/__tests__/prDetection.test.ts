@@ -156,3 +156,42 @@ describe("detectPRs", () => {
     expect(result).toEqual([]);
   });
 });
+
+import { mergeStrengthRecord } from "../utils/prDetection";
+
+describe("mergeStrengthRecord", () => {
+  it("keeps the all-time heaviest weight on a volume-only PR", () => {
+    const sets = [makeSet(185, 10), makeSet(185, 10), makeSet(185, 10)];
+    expect(mergeStrengthRecord(sets, { max_weight: 225, max_volume: 4000 })).toEqual({
+      max_weight: 225,
+      max_volume: 5550,
+    });
+  });
+
+  it("keeps the best volume on a weight-only PR", () => {
+    const sets = [makeSet(250, 1)];
+    expect(mergeStrengthRecord(sets, { max_weight: 225, max_volume: 4000 })).toEqual({
+      max_weight: 250,
+      max_volume: 4000,
+    });
+  });
+
+  it("uses this session when there is no previous record", () => {
+    expect(mergeStrengthRecord([makeSet(100, 5), makeSet(100, 5, false)], null)).toEqual({
+      max_weight: 100,
+      max_volume: 500,
+    });
+  });
+});
+
+describe("detectPRs with cardio records", () => {
+  it("ignores cardio records for the same exercise id", () => {
+    const exercises = [makeExercise(1, "x", "X")];
+    const sets = { 1: [makeSet(100, 5)] };
+    const prs = detectPRs(exercises, sets, [
+      { exercise_id: "x", max_weight: 500, max_volume: 9999, pr_type: "strength" },
+      { exercise_id: "x", max_weight: null, max_volume: null, pr_type: "cardio" },
+    ]);
+    expect(prs).toEqual([]);
+  });
+});

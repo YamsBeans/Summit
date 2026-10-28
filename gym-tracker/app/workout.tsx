@@ -15,7 +15,7 @@ import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import RestTimerBanner from "@/components/RestTimerBanner";
 import { useRestTimer } from "@/utils/useRestTimer";
-import { detectPRs, detectCardioPRs } from "@/utils/prDetection";
+import { detectPRs, detectCardioPRs, mergeStrengthRecord } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
 import { useUnits, formatVolume } from "@/utils/units";
@@ -382,10 +382,10 @@ export default function WorkoutScreen() {
         const strengthExercises = exercises.filter((e: any) => e.exercise_type !== 'cardio');
         const prs = detectPRs(strengthExercises, exerciseSets, existingPRs ?? []);
         for (const pr of prs) {
-          const sets = (exerciseSets[exercises.find((e: any) => e.exercise_id === pr.exerciseId)?.session_exercise_id] ?? []).filter((s: any) => s.completed);
-          const maxW = sets.reduce((m: number, s: any) => (s.weight != null && s.weight > m ? s.weight : m), 0);
-          const maxVol = sets.reduce((sum: number, s: any) => s.weight && s.reps ? sum + s.weight * s.reps : sum, 0);
-          await db.upsertPersonalRecord({ user_id: userId, exercise_id: pr.exerciseId, max_weight: maxW || null, max_volume: maxVol || null, pr_type: 'strength' });
+          const sets = exerciseSets[exercises.find((e: any) => e.exercise_id === pr.exerciseId)?.session_exercise_id] ?? [];
+          const prev = (existingPRs ?? []).find((r: any) => r.exercise_id === pr.exerciseId && r.pr_type !== 'cardio');
+          const merged = mergeStrengthRecord(sets, prev);
+          await db.upsertPersonalRecord({ user_id: userId, exercise_id: pr.exerciseId, ...merged, pr_type: 'strength' });
         }
 
         // Cardio PRs
@@ -402,9 +402,10 @@ export default function WorkoutScreen() {
               max_weight: null,
               max_volume: null,
               pr_type: 'cardio',
-              best_distance_meters: cardioPR.bestDistanceMeters ?? null,
-              best_pace_sec_per_km: cardioPR.bestPaceSecPerKm ?? null,
-              best_duration_seconds: cardioPR.bestDurationSeconds ?? null,
+              // Only the improved fields are set on cardioPR; keep the rest.
+              best_distance_meters: cardioPR.bestDistanceMeters ?? existingPR?.best_distance_meters ?? null,
+              best_pace_sec_per_km: cardioPR.bestPaceSecPerKm ?? existingPR?.best_pace_sec_per_km ?? null,
+              best_duration_seconds: cardioPR.bestDurationSeconds ?? existingPR?.best_duration_seconds ?? null,
             });
             if (cardioPR.bestDistanceMeters) cardioPRMessages.push(`${ex.exercise_name}: ${formatDistance(cardioPR.bestDistanceMeters, distanceUnit)}`);
             else if (cardioPR.bestPaceSecPerKm) cardioPRMessages.push(`${ex.exercise_name}: best pace`);

@@ -23,6 +23,7 @@ type PreviousRecord = {
   exercise_id: string;
   max_weight: number | null;
   max_volume: number | null;
+  pr_type?: string | null;
 };
 
 /**
@@ -70,7 +71,10 @@ export function detectPRs(
   previousRecords: PreviousRecord[]
 ): PRResult[] {
   const results: PRResult[] = [];
-  const prevMap = new Map(previousRecords.map((r) => [r.exercise_id, r]));
+  // Cardio records share exercise ids' table; never compare strength sets to them.
+  const prevMap = new Map(
+    previousRecords.filter((r) => r.pr_type !== "cardio").map((r) => [r.exercise_id, r])
+  );
 
   for (const ex of exercises) {
     const sets = (exerciseSets[ex.session_exercise_id] ?? []).filter((s) => s.completed);
@@ -100,4 +104,21 @@ export function detectPRs(
   }
 
   return results;
+}
+
+/**
+ * The record to store after a strength PR: the better of the previous record
+ * and this session for each field. Writing this session's numbers directly
+ * would let a volume PR on a light day overwrite the all-time heaviest lift.
+ */
+export function mergeStrengthRecord(
+  sets: CurrentSet[],
+  prev: { max_weight: number | null; max_volume: number | null } | null | undefined
+): { max_weight: number | null; max_volume: number | null } {
+  const done = sets.filter((s) => s.completed);
+  const maxW = done.reduce((m, s) => (s.weight != null && s.weight > m ? s.weight : m), 0);
+  const vol = done.reduce((sum, s) => (s.weight != null && s.reps != null ? sum + s.weight * s.reps : sum), 0);
+  const bestW = Math.max(maxW, prev?.max_weight ?? 0);
+  const bestVol = Math.max(vol, prev?.max_volume ?? 0);
+  return { max_weight: bestW || null, max_volume: bestVol || null };
 }
