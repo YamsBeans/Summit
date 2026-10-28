@@ -5,7 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db, isOnline } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits } from "@/utils/units";
+import { useUnits, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
@@ -327,7 +327,7 @@ export default function ProfileScreen() {
     switch (id) {
       case "totalWorkouts":   return { value: String(stats.totalWorkouts), label: "Workouts" };
       case "totalSets":       return { value: String(stats.totalSets), label: "Sets" };
-      case "totalVolume":     return { value: (toDisplay(stats.totalVolume) ?? stats.totalVolume).toLocaleString(), label: `Vol (${unitLabel})` };
+      case "totalVolume":     return { value: formatVolume(toDisplay(stats.totalVolume)), label: `Vol (${unitLabel})` };
       case "totalReps":       return { value: stats.totalReps.toLocaleString(), label: "Reps" };
       case "uniqueExercises": return { value: String(stats.totalExercises), label: "Exercises" };
       case "heaviestWeight":  return { value: (toDisplay(stats.heaviestWeight) ?? stats.heaviestWeight).toLocaleString(), label: `Best (${unitLabel})` };

@@ -7,9 +7,10 @@ import { useTheme } from "@/theme/ThemeContext";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import { db } from "@/backend/db";
 import { cancelRestDoneNotification } from "@/utils/notifications";
+import { clearActiveRestTimer } from "@/utils/useRestTimer";
 import ConfirmModal from "./ConfirmModal";
 
-const TAB_BAR_HEIGHT = 60;
+export const TAB_BAR_HEIGHT = 64;
 
 export default function MinimizedWorkoutBar() {
   const { activeWorkout, clearActiveWorkout } = useActiveWorkout();
@@ -61,6 +62,7 @@ export default function MinimizedWorkoutBar() {
     if (!activeWorkout) return;
     setShowDiscard(false);
     cancelRestDoneNotification();
+    clearActiveRestTimer();
     await db.deleteWorkoutSession(activeWorkout.sessionId);
     clearActiveWorkout();
   }, [activeWorkout, clearActiveWorkout]);

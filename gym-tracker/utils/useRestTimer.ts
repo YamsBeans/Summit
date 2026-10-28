@@ -20,11 +20,14 @@ function secondsLeft(endAt: number | null): number {
   return Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
 }
 
-/** Test helper: forget any timer carried over between hook instances. */
-export function __resetRestTimerForTests() {
+/** Drop any running rest timer, e.g. when a workout is discarded from the minimized bar. */
+export function clearActiveRestTimer() {
   activeEndAt = null;
   activeTotal = 0;
 }
+
+/** Test helper: forget any timer carried over between hook instances. */
+export const __resetRestTimerForTests = clearActiveRestTimer;
 
 export function useRestTimer() {
   const [remaining, setRemaining] = useState(() => secondsLeft(activeEndAt));

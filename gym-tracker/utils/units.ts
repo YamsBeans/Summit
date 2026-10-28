@@ -27,6 +27,15 @@ export function unitToLbs(val: number | null | undefined, unit: UnitSystem): num
   return unit === "kg" ? Math.round((val / KG_FACTOR) * 10) / 10 : val;
 }
 
+/**
+ * Volume (weight × reps) for display: whole numbers with separators. Converting
+ * a lbs total to kg leaves noise like 800.1 for 8 × 100 kg, which nobody wants.
+ */
+export function formatVolume(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "0";
+  return Math.round(v).toLocaleString();
+}
+
 export function useUnits() {
   const [unit, setUnit] = useState<UnitSystem>(cachedUnit);
 

@@ -5,7 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { LineChart } from "react-native-gifted-charts";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits } from "@/utils/units";
+import { useUnits, formatVolume } from "@/utils/units";
 
 type HistoryPoint = {
   session_date: string;
@@ -89,7 +89,7 @@ export default function ExerciseDetailScreen() {
               {pr.volume != null && (
                 <View style={{ flex: 1, backgroundColor: colors.successLight, borderRadius: 12, padding: 14, alignItems: "center" }}>
                   <Text style={{ fontSize: 22, fontWeight: "800", color: colors.success }}>
-                    {(toDisplay(pr.volume) ?? pr.volume)?.toLocaleString()}
+                    {formatVolume(toDisplay(pr.volume))}
                   </Text>
                   <Text style={{ fontSize: 12, fontWeight: "600", color: colors.textSecondary, marginTop: 2 }}>Best Volume ({unitLabel})</Text>
                 </View>
@@ -157,7 +157,7 @@ export default function ExerciseDetailScreen() {
                       Best: <Text style={{ fontWeight: "700", color: colors.primary }}>{toDisplay(maxW) ?? maxW} {unitLabel}</Text>
                     </Text>
                     <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
-                      Vol: <Text style={{ fontWeight: "700", color: colors.text }}>{(toDisplay(totalVol) ?? totalVol).toLocaleString()} {unitLabel}</Text>
+                      Vol: <Text style={{ fontWeight: "700", color: colors.text }}>{formatVolume(toDisplay(totalVol))} {unitLabel}</Text>
                     </Text>
                   </View>
                   <View style={{ marginTop: 8, gap: 3 }}>

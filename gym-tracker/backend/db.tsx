@@ -581,6 +581,10 @@ export const db = {
         .select("*")
         .eq("user_id", userId)
         .is("end_time", null)
+        // Newest first and limit(1): maybeSingle() errors if a crash ever left
+        // more than one unfinished session behind.
+        .order("session_id", { ascending: false })
+        .limit(1)
         .maybeSingle();
     }
     return localDb.getActiveSession(userId);

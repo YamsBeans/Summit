@@ -18,7 +18,7 @@ import { useRestTimer } from "@/utils/useRestTimer";
 import { detectPRs, detectCardioPRs } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
-import { useUnits } from "@/utils/units";
+import { useUnits, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 import { notifySuccess, tapLight } from "@/utils/haptics";
@@ -219,6 +219,20 @@ export default function WorkoutScreen() {
     setLoading(false);
   };
 
+  // Exercises added (or swapped in) mid-workout need last session's numbers
+  // too — before, only exercises present when the screen opened got them, so a
+  // quick-start workout never showed a "previous" column.
+  const loadPrevSetsFor = useCallback(async (exerciseId: string) => {
+    if (!session) return;
+    try {
+      const { data: userData } = await db.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return;
+      const { data } = await db.getPreviousSessionSets(exerciseId, userId, session.session_id);
+      setPrevSets((prev) => ({ ...prev, [exerciseId]: data ?? [] }));
+    } catch (e) { logError("workout.loadPrevSetsFor", e); }
+  }, [session]);
+
   const reloadSetsForExercise = async (sessionExerciseId: number) => {
     const { data } = await db.getSessionExerciseSets(sessionExerciseId);
     setExerciseSets((prev) => ({ ...prev, [sessionExerciseId]: data ?? [] }));
@@ -353,6 +367,7 @@ export default function WorkoutScreen() {
 
     // Mark local session as ended so the beforeRemove listener doesn't intercept router.back()
     setSession((prev: any) => ({ ...prev, end_time: new Date().toISOString() }));
+    skipRest();
     cancelRestDoneNotification();
     clearActiveWorkout();
     finishedSessionId.current = session.session_id;
@@ -456,12 +471,13 @@ export default function WorkoutScreen() {
   const handleConfirmDiscard = useCallback(async () => {
     if (!session) return;
     setShowDiscardModal(false);
+    skipRest();
     cancelRestDoneNotification();
     clearActiveWorkout();
     isMinimizingRef.current = true;
     await db.deleteWorkoutSession(session.session_id);
     router.back();
-  }, [session, clearActiveWorkout, router]);
+  }, [session, clearActiveWorkout, router, skipRest]);
 
   const openExerciseOptions = useCallback((ex: any) => {
     setSelectedExerciseForOptions(ex);
@@ -501,6 +517,7 @@ export default function WorkoutScreen() {
         : e
     ));
     replaceTargetRef.current = null;
+    if (!prevSets[exercise.id]) loadPrevSetsFor(exercise.id);
   });
 
   const handleAddExercise = useGuardedPress(async (exercise: any) => {
@@ -518,6 +535,7 @@ export default function WorkoutScreen() {
     if (error) { setError(error.message); return; }
     setExercises((prev) => [...prev, newEx]);
     setExerciseSets((prev) => ({ ...prev, [newEx.session_exercise_id]: [] }));
+    if (!prevSets[exercise.id]) loadPrevSetsFor(exercise.id);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   });
 
@@ -543,7 +561,7 @@ export default function WorkoutScreen() {
     );
   }
 
-  const volumeDisplay = (toDisplay(totalVolume) ?? totalVolume).toLocaleString();
+  const volumeDisplay = formatVolume(toDisplay(totalVolume));
 
   return (
     <KeyboardAvoidingView
@@ -552,7 +570,7 @@ export default function WorkoutScreen() {
     >
       {/* ── Sticky header ── */}
       <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-        <Pressable onPress={handleMinimize} hitSlop={8} style={styles.headerBack}>
+        <Pressable onPress={handleMinimize} hitSlop={8} style={styles.headerBack} accessibilityRole="button" accessibilityLabel="Minimize workout">
           <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
         </Pressable>
         <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>

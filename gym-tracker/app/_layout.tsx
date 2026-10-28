@@ -4,7 +4,7 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { db } from "@/backend/db";
 import { ThemeProvider, useTheme } from "@/theme/ThemeContext";
 import { useSyncManager } from "@/utils/useSyncManager";
-import { ActiveWorkoutProvider } from "@/utils/ActiveWorkoutContext";
+import { ActiveWorkoutProvider, useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import MinimizedWorkoutBar from "@/components/MinimizedWorkoutBar";
 
 function RootNav() {
@@ -15,6 +15,23 @@ function RootNav() {
   const { colors } = useTheme();
   const userId = session?.user?.id ?? null;
   const { isSyncing, lastSyncedCount } = useSyncManager(userId);
+  const { activeWorkout, minimizeWorkout } = useActiveWorkout();
+
+  // The in-progress workout only lived in memory, so after the app was killed
+  // (or the web page reloaded) the "resume workout" bar vanished and the
+  // unfinished session was stranded. Look it up again once we know the user.
+  useEffect(() => {
+    if (!userId || activeWorkout) return;
+    let cancelled = false;
+    db.getActiveSession(userId).then(({ data }: any) => {
+      if (cancelled || !data || data.end_time) return;
+      const ts = new Date(`${data.session_date}T${data.start_time}`).getTime();
+      minimizeWorkout(data.session_id, data.session_name, Number.isFinite(ts) ? ts : Date.now());
+    }).catch(() => {});
+    return () => { cancelled = true; };
+    // Only on sign-in / app start — not every time a workout is cleared.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   useEffect(() => {
     db.getSession().then((result: any) => {
