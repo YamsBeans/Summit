@@ -39,7 +39,6 @@ export default function WorkoutScreen() {
   const [exerciseSets, setExerciseSets] = useState<Record<number, any[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [elapsed, setElapsed] = useState(0);
   const [notes, setNotes] = useState("");
   const startTimestamp = useRef<number>(Date.now());
 
@@ -83,27 +82,41 @@ export default function WorkoutScreen() {
   const replaceTargetRef = useRef<any>(null);
 
   const restTimer = useRestTimer();
+  // Pull out the stable callbacks: the restTimer object itself changes every
+  // second, and depending on it would re-render every memoized set row on
+  // each tick of the countdown.
+  const { start: startRest, skip: skipRest, addTime: addRestTime, setOnComplete: setRestOnComplete, duration: restDuration } = restTimer;
+  const restRemainingRef = useRef(0);
+  restRemainingRef.current = restTimer.remaining;
 
   const startRestTimer = useCallback(() => {
-    restTimer.start();
+    startRest();
     AsyncStorage.getItem("@gym_tracker_notifications").then((val) => {
-      if (val === "true") scheduleRestDoneNotification(restTimer.duration);
+      if (val === "true") scheduleRestDoneNotification(restDuration);
     });
-  }, [restTimer]);
+  }, [startRest, restDuration]);
 
   const skipRestTimer = useCallback(() => {
-    restTimer.skip();
+    skipRest();
     cancelRestDoneNotification();
-  }, [restTimer]);
+  }, [skipRest]);
 
   // Keep the scheduled "rest complete" notification in sync when the user
-  // extends the timer — otherwise it still fires at the original end time.
+  // adjusts the timer — otherwise it still fires at the original end time.
   const handleAddRestTime = useCallback((secs: number) => {
-    restTimer.addTime(secs);
+    const next = restRemainingRef.current + secs;
+    addRestTime(secs);
+    if (next <= 0) { cancelRestDoneNotification(); return; }
     AsyncStorage.getItem("@gym_tracker_notifications").then((val) => {
-      if (val === "true") scheduleRestDoneNotification(restTimer.remaining + secs);
+      if (val === "true") scheduleRestDoneNotification(next);
     });
-  }, [restTimer]);
+  }, [addRestTime]);
+
+  // Buzz when rest is over while the app is open (the notification covers
+  // the backgrounded case).
+  useEffect(() => {
+    setRestOnComplete(() => notifySuccess());
+  }, [setRestOnComplete]);
 
   const totalVolume = useMemo(() => {
     let total = 0;
@@ -143,24 +156,15 @@ export default function WorkoutScreen() {
     [exerciseSets]
   );
 
-  useEffect(() => {
-    if (!session || session.end_time) return;
-    // Derive real start time from DB fields so the timer survives remounts
+  // Derive real start time from DB fields so the timer survives remounts
+  const sessionStartTs = useMemo(() => {
+    if (!session) return null;
     const ts = new Date(session.session_date + "T" + session.start_time).getTime();
-    startTimestamp.current = ts;
-    setElapsed(Math.floor((Date.now() - ts) / 1000));
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startTimestamp.current) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [session?.session_id]);
-
-  const formatTime = useCallback((seconds: number) => {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
-    return `${h > 0 ? h + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  }, []);
+    return Number.isFinite(ts) ? ts : null;
+  }, [session]);
+  useEffect(() => {
+    if (sessionStartTs != null) startTimestamp.current = sessionStartTs;
+  }, [sessionStartTs]);
 
   const loadSession = async () => {
     setLoading(true);
@@ -564,7 +568,7 @@ export default function WorkoutScreen() {
       {/* ── Stats bar ── */}
       <View style={[styles.statsBar, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
         <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: colors.primary }]}>{formatTime(elapsed)}</Text>
+          <ElapsedTime startTs={sessionStartTs} running={!session.end_time} style={[styles.statValue, { color: colors.primary }]} />
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Duration</Text>
         </View>
         <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
@@ -725,6 +729,7 @@ export default function WorkoutScreen() {
 
       <RestTimerBanner
         remaining={restTimer.remaining}
+        total={restTimer.total}
         onSkip={skipRestTimer}
         onAddTime={handleAddRestTime}
       />
@@ -855,6 +860,28 @@ export default function WorkoutScreen() {
       />
     </KeyboardAvoidingView>
   );
+}
+
+// ─── ElapsedTime ─────────────────────────────────────────────────────────────
+
+function formatElapsed(seconds: number) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return `${h > 0 ? h + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+// Owns the once-a-second tick so only this label re-renders, not the whole
+// workout screen and every exercise card under it.
+function ElapsedTime({ startTs, running, style }: { startTs: number | null; running: boolean; style: any }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [running]);
+  const secs = startTs != null ? Math.max(0, Math.floor((now - startTs) / 1000)) : 0;
+  return <Text style={style}>{formatElapsed(secs)}</Text>;
 }
 
 // ─── SetRow ──────────────────────────────────────────────────────────────────

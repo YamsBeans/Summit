@@ -13,7 +13,6 @@ Notifications.setNotificationHandler({
   }),
 });
 
-const REST_NOTIF_ID_KEY = "_restTimerNotifId";
 let scheduledNotifId: string | null = null;
 
 export async function requestNotificationPermissions(): Promise<boolean> {
@@ -38,6 +37,7 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 export async function scheduleRestDoneNotification(seconds: number): Promise<void> {
   // Cancel any previous rest timer notification
   await cancelRestDoneNotification();
+  if (!(seconds >= 1)) return;
 
   const id = await Notifications.scheduleNotificationAsync({
     content: {
@@ -47,7 +47,10 @@ export async function scheduleRestDoneNotification(seconds: number): Promise<voi
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds,
+      seconds: Math.round(seconds),
+      // Use the high-importance channel created in requestNotificationPermissions
+      // so the alert actually pops up on Android instead of landing silently.
+      ...(Platform.OS === "android" ? { channelId: "rest-timer" } : {}),
     },
   });
 
