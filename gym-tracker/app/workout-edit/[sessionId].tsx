@@ -20,11 +20,16 @@ import { useTheme } from "@/theme/ThemeContext";
 import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 import ExercisePicker from "@/components/ExercisePicker";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
+import { useUnits } from "@/utils/units";
+import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 
 type EditSet = {
   session_set_id: number;
   set_number: number;
-  weight: string;
+  /** Stored weight (always lbs). */
+  weight_lbs: number | null;
+  /** In-progress text typed by the user, in their display unit; null = not being edited. */
+  weight: string | null;
   reps: string;
   is_warmup: boolean;
 };
@@ -42,6 +47,7 @@ export default function WorkoutEditScreen() {
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
   const router = useRouter();
   const { colors } = useTheme();
+  const { toDisplay, toStorage, label: unitLabel } = useUnits();
 
   const sid = parseInt(sessionId ?? "0", 10);
 
@@ -103,7 +109,8 @@ export default function WorkoutEditScreen() {
         .map((s: any): EditSet => ({
           session_set_id: s.session_set_id,
           set_number: s.set_number,
-          weight: s.weight != null ? String(s.weight) : "",
+          weight_lbs: s.weight ?? null,
+          weight: null,
           reps: s.reps != null ? String(s.reps) : "",
           is_warmup: s.is_warmup,
         })),
@@ -184,13 +191,35 @@ export default function WorkoutEditScreen() {
     );
   }
 
-  async function handleSetBlur(sessionSetId: number, field: "weight" | "reps", value: string) {
-    const num = parseFloat(value);
-    const updates =
-      field === "weight"
-        ? { weight: isNaN(num) ? null : num }
-        : { reps: isNaN(num) ? null : Math.round(num) };
-    await db.updateSessionExerciseSet(sessionSetId, updates);
+  function patchSet(sessionSetId: number, patch: Partial<EditSet>) {
+    setExercises((prev) =>
+      prev.map((ex) => ({
+        ...ex,
+        sets: ex.sets.map((s) => (s.session_set_id === sessionSetId ? { ...s, ...patch } : s)),
+      }))
+    );
+  }
+
+  async function handleWeightBlur(set: EditSet) {
+    if (set.weight == null) return; // untouched
+    const val = parseDecimalInput(set.weight);
+    // Weights are stored in lbs; only write when the shown value really changed
+    // so viewing a workout in kg never rewrites it with a rounded number.
+    if (val === toDisplay(set.weight_lbs)) {
+      patchSet(set.session_set_id, { weight: null });
+      return;
+    }
+    const lbs = toStorage(val);
+    patchSet(set.session_set_id, { weight_lbs: lbs, weight: null });
+    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { weight: lbs });
+    if (err) setError((err as any)?.message ?? "Failed to save set");
+  }
+
+  async function handleRepsBlur(set: EditSet) {
+    const reps = parseIntInput(set.reps);
+    patchSet(set.session_set_id, { reps: formatNumberInput(reps) });
+    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { reps });
+    if (err) setError((err as any)?.message ?? "Failed to save set");
   }
 
   async function handleAddSet(exercise: EditExercise) {
@@ -211,7 +240,8 @@ export default function WorkoutEditScreen() {
     const editSet: EditSet = {
       session_set_id: newSet.session_set_id,
       set_number: nextSetNum,
-      weight: "",
+      weight_lbs: null,
+      weight: null,
       reps: "",
       is_warmup: false,
     };
@@ -428,7 +458,7 @@ export default function WorkoutEditScreen() {
             {ex.sets.length > 0 && (
               <View style={styles.setHeaderRow}>
                 <Text style={[styles.setColLabel, { color: colors.textTertiary, width: 36 }]}>SET</Text>
-                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>WEIGHT</Text>
+                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>{unitLabel.toUpperCase()}</Text>
                 <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>REPS</Text>
                 <View style={{ width: 28 }} />
               </View>
@@ -444,9 +474,9 @@ export default function WorkoutEditScreen() {
                 </View>
                 <TextInput
                   style={[styles.setInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground, flex: 1 }]}
-                  value={set.weight}
+                  value={set.weight ?? formatNumberInput(toDisplay(set.weight_lbs))}
                   onChangeText={(v) => updateSetLocal(set.session_set_id, "weight", v)}
-                  onBlur={() => handleSetBlur(set.session_set_id, "weight", set.weight)}
+                  onBlur={() => handleWeightBlur(set)}
                   placeholder="—"
                   placeholderTextColor={colors.textTertiary}
                   keyboardType="decimal-pad"
@@ -456,7 +486,7 @@ export default function WorkoutEditScreen() {
                   style={[styles.setInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground, flex: 1 }]}
                   value={set.reps}
                   onChangeText={(v) => updateSetLocal(set.session_set_id, "reps", v)}
-                  onBlur={() => handleSetBlur(set.session_set_id, "reps", set.reps)}
+                  onBlur={() => handleRepsBlur(set)}
                   placeholder="—"
                   placeholderTextColor={colors.textTertiary}
                   keyboardType="number-pad"

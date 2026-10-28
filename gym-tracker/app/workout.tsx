@@ -20,8 +20,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
 import { useUnits } from "@/utils/units";
 import { logError } from "@/utils/log";
+import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
+import { notifySuccess, tapLight } from "@/utils/haptics";
 import CardioSetRow from "@/components/CardioSetRow";
-import { computePace, formatDistance, formatDuration, metersToDisplay, parseDistanceToMeters, parseDuration, formatDurationShort } from "@/utils/cardioUtils";
+import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
 export default function WorkoutScreen() {
   const router = useRouter();
@@ -308,8 +310,32 @@ export default function WorkoutScreen() {
     closeSetOptions();
   });
 
+  const [finishPrompt, setFinishPrompt] = useState<{ title: string; message: string } | null>(null);
+
+  // Ask before finishing when the log looks unfinished, like Strong/Hevy do —
+  // a stray tap on "Finish" shouldn't end a workout halfway through.
+  const requestFinish = useGuardedPress(() => {
+    if (!session) return;
+    const allSets = Object.values(exerciseSets).flat();
+    const incomplete = allSets.filter((s: any) => !s.completed).length;
+    if (allSets.length === 0 || completedSetsCount === 0) {
+      setFinishPrompt({
+        title: "Finish Workout?",
+        message: "You haven't completed any sets yet. Finish and save this workout anyway?",
+      });
+    } else if (incomplete > 0) {
+      setFinishPrompt({
+        title: "Finish Workout?",
+        message: `You have ${incomplete} unfinished set${incomplete === 1 ? "" : "s"}. Only completed sets count toward your stats and PRs.`,
+      });
+    } else {
+      finishWorkout();
+    }
+  }, 500);
+
   const finishWorkout = useGuardedPress(async () => {
     if (!session) return;
+    setFinishPrompt(null);
     setError(null);
     const { error } = await db.finishWorkoutSession(session.session_id, notes || null);
     if (error) { setError(error.message); return; }
@@ -371,6 +397,7 @@ export default function WorkoutScreen() {
           ...cardioPRMessages,
         ];
         if (allPRMessages.length > 0) {
+          notifySuccess();
           showAlert(
             "New PRs!",
             allPRMessages.join("\n"),
@@ -528,7 +555,7 @@ export default function WorkoutScreen() {
           {session.session_name}
         </Text>
         <View style={styles.headerRight}>
-          <Pressable style={[styles.finishPill, { backgroundColor: colors.primary }]} onPress={finishWorkout}>
+          <Pressable style={[styles.finishPill, { backgroundColor: colors.primary }]} onPress={requestFinish} accessibilityRole="button" accessibilityLabel="Finish workout">
             <Text style={styles.finishPillText}>Finish</Text>
           </Pressable>
         </View>
@@ -797,6 +824,18 @@ export default function WorkoutScreen() {
       </Modal>
 
       <ConfirmModal
+        visible={finishPrompt != null}
+        title={finishPrompt?.title ?? ""}
+        message={finishPrompt?.message ?? ""}
+        confirmText="Finish"
+        cancelText="Keep Going"
+        confirmStyle="primary"
+        icon="flag-outline"
+        onConfirm={finishWorkout}
+        onCancel={() => setFinishPrompt(null)}
+      />
+
+      <ConfirmModal
         visible={showDiscardModal}
         title="Discard Workout"
         message="This workout will be permanently deleted. This cannot be undone."
@@ -836,43 +875,90 @@ const SetRow = memo(function SetRow({
   onComplete?: () => void;
 }) {
   const { colors } = useTheme();
-  const [weight, setWeight] = useState(set.weight != null ? String(set.weight) : "");
-  const [reps, setReps] = useState(set.reps != null ? String(set.reps) : "");
+  // Weights are stored in lbs; inputs show and accept the user's display unit.
+  const { unit, toDisplay, toStorage } = useUnits();
+  const displayWeight = toDisplay(set.weight);
+  const [weight, setWeight] = useState(formatNumberInput(displayWeight));
+  const [reps, setReps] = useState(formatNumberInput(set.reps));
   const isFocused = useRef<"weight" | "reps" | null>(null);
 
   useEffect(() => {
-    if (isFocused.current !== "weight") setWeight(set.weight != null ? String(set.weight) : "");
-    if (isFocused.current !== "reps") setReps(set.reps != null ? String(set.reps) : "");
-  }, [set.weight, set.reps]);
+    if (isFocused.current !== "weight") setWeight(formatNumberInput(toDisplay(set.weight)));
+    if (isFocused.current !== "reps") setReps(formatNumberInput(set.reps));
+  }, [set.weight, set.reps, unit, toDisplay]);
+
+  // Only write when the value the user sees actually changed, so a kg↔lbs
+  // round-trip never rewrites a stored weight with a rounded one.
+  const weightUpdate = useCallback((text: string) => {
+    const val = parseDecimalInput(text);
+    if (val === displayWeight) return undefined;
+    return toStorage(val);
+  }, [displayWeight, toStorage]);
 
   const commitWeight = useCallback(() => {
-    const val = weight ? parseFloat(weight) : null;
-    if (val !== set.weight) onUpdate(set.session_set_id, sessionExerciseId, { weight: val });
-  }, [weight, set.weight, set.session_set_id, sessionExerciseId, onUpdate]);
+    const next = weightUpdate(weight);
+    if (next !== undefined) onUpdate(set.session_set_id, sessionExerciseId, { weight: next });
+    setWeight(formatNumberInput(parseDecimalInput(weight)));
+  }, [weight, weightUpdate, set.session_set_id, sessionExerciseId, onUpdate]);
 
   const commitReps = useCallback(() => {
-    const val = reps ? parseInt(reps, 10) : null;
+    const val = parseIntInput(reps);
     if (val !== set.reps) onUpdate(set.session_set_id, sessionExerciseId, { reps: val });
+    setReps(formatNumberInput(val));
   }, [reps, set.reps, set.session_set_id, sessionExerciseId, onUpdate]);
 
+  const hasPrev = prevSet?.weight != null || prevSet?.reps != null;
+
   const toggleCompleted = useCallback(() => {
-    const weightVal = weight ? parseFloat(weight) : null;
-    const repsVal = reps ? parseInt(reps, 10) : null;
     const completing = !set.completed;
     const updates: any = { completed: completing };
-    if (weightVal !== set.weight) updates.weight = weightVal;
+    let weightText = weight;
+    let repsText = reps;
+    // Completing an empty set copies last session's numbers (like Strong/Hevy):
+    // the "previous" column is the plan, so one tap logs "same as last time".
+    if (completing && weightText.trim() === "" && repsText.trim() === "" && hasPrev) {
+      weightText = formatNumberInput(toDisplay(prevSet.weight));
+      repsText = formatNumberInput(prevSet.reps);
+      setWeight(weightText);
+      setReps(repsText);
+    }
+    const nextWeight = weightUpdate(weightText);
+    if (nextWeight !== undefined) updates.weight = nextWeight;
+    const repsVal = parseIntInput(repsText);
     if (repsVal !== set.reps) updates.reps = repsVal;
     onUpdate(set.session_set_id, sessionExerciseId, updates);
-    if (completing) onComplete?.();
-  }, [weight, reps, set, sessionExerciseId, onUpdate, onComplete]);
+    if (completing) {
+      tapLight();
+      onComplete?.();
+    }
+  }, [weight, reps, set, hasPrev, prevSet, toDisplay, weightUpdate, sessionExerciseId, onUpdate, onComplete]);
+
+  // Tap the "previous" value to copy it into this set without completing it.
+  const fillFromPrevious = useCallback(() => {
+    if (!hasPrev || set.completed) return;
+    const updates: any = {};
+    if (prevSet.weight != null) {
+      setWeight(formatNumberInput(toDisplay(prevSet.weight)));
+      if (prevSet.weight !== set.weight) updates.weight = prevSet.weight;
+    }
+    if (prevSet.reps != null) {
+      setReps(formatNumberInput(prevSet.reps));
+      if (prevSet.reps !== set.reps) updates.reps = prevSet.reps;
+    }
+    if (Object.keys(updates).length > 0) {
+      tapLight();
+      onUpdate(set.session_set_id, sessionExerciseId, updates);
+    }
+  }, [hasPrev, prevSet, set, toDisplay, sessionExerciseId, onUpdate]);
 
   const isCompleted = set.completed === true;
   const isWarmup = set.is_warmup === true;
 
-  const prevText = prevSet?.weight != null && prevSet?.reps != null
-    ? `${prevSet.weight}${" × "}${prevSet.reps}`
-    : prevSet?.weight != null
-    ? `${prevSet.weight}`
+  const prevWeight = toDisplay(prevSet?.weight);
+  const prevText = prevWeight != null && prevSet?.reps != null
+    ? `${prevWeight} × ${prevSet.reps}`
+    : prevWeight != null
+    ? `${prevWeight} ${unit}`
     : prevSet?.reps != null
     ? `${prevSet.reps} reps`
     : "—";
@@ -892,21 +978,31 @@ const SetRow = memo(function SetRow({
         ]}
         onPress={() => onSetNumberPress(set, sessionExerciseId)}
         hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={`Set ${set.set_number} options`}
       >
         <Text style={[
           rowStyles.badgeText,
           { color: colors.textTertiary },
-          isWarmup && { color: "#ffd60a" },
+          isWarmup && { color: colors.warning },
           isCompleted && { color: colors.success },
         ]}>
           {isWarmup ? "W" : set.set_number}
         </Text>
       </Pressable>
 
-      {/* Previous */}
-      <Text style={[rowStyles.prevText, { color: colors.textTertiary }]} numberOfLines={1}>
-        {prevText}
-      </Text>
+      {/* Previous — tap to copy into this set */}
+      <Pressable
+        style={rowStyles.prevBtn}
+        onPress={fillFromPrevious}
+        disabled={!hasPrev || isCompleted}
+        accessibilityRole="button"
+        accessibilityLabel={hasPrev ? `Use previous: ${prevText}` : "No previous set"}
+      >
+        <Text style={[rowStyles.prevText, { color: colors.textTertiary }]} numberOfLines={1}>
+          {prevText}
+        </Text>
+      </Pressable>
 
       {/* Weight input */}
       <TextInput
@@ -918,11 +1014,12 @@ const SetRow = memo(function SetRow({
         onChangeText={setWeight}
         onFocus={() => { isFocused.current = "weight"; }}
         onBlur={() => { isFocused.current = null; commitWeight(); }}
-        keyboardType="numeric"
-        placeholder="—"
+        keyboardType="decimal-pad"
+        placeholder={prevWeight != null ? String(prevWeight) : "—"}
         placeholderTextColor={colors.textTertiary}
         editable={!isCompleted}
         selectTextOnFocus
+        accessibilityLabel={`Set ${set.set_number} weight in ${unit}`}
       />
 
       {/* Reps input */}
@@ -935,11 +1032,12 @@ const SetRow = memo(function SetRow({
         onChangeText={setReps}
         onFocus={() => { isFocused.current = "reps"; }}
         onBlur={() => { isFocused.current = null; commitReps(); }}
-        keyboardType="numeric"
-        placeholder="—"
+        keyboardType="number-pad"
+        placeholder={prevSet?.reps != null ? String(prevSet.reps) : "—"}
         placeholderTextColor={colors.textTertiary}
         editable={!isCompleted}
         selectTextOnFocus
+        accessibilityLabel={`Set ${set.set_number} reps`}
       />
 
       {/* Check button */}
@@ -952,6 +1050,9 @@ const SetRow = memo(function SetRow({
         ]}
         onPress={toggleCompleted}
         hitSlop={6}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: isCompleted }}
+        accessibilityLabel={`Complete set ${set.set_number}`}
       >
         <Ionicons
           name="checkmark"
@@ -1102,8 +1203,12 @@ const rowStyles = StyleSheet.create({
     justifyContent: "center",
   },
   badgeText: { fontSize: 13, fontWeight: "700" },
-  prevText: {
+  prevBtn: {
     flex: 1,
+    alignSelf: "stretch",
+    justifyContent: "center",
+  },
+  prevText: {
     fontSize: 13,
     paddingLeft: 4,
   },
