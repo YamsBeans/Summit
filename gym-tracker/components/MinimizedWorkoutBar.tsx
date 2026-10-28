@@ -18,7 +18,10 @@ export default function MinimizedWorkoutBar() {
   const router = useRouter();
   const segments = useSegments();
   const insets = useSafeAreaInsets();
-  const isOnWorkoutScreen = segments.includes("workout" as never);
+  // Only float above the tab bar. On pushed screens (exercise detail opened
+  // from the workout, settings, a routine…) there is no tab bar, so the bar
+  // hovered over their content and covered the bottom of the page.
+  const onTabScreen = segments[0] === "(tabs)";
   const [elapsed, setElapsed] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [showDiscard, setShowDiscard] = useState(false);
@@ -67,7 +70,7 @@ export default function MinimizedWorkoutBar() {
     clearActiveWorkout();
   }, [activeWorkout, clearActiveWorkout]);
 
-  if (!activeWorkout || isOnWorkoutScreen) return null;
+  if (!activeWorkout || !onTabScreen) return null;
 
   return (
     <>

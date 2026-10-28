@@ -893,21 +893,29 @@ export const db = {
           .not("workout_sessions.end_time", "is", null)
           .order("workout_sessions(session_date)", { ascending: true });
 
-        if (!sessionExercises) return { data: [], error: null };
+        if (!sessionExercises || sessionExercises.length === 0) return { data: [], error: null };
 
-        const history = await Promise.all(
-          sessionExercises.map(async (se: any) => {
-            const { data: sets } = await supabase
-              .from("session_exercise_sets")
-              .select("*")
-              .eq("session_exercise_id", se.session_exercise_id)
-              .eq("completed", true);
-            return {
-              session_date: se.workout_sessions.session_date,
-              sets: sets ?? [],
-            };
-          })
-        );
+        // One query for every session's sets instead of one request per past
+        // workout (an exercise logged 100 times used to fire 100 requests).
+        const ids = sessionExercises.map((se: any) => se.session_exercise_id);
+        const { data: allSets, error: setsError } = await supabase
+          .from("session_exercise_sets")
+          .select("*")
+          .in("session_exercise_id", ids)
+          .eq("completed", true)
+          .order("set_number", { ascending: true });
+        if (setsError) return { data: null, error: setsError };
+
+        const setsByExercise = new Map<number, any[]>();
+        for (const set of allSets ?? []) {
+          const list = setsByExercise.get(set.session_exercise_id) ?? [];
+          list.push(set);
+          setsByExercise.set(set.session_exercise_id, list);
+        }
+        const history = sessionExercises.map((se: any) => ({
+          session_date: se.workout_sessions.session_date,
+          sets: setsByExercise.get(se.session_exercise_id) ?? [],
+        }));
         return { data: history, error: null };
       },
       () => localDb.getExerciseHistory(exerciseId, userId),

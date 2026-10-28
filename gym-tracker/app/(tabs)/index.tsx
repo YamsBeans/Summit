@@ -13,6 +13,16 @@ import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import { defaultWorkoutName } from "@/utils/workoutName";
 
 
+// Move Up / Move Down persist routine_order, but the list was rendered in
+// whatever order the server returned, so a reorder was lost on the next load.
+function sortRoutines(list: any[]) {
+  return [...list].sort((a, b) => {
+    const ao = a.routine_order ?? Number.MAX_SAFE_INTEGER;
+    const bo = b.routine_order ?? Number.MAX_SAFE_INTEGER;
+    return ao !== bo ? ao - bo : a.routine_id - b.routine_id;
+  });
+}
+
 export default function WorkoutsScreen() {
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
@@ -48,7 +58,7 @@ export default function WorkoutsScreen() {
     setError(null);
     const { data, error: err } = await db.getRoutines();
     if (err) setError(err.message);
-    else setRoutines(data ?? []);
+    else setRoutines(sortRoutines(data ?? []));
     setLoadingRoutines(false);
   };
 
