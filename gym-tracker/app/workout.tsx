@@ -958,20 +958,21 @@ const SetRow = memo(function SetRow({
   const toggleCompleted = useCallback(() => {
     const completing = !set.completed;
     const updates: any = { completed: completing };
-    let weightText = weight;
-    let repsText = reps;
     // Completing an empty set copies last session's numbers (like Strong/Hevy):
     // the "previous" column is the plan, so one tap logs "same as last time".
-    if (completing && weightText.trim() === "" && repsText.trim() === "" && hasPrev) {
-      weightText = formatNumberInput(toDisplay(prevSet.weight));
-      repsText = formatNumberInput(prevSet.reps);
-      setWeight(weightText);
-      setReps(repsText);
+    if (completing && weight.trim() === "" && reps.trim() === "" && hasPrev) {
+      setWeight(formatNumberInput(toDisplay(prevSet.weight)));
+      setReps(formatNumberInput(prevSet.reps));
+      // Copy the stored lbs value directly — going through the kg text and
+      // back would drift it by rounding (225 lb → 102.1 kg → 225.1 lb).
+      if (prevSet.weight !== set.weight) updates.weight = prevSet.weight ?? null;
+      if (prevSet.reps !== set.reps) updates.reps = prevSet.reps ?? null;
+    } else {
+      const nextWeight = weightUpdate(weight);
+      if (nextWeight !== undefined) updates.weight = nextWeight;
+      const repsVal = parseIntInput(reps);
+      if (repsVal !== set.reps) updates.reps = repsVal;
     }
-    const nextWeight = weightUpdate(weightText);
-    if (nextWeight !== undefined) updates.weight = nextWeight;
-    const repsVal = parseIntInput(repsText);
-    if (repsVal !== set.reps) updates.reps = repsVal;
     onUpdate(set.session_set_id, sessionExerciseId, updates);
     if (completing) {
       tapLight();

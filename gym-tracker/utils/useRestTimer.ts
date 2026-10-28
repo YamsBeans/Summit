@@ -14,6 +14,9 @@ const TICK_MS = 250;
 // screen unmounting when the user minimizes the workout and comes back.
 let activeEndAt: number | null = null;
 let activeTotal = 0;
+// Completion callback is shared too: whichever hook instance notices the
+// timer hit zero (e.g. one in Settings) must run the workout screen's handler.
+let activeOnComplete: (() => void) | null = null;
 
 function secondsLeft(endAt: number | null): number {
   if (endAt == null) return 0;
@@ -26,15 +29,19 @@ export function clearActiveRestTimer() {
   activeTotal = 0;
 }
 
+function resetAllForTests() {
+  clearActiveRestTimer();
+  activeOnComplete = null;
+}
+
 /** Test helper: forget any timer carried over between hook instances. */
-export const __resetRestTimerForTests = clearActiveRestTimer;
+export const __resetRestTimerForTests = resetAllForTests;
 
 export function useRestTimer() {
   const [remaining, setRemaining] = useState(() => secondsLeft(activeEndAt));
   const [total, setTotal] = useState(activeTotal);
   const [duration, setDuration] = useState(DEFAULT_DURATION);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const onCompleteRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((val) => {
@@ -55,7 +62,7 @@ export function useRestTimer() {
       clear();
       if (activeEndAt != null) {
         activeEndAt = null;
-        onCompleteRef.current?.();
+        activeOnComplete?.();
       }
     }
   }, [clear]);
@@ -91,7 +98,7 @@ export function useRestTimer() {
   }, [ensureTicking]);
 
   const setOnComplete = useCallback((fn: () => void) => {
-    onCompleteRef.current = fn;
+    activeOnComplete = fn;
   }, []);
 
   const saveDuration = useCallback(async (secs: number) => {
@@ -102,6 +109,7 @@ export function useRestTimer() {
   // Resume a timer that was started before this instance mounted.
   useEffect(() => {
     if (secondsLeft(activeEndAt) > 0) ensureTicking();
+    else activeEndAt = null; // expired while nobody was mounted
     return () => clear();
   }, [ensureTicking, clear]);
 

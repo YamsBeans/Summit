@@ -251,4 +251,21 @@ describe("useRestTimer", () => {
     expect(result.current.remaining).toBe(0);
     expect(result.current.isRunning).toBe(false);
   });
+
+  it("runs the registered completion handler even if another instance ticks first", () => {
+    const onComplete = jest.fn();
+    const workout = renderHook(() => useRestTimer());
+    const other = renderHook(() => useRestTimer());
+    act(() => {
+      workout.result.current.setOnComplete(onComplete);
+      workout.result.current.start(2);
+    });
+    workout.unmount(); // e.g. workout minimized; only "other" is ticking
+    act(() => { other.rerender({}); });
+    act(() => { jest.advanceTimersByTime(250); });
+    const third = renderHook(() => useRestTimer());
+    act(() => { jest.advanceTimersByTime(3000); });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    other.unmount(); third.unmount();
+  });
 });

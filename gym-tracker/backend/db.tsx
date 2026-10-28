@@ -897,14 +897,23 @@ export const db = {
 
         // One query for every session's sets instead of one request per past
         // workout (an exercise logged 100 times used to fire 100 requests).
+        // Chunked so each request stays well under PostgREST's default
+        // 1000-row cap and URL length limits on long histories.
         const ids = sessionExercises.map((se: any) => se.session_exercise_id);
-        const { data: allSets, error: setsError } = await supabase
-          .from("session_exercise_sets")
-          .select("*")
-          .in("session_exercise_id", ids)
-          .eq("completed", true)
-          .order("set_number", { ascending: true });
+        const CHUNK = 40;
+        const chunks: number[][] = [];
+        for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+        const results = await Promise.all(chunks.map((chunk) =>
+          supabase
+            .from("session_exercise_sets")
+            .select("*")
+            .in("session_exercise_id", chunk)
+            .eq("completed", true)
+            .order("set_number", { ascending: true })
+        ));
+        const setsError = results.find((r) => r.error)?.error;
         if (setsError) return { data: null, error: setsError };
+        const allSets = results.flatMap((r) => r.data ?? []);
 
         const setsByExercise = new Map<number, any[]>();
         for (const set of allSets ?? []) {
