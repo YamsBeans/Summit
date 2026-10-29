@@ -217,11 +217,33 @@ export const db = {
     return localDb.updateSessionPhotoUrl(sessionId, photoUrl);
   },
 
+  // Confirms the current password before a password change, so someone using an
+  // unlocked phone can't lock the owner out. Re-signing in as the same user
+  // just refreshes the session.
+  verifyPassword: async (email: string, password: string): Promise<{ error: string | null }> => {
+    if (!shouldUseSupabase()) return { error: "Requires an internet connection." };
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error: error ? "Current password is incorrect." : null };
+  },
+
   changePassword: async (newPassword: string) => {
     if (shouldUseSupabase()) {
       return supabase.auth.updateUser({ password: newPassword });
     }
     return { data: null, error: { message: "Password changes require an internet connection." } };
+  },
+
+  // Supabase emails a confirmation link to the new address (and, with "secure
+  // email change" on, the old one too); the login email only changes once the
+  // link is opened. The emailRedirectTo brings the user back into the app.
+  changeEmail: async (newEmail: string) => {
+    if (shouldUseSupabase()) {
+      return supabase.auth.updateUser(
+        { email: newEmail },
+        { emailRedirectTo: Linking.createURL("/") },
+      );
+    }
+    return { data: null, error: { message: "Changing your email requires an internet connection." } };
   },
 
   // Permanently deletes the signed-in user's data, photos and login.

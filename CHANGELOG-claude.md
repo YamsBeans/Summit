@@ -49,3 +49,9 @@ Build status: `npm run lint` shows 0 errors and 8 warnings (there were 17 before
 - Plate calculator and per-exercise rest times.
 - Exercise detail for cardio exercises (it currently shows weight stats).
 - The remaining lint warnings are mount-only effects (`loadSession` etc.).
+
+## 2026-10-29 (requested by Yams)
+- **Account settings page (like Hevy's):** Settings → Account now opens its own screen with Change Username, Change Email and Update Password, plus Delete Account at the bottom. It replaces the old Change Password row and the Danger Zone section.
+  - **Change Email** calls `supabase.auth.updateUser({ email })`, and Supabase emails a confirmation link. The app's root URL has to be in Supabase → Auth → Redirect URLs for that link to bring you back into the app.
+  - **Update Password** now asks for your current password first and checks it before saving the new one.
+- The shared settings building blocks (SettingItem, SettingSection, ModalShell) moved to `components/SettingsUI.tsx`.

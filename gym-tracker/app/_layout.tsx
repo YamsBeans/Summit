@@ -98,6 +98,7 @@ function RootNav() {
         <Stack.Screen name="reset-password" />
         <Stack.Screen name="workout" options={{ animation: "slide_from_bottom", animationDuration: 280 }} />
         <Stack.Screen name="settings" options={{ animation: "slide_from_bottom", animationDuration: 280 }} />
+        <Stack.Screen name="account" options={{ animation: "slide_from_right", animationDuration: 280 }} />
         <Stack.Screen name="routine/[routineId]" options={{ animation: "slide_from_bottom", animationDuration: 280 }} />
         <Stack.Screen name="exercise-detail/[exerciseId]" options={{ animation: "slide_from_right", animationDuration: 280 }} />
         <Stack.Screen name="explore" options={{ animation: "slide_from_right", animationDuration: 280 }} />

@@ -12,81 +12,9 @@ import { useTheme } from "@/theme/ThemeContext";
 import { useUnits, UnitSystem } from "@/utils/units";
 import { useRestTimer } from "@/utils/useRestTimer";
 import { requestNotificationPermissions } from "@/utils/notifications";
+import { ModalShell, SettingItem, SettingSection } from "@/components/SettingsUI";
 
 const NOTIF_KEY = "@gym_tracker_notifications";
-
-// ─── Reusable primitives ──────────────────────────────────────────────────────
-
-type SettingItemProps = {
-  icon: string;
-  label: string;
-  onPress?: () => void;
-  rightElement?: React.ReactNode;
-  destructive?: boolean;
-  value?: string;
-};
-
-function SettingItem({ icon, label, onPress, rightElement, destructive, value }: SettingItemProps) {
-  const { colors } = useTheme();
-  return (
-    <Pressable
-      style={({ pressed }) => [
-        {
-          flexDirection: "row" as const, alignItems: "center" as const,
-          paddingVertical: 13, paddingHorizontal: 16,
-          borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
-        },
-        pressed && onPress && { backgroundColor: colors.surfaceSecondary },
-      ]}
-      onPress={onPress}
-      disabled={!onPress && !rightElement}
-    >
-      <View style={{ width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: destructive ? colors.dangerLight : colors.surfaceSecondary, marginRight: 12 }}>
-        <Ionicons name={icon as any} size={18} color={destructive ? colors.danger : colors.textSecondary} />
-      </View>
-      <Text style={[{ flex: 1, fontSize: 16, fontWeight: "500", color: colors.text }, destructive && { color: colors.danger }]}>
-        {label}
-      </Text>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        {value && <Text style={{ fontSize: 14, color: colors.textSecondary }}>{value}</Text>}
-        {rightElement ?? (onPress ? <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} /> : null)}
-      </View>
-    </Pressable>
-  );
-}
-
-function SettingSection({ title, children }: { title: string; children: React.ReactNode }) {
-  const { colors } = useTheme();
-  return (
-    <View style={{ marginTop: 28, paddingHorizontal: 16 }}>
-      <Text style={{ fontSize: 13, fontWeight: "600", color: colors.textSecondary, marginBottom: 8, marginLeft: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>
-        {title}
-      </Text>
-      <View style={{ backgroundColor: colors.surface, borderRadius: 14, overflow: "hidden" }}>
-        {children}
-      </View>
-    </View>
-  );
-}
-
-function ModalShell({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
-  const { colors } = useTheme();
-  return (
-    <Modal visible={visible} transparent animationType="fade">
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", padding: 20 }} onPress={onClose}>
-          <Pressable
-            style={{ backgroundColor: colors.surface, borderRadius: 16, padding: 24, width: "100%", maxWidth: 340, elevation: 8, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 }}
-            onPress={() => {}}
-          >
-            <Text style={{ fontSize: 20, fontWeight: "700", color: colors.text, textAlign: "center", marginBottom: 20 }}>{title}</Text>
-            {children}
-          </Pressable>
-        </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
 
@@ -394,73 +322,6 @@ const profileStyles = StyleSheet.create({
   saveBtn: { flex: 2, paddingVertical: 13, borderRadius: 12, alignItems: "center" },
 });
 
-function ChangePasswordModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { colors } = useTheme();
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-
-  const reset = () => { setNewPassword(""); setConfirmPassword(""); setError(null); setSuccess(false); };
-
-  const handleChange = async () => {
-    if (newPassword.length < 6) { setError("Password must be at least 6 characters."); return; }
-    if (newPassword !== confirmPassword) { setError("Passwords do not match."); return; }
-    setLoading(true); setError(null);
-    const { error: err } = await db.changePassword(newPassword);
-    setLoading(false);
-    if (err) { setError(err.message); return; }
-    setSuccess(true);
-  };
-
-  const handleClose = () => { reset(); onClose(); };
-
-  return (
-    <ModalShell visible={visible} onClose={handleClose} title="Change Password">
-      {success ? (
-        <View style={{ alignItems: "center", gap: 12 }}>
-          <Text style={{ fontSize: 40 }}>✅</Text>
-          <Text style={{ fontSize: 16, fontWeight: "600", color: colors.success, textAlign: "center" }}>Password updated successfully!</Text>
-          <Pressable style={{ marginTop: 8, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center", width: "100%" }} onPress={handleClose}>
-            <Text style={{ fontSize: 16, fontWeight: "600", color: "#fff" }}>Done</Text>
-          </Pressable>
-        </View>
-      ) : (
-        <>
-          {error && <Text style={{ color: colors.danger, fontSize: 13, marginBottom: 10, textAlign: "center" }}>{error}</Text>}
-          <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 6 }}>New Password</Text>
-          <TextInput
-            style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, fontSize: 16, color: colors.text, backgroundColor: colors.inputBackground, marginBottom: 14 }}
-            value={newPassword}
-            onChangeText={setNewPassword}
-            placeholder="At least 6 characters"
-            placeholderTextColor={colors.textTertiary}
-            secureTextEntry
-          />
-          <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 6 }}>Confirm Password</Text>
-          <TextInput
-            style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, fontSize: 16, color: colors.text, backgroundColor: colors.inputBackground, marginBottom: 20 }}
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            placeholder="Re-enter new password"
-            placeholderTextColor={colors.textTertiary}
-            secureTextEntry
-          />
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            <Pressable style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.surfaceSecondary, alignItems: "center" }} onPress={handleClose}>
-              <Text style={{ fontSize: 16, fontWeight: "600", color: colors.textSecondary }}>Cancel</Text>
-            </Pressable>
-            <Pressable style={{ flex: 2, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center", opacity: loading ? 0.6 : 1 }} onPress={handleChange} disabled={loading}>
-              <Text style={{ fontSize: 16, fontWeight: "700", color: "#fff" }}>{loading ? "Updating…" : "Update Password"}</Text>
-            </Pressable>
-          </View>
-        </>
-      )}
-    </ModalShell>
-  );
-}
-
 function ContentModal({ visible, onClose, title, sections }: { visible: boolean; onClose: () => void; title: string; sections: { heading?: string; body: string }[] }) {
   const { colors } = useTheme();
   return (
@@ -529,7 +390,6 @@ export default function SettingsScreen() {
   const [showUnits, setShowUnits] = useState(false);
   const [showRestTimer, setShowRestTimer] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const [showGettingStarted, setShowGettingStarted] = useState(false);
   const [showRoutineHelp, setShowRoutineHelp] = useState(false);
   const [showFAQ, setShowFAQ] = useState(false);
@@ -564,36 +424,6 @@ export default function SettingsScreen() {
       { text: "Cancel", style: "cancel" },
       { text: "Sign Out", style: "destructive", onPress: async () => { await db.signOut(); } },
     ]);
-  };
-
-  const handleDeleteAccount = () => {
-    showAlert(
-      "Delete Account",
-      "This will permanently delete your account and all workout data. This cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => showAlert(
-            "Are you absolutely sure?",
-            "All your routines, workouts, and progress will be lost forever.",
-            [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Yes, Delete",
-                style: "destructive",
-                onPress: async () => {
-                  const { error } = await db.deleteAccount();
-                  if (error) showAlert("Couldn't delete account", error);
-                  // On success the auth listener sees the sign-out and routes to /auth.
-                },
-              },
-            ]
-          ),
-        },
-      ]
-    );
   };
 
   const handleContactUs = () => {
@@ -653,7 +483,7 @@ export default function SettingsScreen() {
         {/* Account */}
         <SettingSection title="Account">
           <SettingItem icon="person-outline" label="Edit Profile" onPress={() => setShowProfile(true)} />
-          <SettingItem icon="lock-closed-outline" label="Change Password" onPress={() => setShowPassword(true)} />
+          <SettingItem icon="lock-closed-outline" label="Account" onPress={() => router.push("/account")} />
           <SettingItem
             icon="notifications-outline"
             label="Notifications"
@@ -689,11 +519,6 @@ export default function SettingsScreen() {
           <SettingItem icon="information-circle-outline" label="About" onPress={() => setShowAbout(true)} />
         </SettingSection>
 
-        {/* Danger Zone */}
-        <SettingSection title="Danger Zone">
-          <SettingItem icon="trash-outline" label="Delete Account" onPress={handleDeleteAccount} destructive />
-        </SettingSection>
-
         {/* Sign Out */}
         <View style={{ marginTop: 28, paddingHorizontal: 16 }}>
           <Pressable
@@ -716,7 +541,6 @@ export default function SettingsScreen() {
       <UnitsModal visible={showUnits} onClose={() => setShowUnits(false)} />
       <RestTimerModal visible={showRestTimer} onClose={() => setShowRestTimer(false)} />
       <ProfileEditModal visible={showProfile} onClose={() => setShowProfile(false)} />
-      <ChangePasswordModal visible={showPassword} onClose={() => setShowPassword(false)} />
       <ContentModal visible={showGettingStarted} onClose={() => setShowGettingStarted(false)} title="Getting Started" sections={gettingStartedSections} />
       <ContentModal visible={showRoutineHelp} onClose={() => setShowRoutineHelp(false)} title="Routine Help" sections={routineHelpSections} />
       <ContentModal visible={showFAQ} onClose={() => setShowFAQ(false)} title="FAQ" sections={faqSections} />
