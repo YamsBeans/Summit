@@ -7,8 +7,12 @@ import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits, formatVolume } from "@/utils/units";
 import { bestOneRepMax, estimateOneRepMax } from "@/utils/oneRepMax";
+import CardioExerciseDetail from "@/components/CardioExerciseDetail";
 
-type HistorySet = { weight: number | null; reps: number | null; completed: boolean; is_warmup?: boolean | null };
+type HistorySet = {
+  weight: number | null; reps: number | null; completed: boolean; is_warmup?: boolean | null;
+  distance_meters?: number | null; duration_seconds?: number | null; pace_sec_per_km?: number | null;
+};
 type HistoryPoint = {
   session_date: string;
   sets: HistorySet[];
@@ -28,7 +32,7 @@ function maxWeight(sets: HistorySet[]) {
 }
 
 export default function ExerciseDetailScreen() {
-  const { exerciseId, exerciseName } = useLocalSearchParams<{ exerciseId: string; exerciseName: string }>();
+  const { exerciseId, exerciseName, exerciseType } = useLocalSearchParams<{ exerciseId: string; exerciseName: string; exerciseType?: string }>();
   const router = useRouter();
   const { colors } = useTheme();
   const { toDisplay, label: unitLabel } = useUnits();
@@ -108,6 +112,16 @@ export default function ExerciseDetailScreen() {
     return step * sections;
   }, [chartData]);
 
+  // Cardio gets its own view (distance/time/pace). Detect it from the data too,
+  // for entry points that don't pass the type.
+  const isCardio = useMemo(() => {
+    if (exerciseType) return exerciseType === "cardio";
+    const sets = history.flatMap((h) => h.sets);
+    return sets.length > 0
+      && sets.some((s) => (s.distance_meters ?? 0) > 0 || (s.duration_seconds ?? 0) > 0)
+      && !sets.some((s) => (s.weight ?? 0) > 0 || (s.reps ?? 0) > 0);
+  }, [exerciseType, history]);
+
   const hasBests = bests.weight != null || bests.volume != null || bests.e1rm != null;
 
   return (
@@ -134,6 +148,7 @@ export default function ExerciseDetailScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          {isCardio ? <CardioExerciseDetail history={history} /> : <>
           {/* Personal bests */}
           {hasBests ? (
             <View style={{ flexDirection: "row", gap: 10, marginBottom: 20 }}>
@@ -299,6 +314,7 @@ export default function ExerciseDetailScreen() {
               );
             })
           )}
+          </>}
         </ScrollView>
       )}
     </View>

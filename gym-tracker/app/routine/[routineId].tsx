@@ -375,7 +375,7 @@ export default function RoutineScreen() {
                   onPress={() =>
                     router.push({
                       pathname: "/exercise-detail/[exerciseId]",
-                      params: { exerciseId: ex.exercise_id, exerciseName: ex.exercise_name },
+                      params: { exerciseId: ex.exercise_id, exerciseName: ex.exercise_name, exerciseType: ex.exercise_type ?? "" },
                     })
                   }
                 >

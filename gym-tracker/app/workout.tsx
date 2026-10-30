@@ -692,7 +692,7 @@ export default function WorkoutScreen() {
                   style={styles.exerciseNameBtn}
                   onPress={() => router.push({
                     pathname: "/exercise-detail/[exerciseId]",
-                    params: { exerciseId: ex.exercise_id, exerciseName: ex.exercise_name },
+                    params: { exerciseId: ex.exercise_id, exerciseName: ex.exercise_name, exerciseType: ex.exercise_type ?? "" },
                   })}
                 >
                   <Text style={[styles.exerciseName, { color: colors.primary }]}>
