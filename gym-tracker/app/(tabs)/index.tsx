@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
@@ -7,14 +7,38 @@ import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db, isOnline } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ConfirmModal from "@/components/ConfirmModal";
+import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
+import { defaultWorkoutName } from "@/utils/workoutName";
+
+
+// Move Up / Move Down persist routine_order, but the list was rendered in
+// whatever order the server returned, so a reorder was lost on the next load.
+function sortRoutines(list: any[]) {
+  return [...list].sort((a, b) => {
+    const ao = a.routine_order ?? Number.MAX_SAFE_INTEGER;
+    const bo = b.routine_order ?? Number.MAX_SAFE_INTEGER;
+    return ao !== bo ? ao - bo : a.routine_id - b.routine_id;
+  });
+}
 
 export default function WorkoutsScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
   const hasLoadedRef = useRef(false);
   const { colors } = useTheme();
+  const { activeWorkout } = useActiveWorkout();
+  const [showInProgress, setShowInProgress] = useState(false);
+  const [startingEmpty, setStartingEmpty] = useState(false);
+
+  const resumeActive = useCallback(() => {
+    setShowInProgress(false);
+    if (!activeWorkout) return;
+    router.push({ pathname: "/workout", params: { sessionId: String(activeWorkout.sessionId) } });
+  }, [activeWorkout, router]);
 
   const [routines, setRoutines] = useState<any[]>([]);
   const [loadingRoutines, setLoadingRoutines] = useState(false);
@@ -36,7 +60,7 @@ export default function WorkoutsScreen() {
     setError(null);
     const { data, error: err } = await db.getRoutines();
     if (err) setError(err.message);
-    else setRoutines(data ?? []);
+    else setRoutines(sortRoutines(data ?? []));
     setLoadingRoutines(false);
   };
 
@@ -55,7 +79,29 @@ export default function WorkoutsScreen() {
     loadRoutines();
   });
 
+  // Quick start: an empty workout you add exercises to as you go.
+  const handleStartEmpty = useGuardedPress(async () => {
+    if (activeWorkout) { setShowInProgress(true); return; }
+    setError(null);
+    setStartingEmpty(true);
+    try {
+      const { data: { user } } = await db.getUser();
+      if (!user) { setError("Not authenticated"); return; }
+      const { data: session, error: err } = await db.startWorkoutSession({
+        routine_id: null,
+        session_name: defaultWorkoutName(),
+        user_id: user.id,
+      });
+      if (err || !session) { setError(err?.message ?? "Could not start workout"); return; }
+      router.push({ pathname: "/workout", params: { sessionId: String(session.session_id) } });
+    } finally {
+      setStartingEmpty(false);
+    }
+  }, 1000);
+
   const handleStartWorkout = useGuardedPress(async (routineId: number) => {
+    // Only one workout at a time — starting another would strand the first.
+    if (activeWorkout) { setShowInProgress(true); return; }
     setStartingId(routineId);
     const { data: { user } } = await db.getUser();
     if (!user) { setError("Not authenticated"); setStartingId(null); return; }
@@ -143,7 +189,7 @@ export default function WorkoutsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Page header ── */}
-        <View style={[styles.pageHeader, { borderBottomColor: colors.border }]}>
+        <View style={[styles.pageHeader, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
           <Text style={[styles.pageTitle, { color: colors.text }]}>Workout</Text>
           <View style={styles.headerRight}>
             {!isOnline && (
@@ -159,6 +205,29 @@ export default function WorkoutsScreen() {
             <Text style={[styles.errorText, { color: colors.danger }]}>{error}</Text>
           </View>
         )}
+
+        {/* ── Quick start ── */}
+        <View style={styles.quickStart}>
+          <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 10, marginLeft: 4 }]}>Quick Start</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.quickStartBtn,
+              { backgroundColor: activeWorkout ? colors.success : colors.primary },
+              (pressed || startingEmpty) && { opacity: 0.75 },
+            ]}
+            disabled={startingEmpty}
+            onPress={activeWorkout ? resumeActive : handleStartEmpty}
+            accessibilityRole="button"
+            accessibilityLabel={activeWorkout ? `Resume ${activeWorkout.sessionName}` : "Start an empty workout"}
+          >
+            <Ionicons name={activeWorkout ? "play-forward" : "add"} size={18} color="#fff" />
+            <Text style={styles.quickStartText} numberOfLines={1}>
+              {activeWorkout
+                ? `Resume ${activeWorkout.sessionName}`
+                : startingEmpty ? "Starting…" : "Start Empty Workout"}
+            </Text>
+          </Pressable>
+        </View>
 
         {/* ── Create routine form ── */}
         {showForm && (
@@ -367,6 +436,19 @@ export default function WorkoutsScreen() {
         </Pressable>
       </Modal>
 
+      {/* ── Workout already in progress ── */}
+      <ConfirmModal
+        visible={showInProgress}
+        title="Workout in Progress"
+        message={`"${activeWorkout?.sessionName ?? "Your workout"}" is still running. Finish or discard it before starting another.`}
+        confirmText="Resume"
+        cancelText="Cancel"
+        confirmStyle="primary"
+        icon="barbell-outline"
+        onConfirm={resumeActive}
+        onCancel={() => setShowInProgress(false)}
+      />
+
       {/* ── Delete confirm ── */}
       <ConfirmModal
         visible={deleteConfirmVisible}
@@ -414,6 +496,17 @@ const styles = StyleSheet.create({
   formCancelText: { fontSize: 15, fontWeight: "600" },
   formSaveBtn: { flex: 2, paddingVertical: 12, borderRadius: 10, alignItems: "center" },
   formSaveText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+
+  quickStart: { paddingHorizontal: 16, paddingTop: 20 },
+  quickStartBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 14,
+  },
+  quickStartText: { color: "#fff", fontSize: 16, fontWeight: "700" },
 
   sectionRow: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 },
   sectionTitle: { fontSize: 17, fontWeight: "700" },

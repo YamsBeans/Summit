@@ -17,16 +17,25 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 import ExercisePicker from "@/components/ExercisePicker";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
+import { useUnits, useDistanceUnit, type DistanceUnit } from "@/utils/units";
+import { computePace, digitsToSeconds, formatDigits, metersToDisplay, parseDistanceToMeters, secondsToDigits } from "@/utils/cardioUtils";
+import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 
 type EditSet = {
   session_set_id: number;
   set_number: number;
-  weight: string;
+  /** Stored weight (always lbs). */
+  weight_lbs: number | null;
+  /** In-progress text typed by the user, in their display unit; null = not being edited. */
+  weight: string | null;
   reps: string;
   is_warmup: boolean;
+  distance_meters: number | null;
+  duration_seconds: number | null;
 };
 
 type EditExercise = {
@@ -35,13 +44,17 @@ type EditExercise = {
   exercise_id: string;
   exercise_name: string;
   exercise_order: number;
+  exercise_type: string;
   sets: EditSet[];
 };
 
 export default function WorkoutEditScreen() {
+  const headerTop = useHeaderTop();
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
   const router = useRouter();
   const { colors } = useTheme();
+  const { toDisplay, toStorage, label: unitLabel } = useUnits();
+  const { distanceUnit } = useDistanceUnit();
 
   const sid = parseInt(sessionId ?? "0", 10);
 
@@ -98,14 +111,18 @@ export default function WorkoutEditScreen() {
       exercise_id: ex.exercise_id,
       exercise_name: ex.exercise_name,
       exercise_order: ex.exercise_order,
+      exercise_type: ex.exercise_type ?? "strength",
       sets: (setsByExercise[ex.session_exercise_id] ?? [])
         .sort((a: any, b: any) => a.set_number - b.set_number)
         .map((s: any): EditSet => ({
           session_set_id: s.session_set_id,
           set_number: s.set_number,
-          weight: s.weight != null ? String(s.weight) : "",
+          weight_lbs: s.weight ?? null,
+          weight: null,
           reps: s.reps != null ? String(s.reps) : "",
           is_warmup: s.is_warmup,
+          distance_meters: s.distance_meters ?? null,
+          duration_seconds: s.duration_seconds ?? null,
         })),
     }));
 
@@ -184,13 +201,43 @@ export default function WorkoutEditScreen() {
     );
   }
 
-  async function handleSetBlur(sessionSetId: number, field: "weight" | "reps", value: string) {
-    const num = parseFloat(value);
-    const updates =
-      field === "weight"
-        ? { weight: isNaN(num) ? null : num }
-        : { reps: isNaN(num) ? null : Math.round(num) };
-    await db.updateSessionExerciseSet(sessionSetId, updates);
+  function patchSet(sessionSetId: number, patch: Partial<EditSet>) {
+    setExercises((prev) =>
+      prev.map((ex) => ({
+        ...ex,
+        sets: ex.sets.map((s) => (s.session_set_id === sessionSetId ? { ...s, ...patch } : s)),
+      }))
+    );
+  }
+
+  async function handleWeightBlur(set: EditSet) {
+    if (set.weight == null) return; // untouched
+    const val = parseDecimalInput(set.weight);
+    // Weights are stored in lbs; only write when the shown value really changed
+    // so viewing a workout in kg never rewrites it with a rounded number.
+    if (val === toDisplay(set.weight_lbs)) {
+      patchSet(set.session_set_id, { weight: null });
+      return;
+    }
+    const lbs = toStorage(val);
+    patchSet(set.session_set_id, { weight_lbs: lbs, weight: null });
+    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { weight: lbs });
+    if (err) setError((err as any)?.message ?? "Failed to save set");
+  }
+
+  async function handleRepsBlur(set: EditSet) {
+    const reps = parseIntInput(set.reps);
+    patchSet(set.session_set_id, { reps: formatNumberInput(reps) });
+    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { reps });
+    if (err) setError((err as any)?.message ?? "Failed to save set");
+  }
+
+  async function handleCardioChange(set: EditSet, distance_meters: number | null, duration_seconds: number | null) {
+    if (distance_meters === set.distance_meters && duration_seconds === set.duration_seconds) return;
+    patchSet(set.session_set_id, { distance_meters, duration_seconds });
+    const pace_sec_per_km = distance_meters && duration_seconds ? computePace(distance_meters, duration_seconds) : null;
+    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { distance_meters, duration_seconds, pace_sec_per_km });
+    if (err) setError((err as any)?.message ?? "Failed to save set");
   }
 
   async function handleAddSet(exercise: EditExercise) {
@@ -211,9 +258,12 @@ export default function WorkoutEditScreen() {
     const editSet: EditSet = {
       session_set_id: newSet.session_set_id,
       set_number: nextSetNum,
-      weight: "",
+      weight_lbs: null,
+      weight: null,
       reps: "",
       is_warmup: false,
+      distance_meters: null,
+      duration_seconds: null,
     };
     setExercises((prev) =>
       prev.map((ex) =>
@@ -257,15 +307,19 @@ export default function WorkoutEditScreen() {
     );
   }
 
-  async function handleAddExercise(exercise: { id: string; name: string }) {
+  async function handleAddExercise(exercise: { id: string; name: string; exercise_type?: string; category?: string }) {
     setShowPicker(false);
     const nextOrder = exercises.length + 1;
+    // Same type inference as the live workout screen, so a run added here
+    // gets distance/time fields instead of weight/reps.
+    const exType = (exercise.exercise_type ?? (exercise.category === "cardio" ? "cardio" : exercise.category === "stretching" ? "stretching" : "strength")) as "strength" | "cardio" | "stretching";
     const { data: newEx, error: err } = await db.insertSessionExercise({
       session_id: sid,
       exercise_id: exercise.id,
       exercise_name: exercise.name,
       exercise_order: nextOrder,
       notes: null,
+      exercise_type: exType,
     });
     if (err || !newEx) {
       setError((err as any)?.message ?? "Failed to add exercise");
@@ -279,6 +333,7 @@ export default function WorkoutEditScreen() {
         exercise_id: exercise.id,
         exercise_name: exercise.name,
         exercise_order: nextOrder,
+        exercise_type: exType,
         sets: [],
       },
     ]);
@@ -323,7 +378,7 @@ export default function WorkoutEditScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.background }]}>
+      <View style={[styles.header, { paddingTop: headerTop, borderBottomColor: colors.border, backgroundColor: colors.background }]}>
         <Pressable
           onPress={() => router.back()}
           hitSlop={8}
@@ -428,8 +483,12 @@ export default function WorkoutEditScreen() {
             {ex.sets.length > 0 && (
               <View style={styles.setHeaderRow}>
                 <Text style={[styles.setColLabel, { color: colors.textTertiary, width: 36 }]}>SET</Text>
-                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>WEIGHT</Text>
-                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>REPS</Text>
+                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>
+                  {ex.exercise_type === "cardio" ? `DIST (${distanceUnit})` : unitLabel.toUpperCase()}
+                </Text>
+                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>
+                  {ex.exercise_type === "cardio" ? "TIME" : "REPS"}
+                </Text>
                 <View style={{ width: 28 }} />
               </View>
             )}
@@ -442,26 +501,37 @@ export default function WorkoutEditScreen() {
                     {set.is_warmup ? "W" : idx + 1}
                   </Text>
                 </View>
-                <TextInput
-                  style={[styles.setInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground, flex: 1 }]}
-                  value={set.weight}
-                  onChangeText={(v) => updateSetLocal(set.session_set_id, "weight", v)}
-                  onBlur={() => handleSetBlur(set.session_set_id, "weight", set.weight)}
-                  placeholder="—"
-                  placeholderTextColor={colors.textTertiary}
-                  keyboardType="decimal-pad"
-                  selectTextOnFocus
-                />
-                <TextInput
-                  style={[styles.setInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground, flex: 1 }]}
-                  value={set.reps}
-                  onChangeText={(v) => updateSetLocal(set.session_set_id, "reps", v)}
-                  onBlur={() => handleSetBlur(set.session_set_id, "reps", set.reps)}
-                  placeholder="—"
-                  placeholderTextColor={colors.textTertiary}
-                  keyboardType="number-pad"
-                  selectTextOnFocus
-                />
+                {ex.exercise_type === "cardio" ? (
+                  <CardioEditInputs
+                    set={set}
+                    distanceUnit={distanceUnit}
+                    colors={colors}
+                    onCommit={(dist, dur) => handleCardioChange(set, dist, dur)}
+                  />
+                ) : (
+                  <>
+                  <TextInput
+                    style={[styles.setInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground, flex: 1 }]}
+                    value={set.weight ?? formatNumberInput(toDisplay(set.weight_lbs))}
+                    onChangeText={(v) => updateSetLocal(set.session_set_id, "weight", v)}
+                    onBlur={() => handleWeightBlur(set)}
+                    placeholder="—"
+                    placeholderTextColor={colors.textTertiary}
+                    keyboardType="decimal-pad"
+                    selectTextOnFocus
+                  />
+                  <TextInput
+                    style={[styles.setInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground, flex: 1 }]}
+                    value={set.reps}
+                    onChangeText={(v) => updateSetLocal(set.session_set_id, "reps", v)}
+                    onBlur={() => handleRepsBlur(set)}
+                    placeholder="—"
+                    placeholderTextColor={colors.textTertiary}
+                    keyboardType="number-pad"
+                    selectTextOnFocus
+                  />
+                  </>
+                )}
                 <Pressable
                   hitSlop={8}
                   onPress={() => handleRemoveSet(ex, set)}
@@ -684,3 +754,61 @@ const modalStyles = StyleSheet.create({
   },
   cancelText: { fontSize: 16, fontWeight: "600" },
 });
+
+// ─── Cardio set inputs (distance + h:mm:ss) ─────────────────────────────────
+// Cardio sets used to show as weight/reps here, so a past run couldn't be
+// corrected at all.
+
+function CardioEditInputs({
+  set, distanceUnit, colors, onCommit,
+}: {
+  set: EditSet;
+  distanceUnit: DistanceUnit;
+  colors: any;
+  onCommit: (distanceMeters: number | null, durationSeconds: number | null) => void;
+}) {
+  const shownDist = set.distance_meters != null
+    ? String(parseFloat(metersToDisplay(set.distance_meters, distanceUnit).toFixed(2)))
+    : "";
+  const [dist, setDist] = useState(shownDist);
+  const [digits, setDigits] = useState(() => secondsToDigits(set.duration_seconds));
+
+  useEffect(() => { setDist(shownDist); }, [shownDist]);
+  useEffect(() => { setDigits(secondsToDigits(set.duration_seconds)); }, [set.duration_seconds]);
+
+  const commit = () => {
+    // Keep the stored meters when the visible distance wasn't touched.
+    const meters = dist.trim() === shownDist
+      ? set.distance_meters
+      : parseDistanceToMeters(dist.replace(",", "."), distanceUnit);
+    const secs = digitsToSeconds(digits);
+    onCommit(meters != null && meters > 0 ? meters : null, secs > 0 ? secs : null);
+  };
+
+  const inputStyle = [styles.setInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground, flex: 1 }];
+  return (
+    <>
+      <TextInput
+        style={inputStyle}
+        value={dist}
+        onChangeText={setDist}
+        onBlur={commit}
+        placeholder="0.00"
+        placeholderTextColor={colors.textTertiary}
+        keyboardType="decimal-pad"
+        selectTextOnFocus
+        accessibilityLabel={`Set ${set.set_number} distance in ${distanceUnit}`}
+      />
+      <TextInput
+        style={inputStyle}
+        value={formatDigits(digits)}
+        onChangeText={(t) => setDigits(t.replace(/\D/g, "").slice(0, 6))}
+        onBlur={commit}
+        placeholder="00:00:00"
+        placeholderTextColor={colors.textTertiary}
+        keyboardType="number-pad"
+        accessibilityLabel={`Set ${set.set_number} duration`}
+      />
+    </>
+  );
+}

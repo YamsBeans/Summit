@@ -6,30 +6,39 @@ import {
 import { showAlert } from "@/utils/alert";
 import ConfirmModal from "@/components/ConfirmModal";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
+import WorkoutSummaryModal from "@/components/WorkoutSummaryModal";
+import PlateCalculatorModal from "@/components/PlateCalculatorModal";
+import { useExerciseRest, resolveRest, formatRest, REST_CHOICES } from "@/utils/exerciseRest";
+import { buildWorkoutSummary, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import RestTimerBanner from "@/components/RestTimerBanner";
 import { useRestTimer } from "@/utils/useRestTimer";
-import { detectPRs, detectCardioPRs } from "@/utils/prDetection";
+import { detectPRs, detectCardioPRs, mergeStrengthRecord } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
-import { useUnits } from "@/utils/units";
+import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
+import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
+import { notifySuccess, tapLight } from "@/utils/haptics";
 import CardioSetRow from "@/components/CardioSetRow";
-import { computePace, formatDistance, formatDuration, metersToDisplay, parseDistanceToMeters, parseDuration, formatDurationShort } from "@/utils/cardioUtils";
+import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
 export default function WorkoutScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const navigation = useNavigation();
   const scrollRef = useRef<ScrollView>(null);
   const { colors } = useTheme();
   const { minimizeWorkout, clearActiveWorkout } = useActiveWorkout();
   const { toDisplay, label: unitLabel } = useUnits();
+  const { distanceUnit } = useDistanceUnit();
   const { sessionId: sessionIdParam } = useLocalSearchParams<{ sessionId: string }>();
 
   const [session, setSession] = useState<any>(null);
@@ -37,7 +46,6 @@ export default function WorkoutScreen() {
   const [exerciseSets, setExerciseSets] = useState<Record<number, any[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [elapsed, setElapsed] = useState(0);
   const [notes, setNotes] = useState("");
   const startTimestamp = useRef<number>(Date.now());
 
@@ -69,39 +77,66 @@ export default function WorkoutScreen() {
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
   const finishedSessionId = useRef<number | null>(null);
+  const [summary, setSummary] = useState<WorkoutSummary | null>(null);
+  const [plateWeight, setPlateWeight] = useState<number | null | undefined>(undefined);
   const [setOptionsVisible, setSetOptionsVisible] = useState(false);
   const [selectedSet, setSelectedSet] = useState<any>(null);
   const [selectedExerciseId, setSelectedExerciseId] = useState<number | null>(null);
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [prevSets, setPrevSets] = useState<Record<string, any[]>>({});
-  const [distanceUnit, setDistanceUnit] = useState<'km' | 'mi'>('km');
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
   const [selectedExerciseForOptions, setSelectedExerciseForOptions] = useState<any>(null);
   const exercisePickerModeRef = useRef<"add" | "replace">("add");
   const replaceTargetRef = useRef<any>(null);
 
   const restTimer = useRestTimer();
+  // Pull out the stable callbacks: the restTimer object itself changes every
+  // second, and depending on it would re-render every memoized set row on
+  // each tick of the countdown.
+  const { start: startRest, skip: skipRest, addTime: addRestTime, setOnComplete: setRestOnComplete, duration: restDuration } = restTimer;
+  const restRemainingRef = useRef(0);
+  restRemainingRef.current = restTimer.remaining;
 
-  const startRestTimer = useCallback(() => {
-    restTimer.start();
+  // Per-exercise rest overrides (Hevy-style). Read through refs so the
+  // callback handed to every set row stays stable.
+  const { restOverrides, setRestFor } = useExerciseRest();
+  const restOverridesRef = useRef(restOverrides);
+  restOverridesRef.current = restOverrides;
+  const exercisesRef = useRef<any[]>([]);
+  exercisesRef.current = exercises;
+  const [restPickerFor, setRestPickerFor] = useState<any>(null);
+
+  const startRestTimer = useCallback((sessionExerciseId?: number) => {
+    const ex = exercisesRef.current.find((e) => e.session_exercise_id === sessionExerciseId);
+    const secs = resolveRest(restOverridesRef.current, ex?.exercise_id, restDuration);
+    if (secs <= 0) return; // rest timer turned off for this exercise
+    startRest(secs);
     AsyncStorage.getItem("@gym_tracker_notifications").then((val) => {
-      if (val === "true") scheduleRestDoneNotification(restTimer.duration);
+      if (val === "true") scheduleRestDoneNotification(secs);
     });
-  }, [restTimer]);
+  }, [startRest, restDuration]);
 
   const skipRestTimer = useCallback(() => {
-    restTimer.skip();
+    skipRest();
     cancelRestDoneNotification();
-  }, [restTimer]);
+  }, [skipRest]);
 
   // Keep the scheduled "rest complete" notification in sync when the user
-  // extends the timer — otherwise it still fires at the original end time.
+  // adjusts the timer — otherwise it still fires at the original end time.
   const handleAddRestTime = useCallback((secs: number) => {
-    restTimer.addTime(secs);
+    const next = restRemainingRef.current + secs;
+    addRestTime(secs);
+    if (next <= 0) { cancelRestDoneNotification(); return; }
     AsyncStorage.getItem("@gym_tracker_notifications").then((val) => {
-      if (val === "true") scheduleRestDoneNotification(restTimer.remaining + secs);
+      if (val === "true") scheduleRestDoneNotification(next);
     });
-  }, [restTimer]);
+  }, [addRestTime]);
+
+  // Buzz when rest is over while the app is open (the notification covers
+  // the backgrounded case).
+  useEffect(() => {
+    setRestOnComplete(() => notifySuccess());
+  }, [setRestOnComplete]);
 
   const totalVolume = useMemo(() => {
     let total = 0;
@@ -129,36 +164,21 @@ export default function WorkoutScreen() {
     return { totalCardioDistanceMeters: dist, totalCardioDurationSeconds: dur };
   }, [exerciseSets]);
 
-  // Load distance unit preference
-  useEffect(() => {
-    AsyncStorage.getItem('@gym_tracker_distance_unit').then((val) => {
-      if (val === 'mi') setDistanceUnit('mi');
-    });
-  }, []);
 
   const completedSetsCount = useMemo(() =>
     Object.values(exerciseSets).flat().filter((s) => s.completed).length,
     [exerciseSets]
   );
 
-  useEffect(() => {
-    if (!session || session.end_time) return;
-    // Derive real start time from DB fields so the timer survives remounts
+  // Derive real start time from DB fields so the timer survives remounts
+  const sessionStartTs = useMemo(() => {
+    if (!session) return null;
     const ts = new Date(session.session_date + "T" + session.start_time).getTime();
-    startTimestamp.current = ts;
-    setElapsed(Math.floor((Date.now() - ts) / 1000));
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startTimestamp.current) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [session?.session_id]);
-
-  const formatTime = useCallback((seconds: number) => {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
-    return `${h > 0 ? h + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  }, []);
+    return Number.isFinite(ts) ? ts : null;
+  }, [session]);
+  useEffect(() => {
+    if (sessionStartTs != null) startTimestamp.current = sessionStartTs;
+  }, [sessionStartTs]);
 
   const loadSession = async () => {
     setLoading(true);
@@ -212,6 +232,21 @@ export default function WorkoutScreen() {
 
     setLoading(false);
   };
+
+  // Exercises added (or swapped in) mid-workout need last session's numbers
+  // too — before, only exercises present when the screen opened got them, so a
+  // quick-start workout never showed a "previous" column.
+  const loadPrevSetsFor = useCallback(async (exerciseId: string): Promise<any[]> => {
+    if (!session) return [];
+    try {
+      const { data: userData } = await db.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return [];
+      const { data } = await db.getPreviousSessionSets(exerciseId, userId, session.session_id);
+      setPrevSets((prev) => ({ ...prev, [exerciseId]: data ?? [] }));
+      return data ?? [];
+    } catch (e) { logError("workout.loadPrevSetsFor", e); return []; }
+  }, [session]);
 
   const reloadSetsForExercise = async (sessionExerciseId: number) => {
     const { data } = await db.getSessionExerciseSets(sessionExerciseId);
@@ -308,8 +343,32 @@ export default function WorkoutScreen() {
     closeSetOptions();
   });
 
+  const [finishPrompt, setFinishPrompt] = useState<{ title: string; message: string } | null>(null);
+
+  // Ask before finishing when the log looks unfinished, like Strong/Hevy do —
+  // a stray tap on "Finish" shouldn't end a workout halfway through.
+  const requestFinish = useGuardedPress(() => {
+    if (!session) return;
+    const allSets = Object.values(exerciseSets).flat();
+    const incomplete = allSets.filter((s: any) => !s.completed).length;
+    if (allSets.length === 0 || completedSetsCount === 0) {
+      setFinishPrompt({
+        title: "Finish Workout?",
+        message: "You haven't completed any sets yet. Finish and save this workout anyway?",
+      });
+    } else if (incomplete > 0) {
+      setFinishPrompt({
+        title: "Finish Workout?",
+        message: `You have ${incomplete} unfinished set${incomplete === 1 ? "" : "s"}. Only completed sets count toward your stats and PRs.`,
+      });
+    } else {
+      finishWorkout();
+    }
+  }, 500);
+
   const finishWorkout = useGuardedPress(async () => {
     if (!session) return;
+    setFinishPrompt(null);
     setError(null);
     const { error } = await db.finishWorkoutSession(session.session_id, notes || null);
     if (error) { setError(error.message); return; }
@@ -323,9 +382,12 @@ export default function WorkoutScreen() {
 
     // Mark local session as ended so the beforeRemove listener doesn't intercept router.back()
     setSession((prev: any) => ({ ...prev, end_time: new Date().toISOString() }));
+    skipRest();
     cancelRestDoneNotification();
     clearActiveWorkout();
     finishedSessionId.current = session.session_id;
+    const durationSeconds = (Date.now() - startTimestamp.current) / 1000;
+    const summaryPRs: SummaryPR[] = [];
 
     try {
       const { data: userData } = await db.getUser();
@@ -337,15 +399,14 @@ export default function WorkoutScreen() {
         const strengthExercises = exercises.filter((e: any) => e.exercise_type !== 'cardio');
         const prs = detectPRs(strengthExercises, exerciseSets, existingPRs ?? []);
         for (const pr of prs) {
-          const sets = (exerciseSets[exercises.find((e: any) => e.exercise_id === pr.exerciseId)?.session_exercise_id] ?? []).filter((s: any) => s.completed);
-          const maxW = sets.reduce((m: number, s: any) => (s.weight != null && s.weight > m ? s.weight : m), 0);
-          const maxVol = sets.reduce((sum: number, s: any) => s.weight && s.reps ? sum + s.weight * s.reps : sum, 0);
-          await db.upsertPersonalRecord({ user_id: userId, exercise_id: pr.exerciseId, max_weight: maxW || null, max_volume: maxVol || null, pr_type: 'strength' });
+          const sets = exerciseSets[exercises.find((e: any) => e.exercise_id === pr.exerciseId)?.session_exercise_id] ?? [];
+          const prev = (existingPRs ?? []).find((r: any) => r.exercise_id === pr.exerciseId && r.pr_type !== 'cardio');
+          const merged = mergeStrengthRecord(sets, prev);
+          await db.upsertPersonalRecord({ user_id: userId, exercise_id: pr.exerciseId, ...merged, pr_type: 'strength' });
         }
 
         // Cardio PRs
         const cardioExercises = exercises.filter((e: any) => e.exercise_type === 'cardio');
-        const cardioPRMessages: string[] = [];
         for (const ex of cardioExercises) {
           const sets = (exerciseSets[ex.session_exercise_id] ?? []);
           const existingPR = (existingPRs ?? []).find((r: any) => r.exercise_id === ex.exercise_id && r.pr_type === 'cardio') ?? null;
@@ -357,31 +418,43 @@ export default function WorkoutScreen() {
               max_weight: null,
               max_volume: null,
               pr_type: 'cardio',
-              best_distance_meters: cardioPR.bestDistanceMeters ?? null,
-              best_pace_sec_per_km: cardioPR.bestPaceSecPerKm ?? null,
-              best_duration_seconds: cardioPR.bestDurationSeconds ?? null,
+              // Only the improved fields are set on cardioPR; keep the rest.
+              best_distance_meters: cardioPR.bestDistanceMeters ?? existingPR?.best_distance_meters ?? null,
+              best_pace_sec_per_km: cardioPR.bestPaceSecPerKm ?? existingPR?.best_pace_sec_per_km ?? null,
+              best_duration_seconds: cardioPR.bestDurationSeconds ?? existingPR?.best_duration_seconds ?? null,
             });
-            if (cardioPR.bestDistanceMeters) cardioPRMessages.push(`${ex.exercise_name}: ${formatDistance(cardioPR.bestDistanceMeters, distanceUnit)}`);
-            else if (cardioPR.bestPaceSecPerKm) cardioPRMessages.push(`${ex.exercise_name}: best pace`);
+            const label = cardioPR.bestDistanceMeters ? "Distance"
+              : cardioPR.bestPaceSecPerKm ? "Pace"
+              : "Duration";
+            summaryPRs.push({ exerciseId: ex.exercise_id, label });
           }
         }
 
-        const allPRMessages = [
-          ...prs.map((p: any) => `${p.exerciseName} (${p.type === "both" ? "weight & volume" : p.type})`),
-          ...cardioPRMessages,
-        ];
-        if (allPRMessages.length > 0) {
-          showAlert(
-            "New PRs!",
-            allPRMessages.join("\n"),
-            [{ text: "OK", onPress: () => setShowPhotoModal(true) }]
-          );
-          return;
+        for (const p of prs) {
+          summaryPRs.push({
+            exerciseId: p.exerciseId,
+            label: p.type === "both" ? "Weight & Volume" : p.type === "weight" ? "Weight" : "Volume",
+          });
         }
       }
     } catch (e) { logError("finishWorkout.prDetection", e); }
-    setShowPhotoModal(true);
+    if (summaryPRs.length > 0) notifySuccess();
+    // iOS won't present the summary while the "Finish Workout?" dialog is
+    // still fading out, and the summary is the only way off this screen.
+    if (Platform.OS === "ios") await new Promise((r) => setTimeout(r, 400));
+    setSummary(buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds));
   }, 1000);
+
+  const handleSummaryAddPhoto = useCallback(() => {
+    setSummary(null);
+    // iOS can't present a second modal while the first is still animating out.
+    setTimeout(() => setShowPhotoModal(true), Platform.OS === "ios" ? 400 : 0);
+  }, []);
+
+  const handleSummaryDone = useCallback(() => {
+    setSummary(null);
+    router.back();
+  }, [router]);
 
   const handleProgressPhoto = useCallback(async (uri: string) => {
     const sessionId = finishedSessionId.current;
@@ -425,12 +498,13 @@ export default function WorkoutScreen() {
   const handleConfirmDiscard = useCallback(async () => {
     if (!session) return;
     setShowDiscardModal(false);
+    skipRest();
     cancelRestDoneNotification();
     clearActiveWorkout();
     isMinimizingRef.current = true;
     await db.deleteWorkoutSession(session.session_id);
     router.back();
-  }, [session, clearActiveWorkout, router]);
+  }, [session, clearActiveWorkout, router, skipRest]);
 
   const openExerciseOptions = useCallback((ex: any) => {
     setSelectedExerciseForOptions(ex);
@@ -470,6 +544,7 @@ export default function WorkoutScreen() {
         : e
     ));
     replaceTargetRef.current = null;
+    if (!prevSets[exercise.id]) loadPrevSetsFor(exercise.id);
   });
 
   const handleAddExercise = useGuardedPress(async (exercise: any) => {
@@ -488,6 +563,26 @@ export default function WorkoutScreen() {
     setExercises((prev) => [...prev, newEx]);
     setExerciseSets((prev) => ({ ...prev, [newEx.session_exercise_id]: [] }));
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+
+    // Start the exercise with ready-to-log rows, like Strong/Hevy: as many
+    // sets as last time (warmups kept), or one if it's new. Values stay empty
+    // so last session's numbers show as placeholders / tap-to-fill.
+    const prev = prevSets[exercise.id] ?? await loadPrevSetsFor(exercise.id);
+    const template = prev.length > 0 ? prev.slice(0, 10) : [{ is_warmup: false }];
+    // In parallel, so a slow connection doesn't hold the press guard (and
+    // swallow the next "Add Exercise" tap) for one round trip per set.
+    const results = await Promise.all(template.map((t: any, i: number) =>
+      db.insertSessionExerciseSet({
+        session_exercise_id: newEx.session_exercise_id,
+        set_number: i + 1,
+        weight: null,
+        reps: null,
+        is_warmup: t.is_warmup === true,
+      })
+    ));
+    const setErr = results.find((r: any) => r.error)?.error;
+    if (setErr) setError(setErr.message);
+    reloadSetsForExercise(newEx.session_exercise_id);
   });
 
   useEffect(() => { loadSession(); }, []);
@@ -512,7 +607,7 @@ export default function WorkoutScreen() {
     );
   }
 
-  const volumeDisplay = (toDisplay(totalVolume) ?? totalVolume).toLocaleString();
+  const volumeDisplay = formatVolume(toDisplay(totalVolume));
 
   return (
     <KeyboardAvoidingView
@@ -520,15 +615,15 @@ export default function WorkoutScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       {/* ── Sticky header ── */}
-      <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-        <Pressable onPress={handleMinimize} hitSlop={8} style={styles.headerBack}>
+      <View style={[styles.header, { paddingTop: headerTop, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+        <Pressable onPress={handleMinimize} hitSlop={8} style={styles.headerBack} accessibilityRole="button" accessibilityLabel="Minimize workout">
           <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
         </Pressable>
         <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
           {session.session_name}
         </Text>
         <View style={styles.headerRight}>
-          <Pressable style={[styles.finishPill, { backgroundColor: colors.primary }]} onPress={finishWorkout}>
+          <Pressable style={[styles.finishPill, { backgroundColor: colors.primary }]} onPress={requestFinish} accessibilityRole="button" accessibilityLabel="Finish workout">
             <Text style={styles.finishPillText}>Finish</Text>
           </Pressable>
         </View>
@@ -537,7 +632,7 @@ export default function WorkoutScreen() {
       {/* ── Stats bar ── */}
       <View style={[styles.statsBar, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
         <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: colors.primary }]}>{formatTime(elapsed)}</Text>
+          <ElapsedTime startTs={sessionStartTs} running={!session.end_time} style={[styles.statValue, { color: colors.primary }]} />
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Duration</Text>
         </View>
         <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
@@ -599,14 +694,26 @@ export default function WorkoutScreen() {
                   style={styles.exerciseNameBtn}
                   onPress={() => router.push({
                     pathname: "/exercise-detail/[exerciseId]",
-                    params: { exerciseId: ex.exercise_id, exerciseName: ex.exercise_name },
+                    params: { exerciseId: ex.exercise_id, exerciseName: ex.exercise_name, exerciseType: ex.exercise_type ?? "" },
                   })}
                 >
                   <Text style={[styles.exerciseName, { color: colors.primary }]}>
                     {ex.exercise_name}
                   </Text>
                 </Pressable>
-                <Pressable onPress={() => openExerciseOptions(ex)} hitSlop={8}>
+                {restOverrides[ex.exercise_id] != null && (
+                  <Pressable
+                    onPress={() => setRestPickerFor(ex)}
+                    hitSlop={6}
+                    style={[styles.restPill, { backgroundColor: colors.surfaceSecondary }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Rest timer ${formatRest(restOverrides[ex.exercise_id])}. Change`}
+                  >
+                    <Ionicons name="timer-outline" size={13} color={colors.textSecondary} />
+                    <Text style={[styles.restPillText, { color: colors.textSecondary }]}>{formatRest(restOverrides[ex.exercise_id])}</Text>
+                  </Pressable>
+                )}
+                <Pressable onPress={() => openExerciseOptions(ex)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`${ex.exercise_name} options`}>
                   <Ionicons name="ellipsis-horizontal" size={20} color={colors.textTertiary} />
                 </Pressable>
               </View>
@@ -698,6 +805,7 @@ export default function WorkoutScreen() {
 
       <RestTimerBanner
         remaining={restTimer.remaining}
+        total={restTimer.total}
         onSkip={skipRestTimer}
         onAddTime={handleAddRestTime}
       />
@@ -737,6 +845,26 @@ export default function WorkoutScreen() {
               </Text>
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </Pressable>
+
+            {exercises.find((e) => e.session_exercise_id === selectedExerciseId)?.exercise_type !== "cardio" && (
+              <Pressable
+                style={[modalStyles.option, { borderBottomColor: colors.border }]}
+                onPress={() => {
+                  const ex = exercises.find((e) => e.session_exercise_id === selectedExerciseId);
+                  const idx = (exerciseSets[selectedExerciseId ?? -1] ?? []).findIndex((s) => s.session_set_id === selectedSet?.session_set_id);
+                  const prev = ex ? prevSets[ex.exercise_id]?.[idx] : null;
+                  const w = toDisplay(selectedSet?.weight ?? prev?.weight ?? null);
+                  closeSetOptions();
+                  setTimeout(() => setPlateWeight(w), Platform.OS === "ios" ? 400 : 0);
+                }}
+              >
+                <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                  <Ionicons name="barbell-outline" size={16} color={colors.primary} />
+                </View>
+                <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Plate Calculator</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+              </Pressable>
+            )}
 
             <Pressable style={modalStyles.option} onPress={handleRemoveSet}>
               <View style={[modalStyles.iconWrap, { backgroundColor: colors.dangerLight }]}>
@@ -779,6 +907,24 @@ export default function WorkoutScreen() {
               <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Replace Exercise</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </Pressable>
+            <Pressable
+              style={[modalStyles.option, { borderBottomColor: colors.border }]}
+              onPress={() => {
+                const ex = selectedExerciseForOptions;
+                closeExerciseOptions();
+                // Let the options sheet close before opening the next one (iOS).
+                setTimeout(() => setRestPickerFor(ex), Platform.OS === "ios" ? 400 : 0);
+              }}
+            >
+              <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="timer-outline" size={16} color={colors.primary} />
+              </View>
+              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Rest Timer</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 14, fontWeight: "600" }}>
+                {formatRest(resolveRest(restOverrides, selectedExerciseForOptions?.exercise_id, restDuration))}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+            </Pressable>
             <Pressable style={modalStyles.option} onPress={handleRemoveExercise}>
               <View style={[modalStyles.iconWrap, { backgroundColor: colors.dangerLight }]}>
                 <Ionicons name="trash-outline" size={16} color={colors.danger} />
@@ -796,6 +942,71 @@ export default function WorkoutScreen() {
         </Pressable>
       </Modal>
 
+      <PlateCalculatorModal
+        visible={plateWeight !== undefined}
+        initialWeight={plateWeight ?? null}
+        onClose={() => setPlateWeight(undefined)}
+      />
+
+      {/* Per-exercise rest timer picker */}
+      <Modal visible={restPickerFor != null} transparent animationType="slide" onRequestClose={() => setRestPickerFor(null)}>
+        <Pressable style={modalStyles.overlay} onPress={() => setRestPickerFor(null)}>
+          <Pressable style={[modalStyles.sheet, { backgroundColor: colors.surface }]} onPress={() => {}}>
+            <View style={[modalStyles.handle, { backgroundColor: colors.border }]} />
+            <Text style={[modalStyles.sheetTitle, { color: colors.textSecondary }]} numberOfLines={1}>
+              Rest Timer · {restPickerFor?.exercise_name}
+            </Text>
+            <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 14, textAlign: "center" }}>
+              Used after each completed set of this exercise, in every workout.
+            </Text>
+            <View style={styles.restGrid}>
+              {[null, ...REST_CHOICES].map((secs) => {
+                const current = restPickerFor ? restOverrides[restPickerFor.exercise_id] : undefined;
+                const selected = secs == null ? current == null : current === secs;
+                return (
+                  <Pressable
+                    key={secs ?? "default"}
+                    onPress={() => {
+                      if (restPickerFor) setRestFor(restPickerFor.exercise_id, secs);
+                      setRestPickerFor(null);
+                    }}
+                    style={[
+                      styles.restChoice,
+                      { borderColor: selected ? colors.primary : colors.border, backgroundColor: selected ? colors.primaryLight : "transparent" },
+                      secs == null && styles.restChoiceWide,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                  >
+                    <Text style={{ color: selected ? colors.primary : colors.text, fontSize: 15, fontWeight: "700" }}>
+                      {secs == null ? `Default (${formatRest(restDuration)})` : formatRest(secs)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Pressable
+              style={[modalStyles.cancelBtn, { backgroundColor: colors.surfaceSecondary }]}
+              onPress={() => setRestPickerFor(null)}
+            >
+              <Text style={[modalStyles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <ConfirmModal
+        visible={finishPrompt != null}
+        title={finishPrompt?.title ?? ""}
+        message={finishPrompt?.message ?? ""}
+        confirmText="Finish"
+        cancelText="Keep Going"
+        confirmStyle="primary"
+        icon="flag-outline"
+        onConfirm={finishWorkout}
+        onCancel={() => setFinishPrompt(null)}
+      />
+
       <ConfirmModal
         visible={showDiscardModal}
         title="Discard Workout"
@@ -808,6 +1019,15 @@ export default function WorkoutScreen() {
         onCancel={() => setShowDiscardModal(false)}
       />
 
+      <WorkoutSummaryModal
+        visible={summary != null}
+        workoutName={session?.session_name ?? "Workout"}
+        summary={summary}
+        distanceUnit={distanceUnit}
+        onAddPhoto={handleSummaryAddPhoto}
+        onDone={handleSummaryDone}
+      />
+
       <ProgressPhotoModal
         visible={showPhotoModal}
         isUploading={photoUploading}
@@ -816,6 +1036,28 @@ export default function WorkoutScreen() {
       />
     </KeyboardAvoidingView>
   );
+}
+
+// ─── ElapsedTime ─────────────────────────────────────────────────────────────
+
+function formatElapsed(seconds: number) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return `${h > 0 ? h + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+// Owns the once-a-second tick so only this label re-renders, not the whole
+// workout screen and every exercise card under it.
+function ElapsedTime({ startTs, running, style }: { startTs: number | null; running: boolean; style: any }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [running]);
+  const secs = startTs != null ? Math.max(0, Math.floor((now - startTs) / 1000)) : 0;
+  return <Text style={style}>{formatElapsed(secs)}</Text>;
 }
 
 // ─── SetRow ──────────────────────────────────────────────────────────────────
@@ -833,46 +1075,94 @@ const SetRow = memo(function SetRow({
   onUpdate: (id: number, exId: number, updates: any) => void;
   onSetNumberPress: (set: any, sessionExerciseId: number) => void;
   prevSet?: any;
-  onComplete?: () => void;
+  onComplete?: (sessionExerciseId: number) => void;
 }) {
   const { colors } = useTheme();
-  const [weight, setWeight] = useState(set.weight != null ? String(set.weight) : "");
-  const [reps, setReps] = useState(set.reps != null ? String(set.reps) : "");
+  // Weights are stored in lbs; inputs show and accept the user's display unit.
+  const { unit, toDisplay, toStorage } = useUnits();
+  const displayWeight = toDisplay(set.weight);
+  const [weight, setWeight] = useState(formatNumberInput(displayWeight));
+  const [reps, setReps] = useState(formatNumberInput(set.reps));
   const isFocused = useRef<"weight" | "reps" | null>(null);
 
   useEffect(() => {
-    if (isFocused.current !== "weight") setWeight(set.weight != null ? String(set.weight) : "");
-    if (isFocused.current !== "reps") setReps(set.reps != null ? String(set.reps) : "");
-  }, [set.weight, set.reps]);
+    if (isFocused.current !== "weight") setWeight(formatNumberInput(toDisplay(set.weight)));
+    if (isFocused.current !== "reps") setReps(formatNumberInput(set.reps));
+  }, [set.weight, set.reps, unit, toDisplay]);
+
+  // Only write when the value the user sees actually changed, so a kg↔lbs
+  // round-trip never rewrites a stored weight with a rounded one.
+  const weightUpdate = useCallback((text: string) => {
+    const val = parseDecimalInput(text);
+    if (val === displayWeight) return undefined;
+    return toStorage(val);
+  }, [displayWeight, toStorage]);
 
   const commitWeight = useCallback(() => {
-    const val = weight ? parseFloat(weight) : null;
-    if (val !== set.weight) onUpdate(set.session_set_id, sessionExerciseId, { weight: val });
-  }, [weight, set.weight, set.session_set_id, sessionExerciseId, onUpdate]);
+    const next = weightUpdate(weight);
+    if (next !== undefined) onUpdate(set.session_set_id, sessionExerciseId, { weight: next });
+    setWeight(formatNumberInput(parseDecimalInput(weight)));
+  }, [weight, weightUpdate, set.session_set_id, sessionExerciseId, onUpdate]);
 
   const commitReps = useCallback(() => {
-    const val = reps ? parseInt(reps, 10) : null;
+    const val = parseIntInput(reps);
     if (val !== set.reps) onUpdate(set.session_set_id, sessionExerciseId, { reps: val });
+    setReps(formatNumberInput(val));
   }, [reps, set.reps, set.session_set_id, sessionExerciseId, onUpdate]);
 
+  const hasPrev = prevSet?.weight != null || prevSet?.reps != null;
+
   const toggleCompleted = useCallback(() => {
-    const weightVal = weight ? parseFloat(weight) : null;
-    const repsVal = reps ? parseInt(reps, 10) : null;
     const completing = !set.completed;
     const updates: any = { completed: completing };
-    if (weightVal !== set.weight) updates.weight = weightVal;
-    if (repsVal !== set.reps) updates.reps = repsVal;
+    // Completing an empty set copies last session's numbers (like Strong/Hevy):
+    // the "previous" column is the plan, so one tap logs "same as last time".
+    if (completing && weight.trim() === "" && reps.trim() === "" && hasPrev) {
+      setWeight(formatNumberInput(toDisplay(prevSet.weight)));
+      setReps(formatNumberInput(prevSet.reps));
+      // Copy the stored lbs value directly — going through the kg text and
+      // back would drift it by rounding (225 lb → 102.1 kg → 225.1 lb).
+      if (prevSet.weight !== set.weight) updates.weight = prevSet.weight ?? null;
+      if (prevSet.reps !== set.reps) updates.reps = prevSet.reps ?? null;
+    } else {
+      const nextWeight = weightUpdate(weight);
+      if (nextWeight !== undefined) updates.weight = nextWeight;
+      const repsVal = parseIntInput(reps);
+      if (repsVal !== set.reps) updates.reps = repsVal;
+    }
     onUpdate(set.session_set_id, sessionExerciseId, updates);
-    if (completing) onComplete?.();
-  }, [weight, reps, set, sessionExerciseId, onUpdate, onComplete]);
+    if (completing) {
+      tapLight();
+      onComplete?.(sessionExerciseId);
+    }
+  }, [weight, reps, set, hasPrev, prevSet, toDisplay, weightUpdate, sessionExerciseId, onUpdate, onComplete]);
+
+  // Tap the "previous" value to copy it into this set without completing it.
+  const fillFromPrevious = useCallback(() => {
+    if (!hasPrev || set.completed) return;
+    const updates: any = {};
+    if (prevSet.weight != null) {
+      setWeight(formatNumberInput(toDisplay(prevSet.weight)));
+      if (prevSet.weight !== set.weight) updates.weight = prevSet.weight;
+    }
+    if (prevSet.reps != null) {
+      setReps(formatNumberInput(prevSet.reps));
+      if (prevSet.reps !== set.reps) updates.reps = prevSet.reps;
+    }
+    if (Object.keys(updates).length > 0) {
+      tapLight();
+      onUpdate(set.session_set_id, sessionExerciseId, updates);
+    }
+  }, [hasPrev, prevSet, set, toDisplay, sessionExerciseId, onUpdate]);
 
   const isCompleted = set.completed === true;
   const isWarmup = set.is_warmup === true;
 
-  const prevText = prevSet?.weight != null && prevSet?.reps != null
-    ? `${prevSet.weight}${" × "}${prevSet.reps}`
-    : prevSet?.weight != null
-    ? `${prevSet.weight}`
+  const prevWeight = toDisplay(prevSet?.weight);
+  const prevText = prevWeight != null && prevSet?.reps != null
+    ? `${prevWeight} × ${prevSet.reps}`
+    : prevWeight != null
+    ? `${prevWeight} ${unit}`
     : prevSet?.reps != null
     ? `${prevSet.reps} reps`
     : "—";
@@ -892,21 +1182,31 @@ const SetRow = memo(function SetRow({
         ]}
         onPress={() => onSetNumberPress(set, sessionExerciseId)}
         hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={`Set ${set.set_number} options`}
       >
         <Text style={[
           rowStyles.badgeText,
           { color: colors.textTertiary },
-          isWarmup && { color: "#ffd60a" },
+          isWarmup && { color: colors.warning },
           isCompleted && { color: colors.success },
         ]}>
           {isWarmup ? "W" : set.set_number}
         </Text>
       </Pressable>
 
-      {/* Previous */}
-      <Text style={[rowStyles.prevText, { color: colors.textTertiary }]} numberOfLines={1}>
-        {prevText}
-      </Text>
+      {/* Previous — tap to copy into this set */}
+      <Pressable
+        style={rowStyles.prevBtn}
+        onPress={fillFromPrevious}
+        disabled={!hasPrev || isCompleted}
+        accessibilityRole="button"
+        accessibilityLabel={hasPrev ? `Use previous: ${prevText}` : "No previous set"}
+      >
+        <Text style={[rowStyles.prevText, { color: colors.textTertiary }]} numberOfLines={1}>
+          {prevText}
+        </Text>
+      </Pressable>
 
       {/* Weight input */}
       <TextInput
@@ -918,11 +1218,12 @@ const SetRow = memo(function SetRow({
         onChangeText={setWeight}
         onFocus={() => { isFocused.current = "weight"; }}
         onBlur={() => { isFocused.current = null; commitWeight(); }}
-        keyboardType="numeric"
-        placeholder="—"
+        keyboardType="decimal-pad"
+        placeholder={prevWeight != null ? String(prevWeight) : "—"}
         placeholderTextColor={colors.textTertiary}
         editable={!isCompleted}
         selectTextOnFocus
+        accessibilityLabel={`Set ${set.set_number} weight in ${unit}`}
       />
 
       {/* Reps input */}
@@ -935,11 +1236,12 @@ const SetRow = memo(function SetRow({
         onChangeText={setReps}
         onFocus={() => { isFocused.current = "reps"; }}
         onBlur={() => { isFocused.current = null; commitReps(); }}
-        keyboardType="numeric"
-        placeholder="—"
+        keyboardType="number-pad"
+        placeholder={prevSet?.reps != null ? String(prevSet.reps) : "—"}
         placeholderTextColor={colors.textTertiary}
         editable={!isCompleted}
         selectTextOnFocus
+        accessibilityLabel={`Set ${set.set_number} reps`}
       />
 
       {/* Check button */}
@@ -952,6 +1254,9 @@ const SetRow = memo(function SetRow({
         ]}
         onPress={toggleCompleted}
         hitSlop={6}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: isCompleted }}
+        accessibilityLabel={`Complete set ${set.set_number}`}
       >
         <Ionicons
           name="checkmark"
@@ -1027,6 +1332,17 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   exerciseNameBtn: { flex: 1, marginRight: 8 },
+  restPill: {
+    flexDirection: "row", alignItems: "center", gap: 3,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, marginRight: 10,
+  },
+  restPillText: { fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  restGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, width: "100%", marginBottom: 4 },
+  restChoice: {
+    flexBasis: "18%", flexGrow: 1, alignItems: "center", paddingVertical: 12,
+    borderRadius: 10, borderWidth: 1,
+  },
+  restChoiceWide: { flexBasis: "100%" },
   exerciseName: { fontSize: 16, fontWeight: "700" },
 
   // Column headers
@@ -1102,8 +1418,12 @@ const rowStyles = StyleSheet.create({
     justifyContent: "center",
   },
   badgeText: { fontSize: 13, fontWeight: "700" },
-  prevText: {
+  prevBtn: {
     flex: 1,
+    alignSelf: "stretch",
+    justifyContent: "center",
+  },
+  prevText: {
     fontSize: 13,
     paddingLeft: 4,
   },

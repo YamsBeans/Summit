@@ -5,7 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits } from "@/utils/units";
+import { useUnits, formatVolume } from "@/utils/units";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 
@@ -92,7 +92,7 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   const [photoOpen, setPhotoOpen] = useState(false);
 
   const duration = parseDuration(sessionDate, startTime, endTime);
-  const volumeDisplay = (toDisplay(totalVolume) ?? totalVolume).toLocaleString();
+  const volumeDisplay = formatVolume(toDisplay(totalVolume));
   const shown = exerciseNames.slice(0, 3);
   const extra = exerciseNames.length - shown.length;
 
@@ -161,6 +161,8 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
           style={({ pressed }) => [styles.menuBtn, pressed && { opacity: 0.4 }]}
           onPress={() => setMenuOpen(true)}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Workout options"
         >
           <Ionicons name="ellipsis-vertical" size={18} color={colors.textSecondary} />
         </Pressable>

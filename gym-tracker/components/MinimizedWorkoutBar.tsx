@@ -7,9 +7,10 @@ import { useTheme } from "@/theme/ThemeContext";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import { db } from "@/backend/db";
 import { cancelRestDoneNotification } from "@/utils/notifications";
+import { clearActiveRestTimer } from "@/utils/useRestTimer";
 import ConfirmModal from "./ConfirmModal";
 
-const TAB_BAR_HEIGHT = 60;
+export const TAB_BAR_HEIGHT = 64;
 
 export default function MinimizedWorkoutBar() {
   const { activeWorkout, clearActiveWorkout } = useActiveWorkout();
@@ -17,7 +18,10 @@ export default function MinimizedWorkoutBar() {
   const router = useRouter();
   const segments = useSegments();
   const insets = useSafeAreaInsets();
-  const isOnWorkoutScreen = segments.includes("workout" as never);
+  // Only float above the tab bar. On pushed screens (exercise detail opened
+  // from the workout, settings, a routine…) there is no tab bar, so the bar
+  // hovered over their content and covered the bottom of the page.
+  const onTabScreen = segments[0] === "(tabs)";
   const [elapsed, setElapsed] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [showDiscard, setShowDiscard] = useState(false);
@@ -61,11 +65,12 @@ export default function MinimizedWorkoutBar() {
     if (!activeWorkout) return;
     setShowDiscard(false);
     cancelRestDoneNotification();
+    clearActiveRestTimer();
     await db.deleteWorkoutSession(activeWorkout.sessionId);
     clearActiveWorkout();
   }, [activeWorkout, clearActiveWorkout]);
 
-  if (!activeWorkout || isOnWorkoutScreen) return null;
+  if (!activeWorkout || !onTabScreen) return null;
 
   return (
     <>

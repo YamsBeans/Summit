@@ -20,6 +20,11 @@ let localSessionExercises: SessionExercise[] = [];
 let localSessionExerciseSets: SessionExerciseSet[] = [];
 let localSession: { user: { id: string; email: string } } | null = null;
 
+// Offline auth listeners — without these, signing in/out offline updated
+// localSession but the root layout never heard about it and stayed put.
+const authListeners = new Set<(event: string, session: any) => void>();
+const emitAuth = (event: string) => authListeners.forEach((fn) => fn(event, localSession));
+
 let localPersonalRecords: PersonalRecord[] = [];
 let localCustomExercises: CustomExercise[] = [];
 let nextPrId = 1;
@@ -43,6 +48,7 @@ export const localDb = {
     };
     localUsers.push(user);
     localSession = { user: { id: userId, email } };
+    emitAuth("SIGNED_IN");
     return { data: { user: { id: userId } }, error: null };
   },
 
@@ -52,11 +58,13 @@ export const localDb = {
       return { data: null, error: { message: "User not found" } };
     }
     localSession = { user: { id: user.user_id, email } };
+    emitAuth("SIGNED_IN");
     return { data: { user: { id: user.user_id } }, error: null };
   },
 
   signOut: async () => {
     localSession = null;
+    emitAuth("SIGNED_OUT");
   },
 
   getSession: async () => {
@@ -84,10 +92,11 @@ export const localDb = {
   },
 
   onAuthStateChange: (callback: (event: string, session: any) => void) => {
+    authListeners.add(callback);
     return {
       data: {
         subscription: {
-          unsubscribe: () => {},
+          unsubscribe: () => { authListeners.delete(callback); },
         },
       },
     };
@@ -275,9 +284,9 @@ export const localDb = {
 
   // Get the active (unfinished) session
   getActiveSession: async (userId: string) => {
-    const session = localWorkoutSessions.find(
-      (s) => s.user_id === userId && s.end_time === null
-    ) ?? null;
+    const session = localWorkoutSessions
+      .filter((s) => s.user_id === userId && s.end_time === null)
+      .sort((a, b) => b.session_id - a.session_id)[0] ?? null;
     return { data: session, error: null };
   },
 
@@ -570,7 +579,7 @@ export const localDb = {
 
     const cardioSets = localSessionExerciseSets.filter(
       (s) => cardioExerciseIds.has(s.session_exercise_id) && s.completed &&
-        (s.duration_seconds != null || s.distance_meters != null)
+        (!!s.duration_seconds || !!s.distance_meters)
     );
 
     let totalDistanceMeters = 0;
@@ -588,11 +597,12 @@ export const localDb = {
       }
     }
 
-    // Count distinct sessions that contain at least one cardio exercise
+    // Count distinct sessions where cardio was actually logged (matches db.tsx)
+    const sessionOfExercise = new Map(
+      localSessionExercises.map((e) => [e.session_exercise_id, e.session_id] as const)
+    );
     const cardioSessionIds = new Set(
-      localSessionExercises
-        .filter((e) => sessionIds.has(e.session_id) && e.exercise_type === 'cardio')
-        .map((e) => e.session_id)
+      cardioSets.map((s) => sessionOfExercise.get(s.session_exercise_id))
     );
 
     return {

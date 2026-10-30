@@ -43,8 +43,23 @@ export async function clearReadCache(): Promise<void> {
 }
 
 /**
+ * True for errors that mean "couldn't reach the server" rather than "the
+ * server said no": fetch failures, timeouts, aborted requests.
+ */
+export function isNetworkError(err: any): boolean {
+  if (!err) return false;
+  // Not every TypeError: a real bug ("cannot read property of undefined")
+  // must not be mistaken for no signal and hidden behind stale cache.
+  const text = `${err.name ?? ""} ${err.message ?? ""} ${err.details ?? ""}`;
+  return /network request failed|failed to fetch|fetch failed|networkerror|load failed|network error|timed? ?out|aborterror|ECONNREFUSED|ENOTFOUND|ERR_INTERNET_DISCONNECTED/i.test(text);
+}
+
+/**
  * Read-through cache wrapper.
- * - Online: run the query, mirror a successful result, return it.
+ * - Online: run the query, mirror a successful result, return it. If the
+ *   request can't reach the server (gym basement "lie-fi", or a cold start
+ *   before NetInfo has reported offline), serve the cached copy instead of
+ *   an error screen.
  * - Offline: replay the cached result if present; otherwise fall back to the
  *   in-memory local store.
  */
@@ -55,8 +70,20 @@ export async function cachedRead(
   offlineFn: () => PromiseLike<DbReadResult>,
 ): Promise<DbReadResult> {
   if (online) {
-    const res = await onlineFn();
-    if (!res.error && res.data != null) await writeCache(cacheKey, res.data);
+    let res: DbReadResult;
+    try {
+      res = await onlineFn();
+    } catch (e) {
+      res = { data: null, error: e };
+    }
+    if (!res.error && res.data != null) {
+      await writeCache(cacheKey, res.data);
+      return res;
+    }
+    if (isNetworkError(res.error)) {
+      const cached = await readCache(cacheKey);
+      if (cached != null) return { data: cached, error: null };
+    }
     return res;
   }
   const cached = await readCache(cacheKey);

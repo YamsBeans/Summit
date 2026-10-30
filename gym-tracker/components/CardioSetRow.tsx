@@ -17,7 +17,7 @@ type Props = {
   onUpdate: (id: number, exId: number, updates: any) => void;
   onSetNumberPress: (set: any, sessionExerciseId: number) => void;
   prevSet?: any;
-  onComplete?: () => void;
+  onComplete?: (sessionExerciseId: number) => void;
   distanceUnit: "km" | "mi";
 };
 
@@ -91,7 +91,7 @@ const CardioSetRow = memo(function CardioSetRow({
       ...buildUpdates(distanceInput, digitsToSeconds(digitBuffer)),
     };
     onUpdate(set.session_set_id, sessionExerciseId, updates);
-    if (completing) onComplete?.();
+    if (completing) onComplete?.(sessionExerciseId);
   }, [set, sessionExerciseId, onUpdate, onComplete, distanceInput, digitBuffer, buildUpdates]);
 
   const isCompleted = set.completed === true;

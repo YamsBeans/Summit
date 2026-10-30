@@ -1,6 +1,7 @@
 import { FlatList, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useEffect, useState } from "react";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import exercisesData from "@/assets/data/exercises.json";
 import { db } from "@/backend/db";
 
@@ -47,6 +48,7 @@ type Props = {
 };
 
 export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
+  const headerTop = useHeaderTop();
   const { colors } = useTheme();
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
@@ -155,7 +157,7 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
         <View style={{
           flexDirection: "row",
           alignItems: "center",
-          paddingTop: 60,
+          paddingTop: headerTop,
           paddingHorizontal: 16,
           paddingBottom: 12,
           borderBottomWidth: 1,

@@ -5,12 +5,13 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db, isOnline } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits } from "@/utils/units";
+import { useHeaderTop } from "@/utils/useHeaderTop";
+import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
 import WorkoutChart from "@/components/WorkoutChart";
-import { formatDistance, formatDurationShort, formatPace } from "@/utils/cardioUtils";
+import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardioUtils";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 
@@ -108,6 +109,7 @@ type AllStats = {
 };
 
 export default function ProfileScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const { colors } = useTheme();
   const { toDisplay, label: unitLabel } = useUnits();
@@ -124,7 +126,7 @@ export default function ProfileScreen() {
   const [selectedStats, setSelectedStats] = useState<StatId[]>(DEFAULT_STATS);
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'strength' | 'cardio'>('all');
-  const [distanceUnit, setDistanceUnit] = useState<'km' | 'mi'>('km');
+  const { distanceUnit } = useDistanceUnit();
   const [cardioStats, setCardioStats] = useState<{
     totalDistanceMeters: number;
     totalDurationSeconds: number;
@@ -148,11 +150,6 @@ export default function ProfileScreen() {
       setLoading(true);
     }
     setError(null);
-
-    // Load distance unit preference
-    AsyncStorage.getItem('@gym_tracker_distance_unit').then((val) => {
-      if (val === 'mi') setDistanceUnit('mi');
-    });
 
     // Load saved stat selection in parallel with the DB fetch
     const savedStatsPromise = AsyncStorage.getItem(STATS_STORAGE_KEY).then((val) => {
@@ -327,7 +324,7 @@ export default function ProfileScreen() {
     switch (id) {
       case "totalWorkouts":   return { value: String(stats.totalWorkouts), label: "Workouts" };
       case "totalSets":       return { value: String(stats.totalSets), label: "Sets" };
-      case "totalVolume":     return { value: (toDisplay(stats.totalVolume) ?? stats.totalVolume).toLocaleString(), label: `Vol (${unitLabel})` };
+      case "totalVolume":     return { value: formatVolume(toDisplay(stats.totalVolume)), label: `Vol (${unitLabel})` };
       case "totalReps":       return { value: stats.totalReps.toLocaleString(), label: "Reps" };
       case "uniqueExercises": return { value: String(stats.totalExercises), label: "Exercises" };
       case "heaviestWeight":  return { value: (toDisplay(stats.heaviestWeight) ?? stats.heaviestWeight).toLocaleString(), label: `Best (${unitLabel})` };
@@ -363,7 +360,7 @@ export default function ProfileScreen() {
   const listHeader = (
     <>
       {/* ── Top bar ── */}
-      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
+      <View style={[styles.topBar, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Text style={[styles.username, { color: colors.text }]}>
           {profile?.username ?? "Profile"}
         </Text>
@@ -450,7 +447,7 @@ export default function ProfileScreen() {
           {longestStreak > 0 && (
             <View style={styles.bestStreakRow}>
               <Ionicons name="trophy-outline" size={14} color={colors.primary} />
-              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} days</Text>
+              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} {longestStreak === 1 ? "day" : "days"}</Text>
             </View>
           )}
         </View>
@@ -513,7 +510,7 @@ export default function ProfileScreen() {
             {cardioStats.fastestPaceSecPerKm != null && (
               <View>
                 <Text style={[styles.statNum, { color: colors.text, fontSize: 17 }]}>
-                  {formatPace(cardioStats.fastestPaceSecPerKm)}
+                  {formatPaceIn(cardioStats.fastestPaceSecPerKm, distanceUnit)}
                 </Text>
                 <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Best Pace</Text>
               </View>

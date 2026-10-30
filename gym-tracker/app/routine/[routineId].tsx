@@ -7,14 +7,18 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import ConfirmModal from "@/components/ConfirmModal";
-import { digitsToSeconds, formatDigits, formatDistance, formatDuration, metersToMiles, milesToMeters, secondsToDigits } from "@/utils/cardioUtils";
+import { useUnits, useDistanceUnit } from "@/utils/units";
+import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
+import { digitsToSeconds, formatDigits, formatDistance, formatDuration, kmToMeters, metersToDisplay, milesToMeters, secondsToDigits } from "@/utils/cardioUtils";
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function RoutineScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const {
     routineId: routineIdParam,
@@ -24,6 +28,8 @@ export default function RoutineScreen() {
   } = useLocalSearchParams<{ routineId: string; routineName: string; description?: string; mode?: string }>();
   const routineId = parseInt(routineIdParam, 10);
   const { colors } = useTheme();
+  const { label: unitLabel } = useUnits();
+  const { distanceUnit } = useDistanceUnit();
 
   const scrollRef = useRef<ScrollView>(null);
 
@@ -262,7 +268,7 @@ export default function RoutineScreen() {
     >
       {/* ── Header ── */}
       {isEditing ? (
-        <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+        <View style={[styles.header, { paddingTop: headerTop, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
           <Pressable onPress={exitEditMode} hitSlop={8} style={styles.headerBack}>
             <Text style={[styles.cancelText, { color: colors.primary }]}>Cancel</Text>
           </Pressable>
@@ -277,7 +283,7 @@ export default function RoutineScreen() {
           </View>
         </View>
       ) : (
-        <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+        <View style={[styles.header, { paddingTop: headerTop, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
           <Pressable onPress={() => router.back()} hitSlop={8} style={styles.headerBack}>
             <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
           </Pressable>
@@ -371,7 +377,7 @@ export default function RoutineScreen() {
                   onPress={() =>
                     router.push({
                       pathname: "/exercise-detail/[exerciseId]",
-                      params: { exerciseId: ex.exercise_id, exerciseName: ex.exercise_name },
+                      params: { exerciseId: ex.exercise_id, exerciseName: ex.exercise_name, exerciseType: ex.exercise_type ?? "" },
                     })
                   }
                 >
@@ -391,12 +397,12 @@ export default function RoutineScreen() {
                 <Text style={[styles.colHeader, styles.colSet, { color: colors.textTertiary }]}>SET</Text>
                 {isCardio ? (
                   <>
-                    <Text style={[styles.colHeader, styles.colWeight, { color: colors.textTertiary }]}>DIST (mi)</Text>
+                    <Text style={[styles.colHeader, styles.colWeight, { color: colors.textTertiary }]}>DIST ({distanceUnit})</Text>
                     <Text style={[styles.colHeader, styles.colReps, { color: colors.textTertiary }]}>DURATION</Text>
                   </>
                 ) : (
                   <>
-                    <Text style={[styles.colHeader, styles.colWeight, { color: colors.textTertiary }]}>LBS</Text>
+                    <Text style={[styles.colHeader, styles.colWeight, { color: colors.textTertiary }]}>{unitLabel.toUpperCase()}</Text>
                     <Text style={[styles.colHeader, styles.colReps, { color: colors.textTertiary }]}>REPS</Text>
                   </>
                 )}
@@ -593,6 +599,7 @@ export default function RoutineScreen() {
 // ─── ViewSetRow (read-only) ───────────────────────────────────────────────────
 
 const ViewSetRow = memo(function ViewSetRow({ set, colors }: { set: any; colors: any }) {
+  const { toDisplay } = useUnits();
   const isWarmup = set.is_warmup === true;
   return (
     <View style={[rowStyles.row, { backgroundColor: isWarmup ? colors.warningLight + "55" : "transparent", borderBottomColor: colors.border }]}>
@@ -602,7 +609,7 @@ const ViewSetRow = memo(function ViewSetRow({ set, colors }: { set: any; colors:
         </Text>
       </View>
       <Text style={[viewRowStyles.cell, { color: colors.text }]}>
-        {set.target_weight != null ? String(set.target_weight) : "—"}
+        {set.target_weight != null ? String(toDisplay(set.target_weight)) : "—"}
       </Text>
       <Text style={[viewRowStyles.cell, { color: colors.text }]}>
         {set.target_reps != null ? String(set.target_reps) : "—"}
@@ -614,7 +621,8 @@ const ViewSetRow = memo(function ViewSetRow({ set, colors }: { set: any; colors:
 // ─── CardioViewSetRow (read-only) ────────────────────────────────────────────
 
 const CardioViewSetRow = memo(function CardioViewSetRow({ set, colors }: { set: any; colors: any }) {
-  const distLabel = set.target_distance_meters != null ? formatDistance(set.target_distance_meters, 'mi') : "—";
+  const { distanceUnit } = useDistanceUnit();
+  const distLabel = set.target_distance_meters != null ? formatDistance(set.target_distance_meters, distanceUnit) : "—";
   const durLabel = set.target_duration_seconds != null ? formatDuration(set.target_duration_seconds) : "—";
   return (
     <View style={[rowStyles.row, { backgroundColor: "transparent", borderBottomColor: colors.border }]}>
@@ -642,28 +650,35 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
   onDelete: (id: number, exId: number) => void;
   colors: any;
 }) {
-  const [distance, setDistance] = useState(
-    set.target_distance_meters != null
-      ? String(parseFloat(metersToMiles(set.target_distance_meters).toFixed(3)))
-      : ""
-  );
+  // Targets are stored in meters but shown in the user's km/mi setting (this
+  // was hard-coded to miles even for km users).
+  const { distanceUnit } = useDistanceUnit();
+  const shownDistance = set.target_distance_meters != null
+    ? String(parseFloat(metersToDisplay(set.target_distance_meters, distanceUnit).toFixed(2)))
+    : "";
+  const [distance, setDistance] = useState(shownDistance);
   const [digitBuffer, setDigitBuffer] = useState(() => secondsToDigits(set.target_duration_seconds));
 
   useEffect(() => {
-    setDistance(
-      set.target_distance_meters != null
-        ? String(parseFloat(metersToMiles(set.target_distance_meters).toFixed(3)))
-        : ""
-    );
+    setDistance(shownDistance);
+  }, [shownDistance]);
+
+  useEffect(() => {
     setDigitBuffer(secondsToDigits(set.target_duration_seconds));
-  }, [set.target_duration_seconds, set.target_distance_meters]);
+  }, [set.target_duration_seconds]);
 
   const commitDistance = useCallback(() => {
-    const meters = distance ? milesToMeters(parseFloat(distance)) : null;
+    // Only write when the visible value changed, so a km↔mi round trip
+    // doesn't nudge the stored meters on every blur.
+    if (distance.trim() === shownDistance) return;
+    const val = parseDecimalInput(distance);
+    const meters = val == null || val === 0 ? null : distanceUnit === "mi" ? milesToMeters(val) : kmToMeters(val);
     if (meters !== set.target_distance_meters) {
       onUpdate(set.routine_set_id, routineExerciseId, { target_distance_meters: meters });
+    } else {
+      setDistance(shownDistance);
     }
-  }, [distance, set.target_distance_meters, set.routine_set_id, routineExerciseId, onUpdate]);
+  }, [distance, shownDistance, distanceUnit, set.target_distance_meters, set.routine_set_id, routineExerciseId, onUpdate]);
 
   const handleDurationChange = useCallback((text: string) => {
     setDigitBuffer(text.replace(/\D/g, "").slice(0, 6));
@@ -687,7 +702,7 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
         onChangeText={setDistance}
         onBlur={commitDistance}
         keyboardType="decimal-pad"
-        placeholder="mi"
+        placeholder={distanceUnit}
         placeholderTextColor={colors.textTertiary}
         returnKeyType="done"
       />
@@ -727,30 +742,28 @@ const TemplateSetRow = memo(function TemplateSetRow({
   onDelete: (id: number, exId: number) => void;
   colors: any;
 }) {
-  const [weight, setWeight] = useState(set.target_weight != null ? String(set.target_weight) : "");
-  const [reps, setReps] = useState(set.target_reps != null ? String(set.target_reps) : "");
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Target weights are stored in lbs; edit them in the user's display unit.
+  const { unit, toDisplay, toStorage } = useUnits();
+  const displayWeight = toDisplay(set.target_weight);
+  const [weight, setWeight] = useState(formatNumberInput(displayWeight));
+  const [reps, setReps] = useState(formatNumberInput(set.target_reps));
 
   useEffect(() => {
-    setWeight(set.target_weight != null ? String(set.target_weight) : "");
-    setReps(set.target_reps != null ? String(set.target_reps) : "");
-  }, [set.target_weight, set.target_reps]);
+    setWeight(formatNumberInput(toDisplay(set.target_weight)));
+    setReps(formatNumberInput(set.target_reps));
+  }, [set.target_weight, set.target_reps, unit, toDisplay]);
 
   const commitWeight = useCallback(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    const val = weight ? parseFloat(weight) : null;
-    if (val !== set.target_weight) onUpdate(set.routine_set_id, routineExerciseId, { target_weight: val });
-  }, [weight, set.target_weight, set.routine_set_id, routineExerciseId, onUpdate]);
+    const val = parseDecimalInput(weight);
+    setWeight(formatNumberInput(val));
+    if (val !== displayWeight) onUpdate(set.routine_set_id, routineExerciseId, { target_weight: toStorage(val) });
+  }, [weight, displayWeight, toStorage, set.routine_set_id, routineExerciseId, onUpdate]);
 
   const commitReps = useCallback(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    const val = reps ? parseInt(reps, 10) : null;
+    const val = parseIntInput(reps);
+    setReps(formatNumberInput(val));
     if (val !== set.target_reps) onUpdate(set.routine_set_id, routineExerciseId, { target_reps: val });
   }, [reps, set.target_reps, set.routine_set_id, routineExerciseId, onUpdate]);
-
-  useEffect(() => {
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, []);
 
   const isWarmup = set.is_warmup === true;
   const rowBg = isWarmup ? colors.warningLight + "55" : "transparent";

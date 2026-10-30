@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Linking from "expo-linking";
+import { Platform } from "react-native";
 import { supabase } from "./supabaseClient";
 import { logError } from "@/utils/log";
 import { localDb } from "./localDb";
@@ -14,7 +15,7 @@ import {
   clearSessionOrigin,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
-import { cachedRead, clearReadCache } from "./readCache";
+import { cachedRead, clearReadCache, isNetworkError, writeCache } from "./readCache";
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -30,6 +31,38 @@ const signedPhotoCache = new Map<string, { url: string; expiresAt: number }>();
 // shouldUseSupabase = Supabase configured AND network available (runtime check)
 const shouldUseSupabase = () => isOnline && networkStatus.isConnected;
 
+const OFFLINE_AUTH_ERROR = { message: "You're offline. Connect to the internet to sign in or create an account." };
+
+// The session as saved on the device, read straight from auth storage.
+// supabase.auth.getSession() returns null once the access token has expired
+// and the refresh can't reach the server, which is the normal state an hour
+// into being offline. The saved session is still the user's, so read it
+// directly. It's removed on sign-out, so this never resurrects a signed-out
+// user.
+async function persistedSession(): Promise<any | null> {
+  try {
+    const key: string | undefined = (supabase.auth as any).storageKey;
+    if (!key) return null;
+    const raw = Platform.OS === "web"
+      ? (typeof localStorage !== "undefined" ? localStorage.getItem(key) : null)
+      : await AsyncStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const session = parsed?.currentSession ?? parsed;
+    return session?.user ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+// The signed-in Supabase user without a network round trip, so it keeps
+// working in a basement gym.
+async function sessionUser() {
+  const { data } = await supabase.auth.getSession();
+  if (data?.session?.user) return data.session.user;
+  return (await persistedSession())?.user ?? null;
+}
+
 export const db = {
   // Auth
   signUp: async (email: string, password: string, username: string) => {
@@ -44,6 +77,9 @@ export const db = {
       if (signUpError) return { data: null, error: signUpError };
       return { data, error: null };
     }
+    // With Supabase configured, an offline sign-up used to create a throwaway
+    // local-only account whose workouts could never sync.
+    if (isOnline) return { data: null, error: OFFLINE_AUTH_ERROR };
     return localDb.signUp(email, password, username);
   },
 
@@ -52,6 +88,7 @@ export const db = {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       return { error };
     }
+    if (isOnline) return { error: OFFLINE_AUTH_ERROR };
     return localDb.signIn(email, password);
   },
 
@@ -99,6 +136,10 @@ export const db = {
   signOut: async () => {
     if (shouldUseSupabase()) {
       await supabase.auth.signOut();
+    } else if (isOnline) {
+      // Offline: drop the session on this device (no server call needed), so
+      // signing out actually signs out instead of silently doing nothing.
+      await supabase.auth.signOut({ scope: "local" });
     } else {
       await localDb.signOut();
     }
@@ -106,18 +147,32 @@ export const db = {
     await clearReadCache();
   },
 
+  // Auth state lives in Supabase's persisted session whenever Supabase is
+  // configured, online or not. These used to switch to the in-memory local
+  // store while offline, which has no user, so a signed-in user got
+  // "Not authenticated" when starting a workout without signal.
   getSession: async () => {
-    if (shouldUseSupabase()) {
-      return supabase.auth.getSession();
+    if (isOnline) {
+      const res = await supabase.auth.getSession();
+      if (res?.data?.session) return res;
+      if (networkStatus.isConnected && !isNetworkError(res?.error)) return res;
+      const saved = await persistedSession();
+      return saved ? { data: { session: saved }, error: null } : res;
     }
     return localDb.getSession();
   },
 
   getUser: async () => {
-    if (shouldUseSupabase()) {
-      return supabase.auth.getUser();
+    if (!isOnline) return localDb.getUser();
+    if (networkStatus.isConnected) {
+      try {
+        const res = await supabase.auth.getUser();
+        if (!res.error || !isNetworkError(res.error)) return res;
+      } catch (e) {
+        if (!isNetworkError(e)) throw e;
+      }
     }
-    return localDb.getUser();
+    return { data: { user: await sessionUser() }, error: null };
   },
 
   getUserProfile: async (userId: string) => {
@@ -217,11 +272,33 @@ export const db = {
     return localDb.updateSessionPhotoUrl(sessionId, photoUrl);
   },
 
+  // Confirms the current password before a password change, so someone using an
+  // unlocked phone can't lock the owner out. Re-signing in as the same user
+  // just refreshes the session.
+  verifyPassword: async (email: string, password: string): Promise<{ error: string | null }> => {
+    if (!shouldUseSupabase()) return { error: "Requires an internet connection." };
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error: error ? "Current password is incorrect." : null };
+  },
+
   changePassword: async (newPassword: string) => {
     if (shouldUseSupabase()) {
       return supabase.auth.updateUser({ password: newPassword });
     }
     return { data: null, error: { message: "Password changes require an internet connection." } };
+  },
+
+  // Supabase emails a confirmation link to the new address (and, with "secure
+  // email change" on, the old one too); the login email only changes once the
+  // link is opened. The emailRedirectTo brings the user back into the app.
+  changeEmail: async (newEmail: string) => {
+    if (shouldUseSupabase()) {
+      return supabase.auth.updateUser(
+        { email: newEmail },
+        { emailRedirectTo: Linking.createURL("/") },
+      );
+    }
+    return { data: null, error: { message: "Changing your email requires an internet connection." } };
   },
 
   // Permanently deletes the signed-in user's data, photos and login.
@@ -259,7 +336,7 @@ export const db = {
   },
 
   onAuthStateChange: (callback: (event: string, session: any) => void) => {
-    if (shouldUseSupabase()) {
+    if (isOnline) {
       return supabase.auth.onAuthStateChange(callback);
     }
     return localDb.onAuthStateChange(callback);
@@ -581,6 +658,10 @@ export const db = {
         .select("*")
         .eq("user_id", userId)
         .is("end_time", null)
+        // Newest first and limit(1): maybeSingle() errors if a crash ever left
+        // more than one unfinished session behind.
+        .order("session_id", { ascending: false })
+        .limit(1)
         .maybeSingle();
     }
     return localDb.getActiveSession(userId);
@@ -751,8 +832,66 @@ export const db = {
         await supabase.from("session_exercise_sets").insert(setInserts);
       }
 
+      // Keep the offline copy of this routine fresh so it can be started
+      // without signal next time (see the offline path below).
+      await writeCache(`routineExercises:${routineId}`, exercises ?? []);
+      for (const ex of exercises ?? []) {
+        await writeCache(
+          `routineExerciseSets:${ex.routine_exercise_id}`,
+          (allTemplateSets ?? []).filter((ts: any) => ts.routine_exercise_id === ex.routine_exercise_id),
+        );
+      }
+
       await markSessionOrigin(session.session_id, false);
       return { data: session, error: null };
+    }
+    // Offline with Supabase configured: the routine only exists in the read
+    // cache (the in-memory local store is empty), so build the session from
+    // there. This used to fail with "Routine not found" even though the
+    // routine was right there on the home screen.
+    if (isOnline) {
+      const [{ data: routines }, { data: routineExercises }] = await Promise.all([
+        db.getRoutines(),
+        db.getRoutineExercises(routineId),
+      ]);
+      const routine = (routines ?? []).find((r: any) => r.routine_id === routineId);
+      if (routine) {
+        const { data: session, error } = await localDb.startWorkoutSession({
+          routine_id: routineId,
+          session_name: routine.routine_name,
+          user_id: userId,
+        });
+        if (error || !session) return { data: null, error: error ?? { message: "Couldn't start the workout" } };
+        const sorted = [...(routineExercises ?? [])].sort((a: any, b: any) => a.exercise_order - b.exercise_order);
+        for (const ex of sorted) {
+          const { data: sessionEx } = await localDb.insertSessionExercise({
+            session_id: session.session_id,
+            exercise_id: ex.exercise_id,
+            exercise_name: ex.exercise_name,
+            exercise_order: ex.exercise_order,
+            notes: null,
+            exercise_type: ex.exercise_type ?? "strength",
+          });
+          const { data: templateSets } = await db.getRoutineExerciseSets(ex.routine_exercise_id);
+          const sets = [...(templateSets ?? [])].sort((a: any, b: any) => a.set_number - b.set_number);
+          // No cached template (routine never opened online): start with one set.
+          const rows = sets.length > 0 ? sets : [{ set_number: 1, is_warmup: false }];
+          for (const ts of rows as any[]) {
+            await localDb.insertSessionExerciseSet({
+              session_exercise_id: sessionEx.session_exercise_id,
+              set_number: ts.set_number,
+              weight: ts.target_weight ?? null,
+              reps: ts.target_reps ?? null,
+              is_warmup: !!ts.is_warmup,
+              duration_seconds: ts.target_duration_seconds ?? null,
+              distance_meters: ts.target_distance_meters ?? null,
+              effort_level: ts.target_effort_level ?? null,
+            });
+          }
+        }
+        await markSessionOrigin(session.session_id, true);
+        return { data: session, error: null };
+      }
     }
     const result = await localDb.startWorkoutFromRoutine(routineId, userId);
     if (result.data) await markSessionOrigin(result.data.session_id, true);
@@ -889,21 +1028,38 @@ export const db = {
           .not("workout_sessions.end_time", "is", null)
           .order("workout_sessions(session_date)", { ascending: true });
 
-        if (!sessionExercises) return { data: [], error: null };
+        if (!sessionExercises || sessionExercises.length === 0) return { data: [], error: null };
 
-        const history = await Promise.all(
-          sessionExercises.map(async (se: any) => {
-            const { data: sets } = await supabase
-              .from("session_exercise_sets")
-              .select("*")
-              .eq("session_exercise_id", se.session_exercise_id)
-              .eq("completed", true);
-            return {
-              session_date: se.workout_sessions.session_date,
-              sets: sets ?? [],
-            };
-          })
-        );
+        // One query for every session's sets instead of one request per past
+        // workout (an exercise logged 100 times used to fire 100 requests).
+        // Chunked so each request stays well under PostgREST's default
+        // 1000-row cap and URL length limits on long histories.
+        const ids = sessionExercises.map((se: any) => se.session_exercise_id);
+        const CHUNK = 40;
+        const chunks: number[][] = [];
+        for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+        const results = await Promise.all(chunks.map((chunk) =>
+          supabase
+            .from("session_exercise_sets")
+            .select("*")
+            .in("session_exercise_id", chunk)
+            .eq("completed", true)
+            .order("set_number", { ascending: true })
+        ));
+        const setsError = results.find((r) => r.error)?.error;
+        if (setsError) return { data: null, error: setsError };
+        const allSets = results.flatMap((r) => r.data ?? []);
+
+        const setsByExercise = new Map<number, any[]>();
+        for (const set of allSets ?? []) {
+          const list = setsByExercise.get(set.session_exercise_id) ?? [];
+          list.push(set);
+          setsByExercise.set(set.session_exercise_id, list);
+        }
+        const history = sessionExercises.map((se: any) => ({
+          session_date: se.workout_sessions.session_date,
+          sets: setsByExercise.get(se.session_exercise_id) ?? [],
+        }));
         return { data: history, error: null };
       },
       () => localDb.getExerciseHistory(exerciseId, userId),
@@ -974,7 +1130,7 @@ export const db = {
       // Fetch all cardio session exercises for this user's completed sessions
       const { data: cardioExercises } = await supabase
         .from("session_exercises")
-        .select("session_exercise_id, workout_sessions!inner(user_id, end_time)")
+        .select("session_exercise_id, session_id, workout_sessions!inner(user_id, end_time)")
         .eq("exercise_type", "cardio")
         .eq("workout_sessions.user_id", userId)
         .not("workout_sessions.end_time", "is", null);
@@ -983,32 +1139,44 @@ export const db = {
         return { data: { totalDistanceMeters: 0, totalDurationSeconds: 0, totalCardioSessions: 0, longestRunMeters: 0, fastestPaceSecPerKm: null }, error: null };
       }
 
-      const exerciseIds = cardioExercises.map((e: any) => e.session_exercise_id);
-      const { data: sets } = await supabase
-        .from("session_exercise_sets")
-        .select("*")
-        .in("session_exercise_id", exerciseIds)
-        .eq("completed", true);
+      // Chunked like getExerciseHistory: one huge .in() list hits URL limits
+      // and PostgREST's 1000-row default cap on long histories.
+      const sessionByExercise = new Map<number, number>();
+      for (const e of cardioExercises as any[]) sessionByExercise.set(e.session_exercise_id, e.session_id);
+      const exerciseIds = [...sessionByExercise.keys()];
+      const CHUNK = 40;
+      const chunks: number[][] = [];
+      for (let i = 0; i < exerciseIds.length; i += CHUNK) chunks.push(exerciseIds.slice(i, i + CHUNK));
+      const results = await Promise.all(chunks.map((chunk) =>
+        supabase
+          .from("session_exercise_sets")
+          .select("session_exercise_id, distance_meters, duration_seconds, pace_sec_per_km")
+          .in("session_exercise_id", chunk)
+          .eq("completed", true)
+      ));
+      const setsError = results.find((r) => r.error)?.error;
+      if (setsError) return { data: null, error: setsError };
+      const sets = results.flatMap((r) => r.data ?? []);
 
       let totalDistanceMeters = 0;
       let totalDurationSeconds = 0;
       let longestRunMeters = 0;
       let fastestPaceSecPerKm: number | null = null;
+      // Sessions where cardio was actually logged. This used to read
+      // workout_sessions.session_id, which the query never selected, so
+      // the count was always 1.
       const sessionIds = new Set<number>();
 
-      for (const s of sets ?? []) {
+      for (const s of sets) {
         if (!s.duration_seconds && !s.distance_meters) continue;
+        const sid = sessionByExercise.get(s.session_exercise_id);
+        if (sid != null) sessionIds.add(sid);
         totalDistanceMeters += s.distance_meters ?? 0;
         totalDurationSeconds += s.duration_seconds ?? 0;
         if ((s.distance_meters ?? 0) > longestRunMeters) longestRunMeters = s.distance_meters;
         if (s.pace_sec_per_km && s.pace_sec_per_km > 0) {
           if (fastestPaceSecPerKm === null || s.pace_sec_per_km < fastestPaceSecPerKm) fastestPaceSecPerKm = s.pace_sec_per_km;
         }
-      }
-
-      // Count distinct sessions with cardio
-      for (const e of cardioExercises) {
-        sessionIds.add((e as any).workout_sessions?.session_id);
       }
 
       return { data: { totalDistanceMeters, totalDurationSeconds, totalCardioSessions: sessionIds.size, longestRunMeters, fastestPaceSecPerKm }, error: null };
