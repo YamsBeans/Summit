@@ -55,3 +55,46 @@ Build status: `npm run lint` shows 0 errors and 8 warnings (there were 17 before
   - **Change Email** calls `supabase.auth.updateUser({ email })`, and Supabase emails a confirmation link. The app's root URL has to be in Supabase → Auth → Redirect URLs for that link to bring you back into the app.
   - **Update Password** now asks for your current password first and checks it before saving the new one.
 - The shared settings building blocks (SettingItem, SettingSection, ModalShell) moved to `components/SettingsUI.tsx`.
+
+## 2026-10-30 (Fri)
+
+Build status: `tsc` is clean. `npm run lint` shows 0 errors and the same 8 warnings as before. `jest` passes 194 tests in 19 suites (up from 159). `expo export -p web` builds. I checked every UI change in a headless browser at phone width, in light and dark, using local mode.
+
+### Features
+- **Workout Complete summary (like Strong/Hevy).** After Finish you see a recap: duration, volume (distance for cardio-only workouts), sets and PR count, plus each exercise's best set with PR badges. It replaces the "New PRs!" alert and the automatic photo prompt. The photo is now an optional **Add Photo** button.
+- **Per-exercise rest timers.** Set one from an exercise's ••• menu → Rest Timer (Default, Off, or 0:30–5:00). It's remembered for that exercise in every workout. A small timer pill next to the name shows and changes it. Stored on the device, so there's no schema change.
+- **Plate calculator.** Tap a set number → Plate Calculator. It shows the plates per side and a picture of the loaded bar, works in lbs or kg, lets you pick the bar weight (which it remembers), and shows the closest load when the weight can't be made exactly.
+- **Exercise detail for cardio.** Shows Longest / Longest Time / Best Pace, a Distance/Time chart, and history with distance, time and pace, instead of weight/reps tiles.
+- **New exercises start with sets ready.** Adding an exercise mid-workout creates as many sets as last time (one if it's new), so you can log right away.
+
+### Bugs fixed
+- **Offline use for signed-in Supabase users** (the "offline launch is fragile" item from last run):
+  - **Couldn't start workouts offline.** Auth switched to the empty in-memory store when offline, so starting a workout said "Not authenticated". It now always uses Supabase's saved session, falling back to the copy on the device after the access token expires.
+  - **Couldn't start routines offline.** Starting a routine offline failed with "Routine not found". It's now built from the cached routine. Starting it online keeps that cache fresh.
+  - **Requests that can't reach the server** (gym "lie-fi", or a cold start before NetInfo reports offline) now serve cached data instead of an error.
+  - **Offline sign-in no longer creates a fake local account** that could never sync. Offline sign-out now actually signs out.
+- **Edit Workout couldn't edit cardio sets.** They showed as weight/reps. They now edit distance and time, and pace is recomputed. Exercises added there get the right type.
+- **Routine cardio targets were always in miles.** They now follow the km/mi setting. A shared `useDistanceUnit()` hook means Settings changes reach screens that are already open. Profile used to stay on "mi" after switching back to km.
+- **Profile cardio "Sessions" was always 1 with Supabase** (it read a column the query never selected). The query is now chunked.
+- **Profile chart showed 6 empty future weeks.** It now shows the last 13 weeks with whole-number y-axis steps, and labels aren't truncated. Workouts that run past midnight no longer count 0 minutes.
+- Best Pace shows /mi for mile users. "Best: 1 days" now reads "1 day".
+- The app crashed at import when the Supabase env vars were missing, instead of running in local-only mode.
+- **Headers** used a fixed 56–60px top padding: too tight under the Dynamic Island, wasted space on web and Android. They now use the real safe-area inset (`useHeaderTop`).
+- A review subagent checked the diff. I fixed what it found:
+  - The adding-exercise race (set inserts now run in parallel).
+  - The iOS modal stacking on Finish.
+  - Overly broad network-error detection.
+  - A load race in the rest overrides.
+
+### Notes / needs Yams's decision
+- **Someone else pushed to `claude` during this run:** commit `a40706f` "Fix typecheck in authOffline test". It made the same one-line fix I had just made. I merged it (no force-push). If two scheduled runs overlap, they may race on this branch.
+- `routines.routine_order` is still not in `supabaseSchema.md` (carried over from last run).
+- Offline workouts still live in the in-memory local store until they're finished and queued. If the app is killed mid-workout while offline, that workout is lost. Fixing this means persisting `localDb` in-progress sessions to AsyncStorage.
+
+### Ideas for next run
+- Persist in-progress offline workouts (see above).
+- Warm the routine caches for every routine when the home screen loads online (today only routines you've started or opened are cached).
+- Supersets, and "Replace exercise" keeping the set count.
+- Share card / image of the workout summary.
+- Fix the remaining 8 lint warnings (mount-only effects).
+- `startWorkoutFromRoutine` online assumes PostgREST returns inserted rows in order. Mapping by `exercise_order` would be safer.
