@@ -22,7 +22,7 @@ jest.mock("../backend/supabaseClient", () => ({
 jest.mock("../backend/networkStatus", () => ({ networkStatus: mockNet }));
 jest.mock("../backend/localDb", () => ({ localDb: mockLocal }));
 jest.mock("@react-native-async-storage/async-storage", () => ({
-  getItem: (...args: any[]) => mockGetItem(...args),
+  getItem: (key: string) => mockGetItem(key),
   setItem: jest.fn(),
   removeItem: jest.fn(),
   getAllKeys: jest.fn(() => Promise.resolve([])),

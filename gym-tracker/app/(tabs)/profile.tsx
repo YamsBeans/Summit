@@ -10,7 +10,7 @@ import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
 import WorkoutChart from "@/components/WorkoutChart";
-import { formatDistance, formatDurationShort, formatPace } from "@/utils/cardioUtils";
+import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardioUtils";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 
@@ -508,7 +508,7 @@ export default function ProfileScreen() {
             {cardioStats.fastestPaceSecPerKm != null && (
               <View>
                 <Text style={[styles.statNum, { color: colors.text, fontSize: 17 }]}>
-                  {formatPace(cardioStats.fastestPaceSecPerKm)}
+                  {formatPaceIn(cardioStats.fastestPaceSecPerKm, distanceUnit)}
                 </Text>
                 <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Best Pace</Text>
               </View>
