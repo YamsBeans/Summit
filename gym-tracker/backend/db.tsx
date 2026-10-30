@@ -1017,7 +1017,7 @@ export const db = {
       // Fetch all cardio session exercises for this user's completed sessions
       const { data: cardioExercises } = await supabase
         .from("session_exercises")
-        .select("session_exercise_id, workout_sessions!inner(user_id, end_time)")
+        .select("session_exercise_id, session_id, workout_sessions!inner(user_id, end_time)")
         .eq("exercise_type", "cardio")
         .eq("workout_sessions.user_id", userId)
         .not("workout_sessions.end_time", "is", null);
@@ -1026,32 +1026,44 @@ export const db = {
         return { data: { totalDistanceMeters: 0, totalDurationSeconds: 0, totalCardioSessions: 0, longestRunMeters: 0, fastestPaceSecPerKm: null }, error: null };
       }
 
-      const exerciseIds = cardioExercises.map((e: any) => e.session_exercise_id);
-      const { data: sets } = await supabase
-        .from("session_exercise_sets")
-        .select("*")
-        .in("session_exercise_id", exerciseIds)
-        .eq("completed", true);
+      // Chunked like getExerciseHistory: one huge .in() list hits URL limits
+      // and PostgREST's 1000-row default cap on long histories.
+      const sessionByExercise = new Map<number, number>();
+      for (const e of cardioExercises as any[]) sessionByExercise.set(e.session_exercise_id, e.session_id);
+      const exerciseIds = [...sessionByExercise.keys()];
+      const CHUNK = 40;
+      const chunks: number[][] = [];
+      for (let i = 0; i < exerciseIds.length; i += CHUNK) chunks.push(exerciseIds.slice(i, i + CHUNK));
+      const results = await Promise.all(chunks.map((chunk) =>
+        supabase
+          .from("session_exercise_sets")
+          .select("session_exercise_id, distance_meters, duration_seconds, pace_sec_per_km")
+          .in("session_exercise_id", chunk)
+          .eq("completed", true)
+      ));
+      const setsError = results.find((r) => r.error)?.error;
+      if (setsError) return { data: null, error: setsError };
+      const sets = results.flatMap((r) => r.data ?? []);
 
       let totalDistanceMeters = 0;
       let totalDurationSeconds = 0;
       let longestRunMeters = 0;
       let fastestPaceSecPerKm: number | null = null;
+      // Sessions where cardio was actually logged. This used to read
+      // workout_sessions.session_id, which the query never selected, so
+      // the count was always 1.
       const sessionIds = new Set<number>();
 
-      for (const s of sets ?? []) {
+      for (const s of sets) {
         if (!s.duration_seconds && !s.distance_meters) continue;
+        const sid = sessionByExercise.get(s.session_exercise_id);
+        if (sid != null) sessionIds.add(sid);
         totalDistanceMeters += s.distance_meters ?? 0;
         totalDurationSeconds += s.duration_seconds ?? 0;
         if ((s.distance_meters ?? 0) > longestRunMeters) longestRunMeters = s.distance_meters;
         if (s.pace_sec_per_km && s.pace_sec_per_km > 0) {
           if (fastestPaceSecPerKm === null || s.pace_sec_per_km < fastestPaceSecPerKm) fastestPaceSecPerKm = s.pace_sec_per_km;
         }
-      }
-
-      // Count distinct sessions with cardio
-      for (const e of cardioExercises) {
-        sessionIds.add((e as any).workout_sessions?.session_id);
       }
 
       return { data: { totalDistanceMeters, totalDurationSeconds, totalCardioSessions: sessionIds.size, longestRunMeters, fastestPaceSecPerKm }, error: null };

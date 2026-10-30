@@ -597,11 +597,12 @@ export const localDb = {
       }
     }
 
-    // Count distinct sessions that contain at least one cardio exercise
+    // Count distinct sessions where cardio was actually logged (matches db.tsx)
+    const sessionOfExercise = new Map(
+      localSessionExercises.map((e) => [e.session_exercise_id, e.session_id] as const)
+    );
     const cardioSessionIds = new Set(
-      localSessionExercises
-        .filter((e) => sessionIds.has(e.session_id) && e.exercise_type === 'cardio')
-        .map((e) => e.session_id)
+      cardioSets.map((s) => sessionOfExercise.get(s.session_exercise_id))
     );
 
     return {
