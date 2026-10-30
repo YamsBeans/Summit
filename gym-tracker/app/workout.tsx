@@ -6,6 +6,8 @@ import {
 import { showAlert } from "@/utils/alert";
 import ConfirmModal from "@/components/ConfirmModal";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
+import WorkoutSummaryModal from "@/components/WorkoutSummaryModal";
+import { buildWorkoutSummary, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -18,7 +20,7 @@ import { useRestTimer } from "@/utils/useRestTimer";
 import { detectPRs, detectCardioPRs, mergeStrengthRecord } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
-import { useUnits, formatVolume } from "@/utils/units";
+import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 import { notifySuccess, tapLight } from "@/utils/haptics";
@@ -32,6 +34,7 @@ export default function WorkoutScreen() {
   const { colors } = useTheme();
   const { minimizeWorkout, clearActiveWorkout } = useActiveWorkout();
   const { toDisplay, label: unitLabel } = useUnits();
+  const { distanceUnit } = useDistanceUnit();
   const { sessionId: sessionIdParam } = useLocalSearchParams<{ sessionId: string }>();
 
   const [session, setSession] = useState<any>(null);
@@ -70,12 +73,12 @@ export default function WorkoutScreen() {
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
   const finishedSessionId = useRef<number | null>(null);
+  const [summary, setSummary] = useState<WorkoutSummary | null>(null);
   const [setOptionsVisible, setSetOptionsVisible] = useState(false);
   const [selectedSet, setSelectedSet] = useState<any>(null);
   const [selectedExerciseId, setSelectedExerciseId] = useState<number | null>(null);
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [prevSets, setPrevSets] = useState<Record<string, any[]>>({});
-  const [distanceUnit, setDistanceUnit] = useState<'km' | 'mi'>('km');
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
   const [selectedExerciseForOptions, setSelectedExerciseForOptions] = useState<any>(null);
   const exercisePickerModeRef = useRef<"add" | "replace">("add");
@@ -144,12 +147,6 @@ export default function WorkoutScreen() {
     return { totalCardioDistanceMeters: dist, totalCardioDurationSeconds: dur };
   }, [exerciseSets]);
 
-  // Load distance unit preference
-  useEffect(() => {
-    AsyncStorage.getItem('@gym_tracker_distance_unit').then((val) => {
-      if (val === 'mi') setDistanceUnit('mi');
-    });
-  }, []);
 
   const completedSetsCount = useMemo(() =>
     Object.values(exerciseSets).flat().filter((s) => s.completed).length,
@@ -222,15 +219,16 @@ export default function WorkoutScreen() {
   // Exercises added (or swapped in) mid-workout need last session's numbers
   // too — before, only exercises present when the screen opened got them, so a
   // quick-start workout never showed a "previous" column.
-  const loadPrevSetsFor = useCallback(async (exerciseId: string) => {
-    if (!session) return;
+  const loadPrevSetsFor = useCallback(async (exerciseId: string): Promise<any[]> => {
+    if (!session) return [];
     try {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
-      if (!userId) return;
+      if (!userId) return [];
       const { data } = await db.getPreviousSessionSets(exerciseId, userId, session.session_id);
       setPrevSets((prev) => ({ ...prev, [exerciseId]: data ?? [] }));
-    } catch (e) { logError("workout.loadPrevSetsFor", e); }
+      return data ?? [];
+    } catch (e) { logError("workout.loadPrevSetsFor", e); return []; }
   }, [session]);
 
   const reloadSetsForExercise = async (sessionExerciseId: number) => {
@@ -371,6 +369,8 @@ export default function WorkoutScreen() {
     cancelRestDoneNotification();
     clearActiveWorkout();
     finishedSessionId.current = session.session_id;
+    const durationSeconds = (Date.now() - startTimestamp.current) / 1000;
+    const summaryPRs: SummaryPR[] = [];
 
     try {
       const { data: userData } = await db.getUser();
@@ -390,7 +390,6 @@ export default function WorkoutScreen() {
 
         // Cardio PRs
         const cardioExercises = exercises.filter((e: any) => e.exercise_type === 'cardio');
-        const cardioPRMessages: string[] = [];
         for (const ex of cardioExercises) {
           const sets = (exerciseSets[ex.session_exercise_id] ?? []);
           const existingPR = (existingPRs ?? []).find((r: any) => r.exercise_id === ex.exercise_id && r.pr_type === 'cardio') ?? null;
@@ -407,28 +406,35 @@ export default function WorkoutScreen() {
               best_pace_sec_per_km: cardioPR.bestPaceSecPerKm ?? existingPR?.best_pace_sec_per_km ?? null,
               best_duration_seconds: cardioPR.bestDurationSeconds ?? existingPR?.best_duration_seconds ?? null,
             });
-            if (cardioPR.bestDistanceMeters) cardioPRMessages.push(`${ex.exercise_name}: ${formatDistance(cardioPR.bestDistanceMeters, distanceUnit)}`);
-            else if (cardioPR.bestPaceSecPerKm) cardioPRMessages.push(`${ex.exercise_name}: best pace`);
+            const label = cardioPR.bestDistanceMeters ? "Distance"
+              : cardioPR.bestPaceSecPerKm ? "Pace"
+              : "Duration";
+            summaryPRs.push({ exerciseId: ex.exercise_id, label });
           }
         }
 
-        const allPRMessages = [
-          ...prs.map((p: any) => `${p.exerciseName} (${p.type === "both" ? "weight & volume" : p.type})`),
-          ...cardioPRMessages,
-        ];
-        if (allPRMessages.length > 0) {
-          notifySuccess();
-          showAlert(
-            "New PRs!",
-            allPRMessages.join("\n"),
-            [{ text: "OK", onPress: () => setShowPhotoModal(true) }]
-          );
-          return;
+        for (const p of prs) {
+          summaryPRs.push({
+            exerciseId: p.exerciseId,
+            label: p.type === "both" ? "Weight & Volume" : p.type === "weight" ? "Weight" : "Volume",
+          });
         }
       }
     } catch (e) { logError("finishWorkout.prDetection", e); }
-    setShowPhotoModal(true);
+    if (summaryPRs.length > 0) notifySuccess();
+    setSummary(buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds));
   }, 1000);
+
+  const handleSummaryAddPhoto = useCallback(() => {
+    setSummary(null);
+    // iOS can't present a second modal while the first is still animating out.
+    setTimeout(() => setShowPhotoModal(true), Platform.OS === "ios" ? 400 : 0);
+  }, []);
+
+  const handleSummaryDone = useCallback(() => {
+    setSummary(null);
+    router.back();
+  }, [router]);
 
   const handleProgressPhoto = useCallback(async (uri: string) => {
     const sessionId = finishedSessionId.current;
@@ -536,8 +542,24 @@ export default function WorkoutScreen() {
     if (error) { setError(error.message); return; }
     setExercises((prev) => [...prev, newEx]);
     setExerciseSets((prev) => ({ ...prev, [newEx.session_exercise_id]: [] }));
-    if (!prevSets[exercise.id]) loadPrevSetsFor(exercise.id);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+
+    // Start the exercise with ready-to-log rows, like Strong/Hevy: as many
+    // sets as last time (warmups kept), or one if it's new. Values stay empty
+    // so last session's numbers show as placeholders / tap-to-fill.
+    const prev = prevSets[exercise.id] ?? await loadPrevSetsFor(exercise.id);
+    const template = prev.length > 0 ? prev.slice(0, 10) : [{ is_warmup: false }];
+    for (let i = 0; i < template.length; i++) {
+      const { error: setErr } = await db.insertSessionExerciseSet({
+        session_exercise_id: newEx.session_exercise_id,
+        set_number: i + 1,
+        weight: null,
+        reps: null,
+        is_warmup: template[i].is_warmup === true,
+      });
+      if (setErr) { setError(setErr.message); break; }
+    }
+    reloadSetsForExercise(newEx.session_exercise_id);
   });
 
   useEffect(() => { loadSession(); }, []);
@@ -869,6 +891,15 @@ export default function WorkoutScreen() {
         icon="trash-outline"
         onConfirm={handleConfirmDiscard}
         onCancel={() => setShowDiscardModal(false)}
+      />
+
+      <WorkoutSummaryModal
+        visible={summary != null}
+        workoutName={session?.session_name ?? "Workout"}
+        summary={summary}
+        distanceUnit={distanceUnit}
+        onAddPhoto={handleSummaryAddPhoto}
+        onDone={handleSummaryDone}
       />
 
       <ProgressPhotoModal
