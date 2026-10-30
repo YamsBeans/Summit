@@ -41,6 +41,7 @@ export type WorkoutSummary = {
   totalVolumeLbs: number;
   completedSets: number;
   totalReps: number;
+  totalDistanceMeters: number;
   exercises: ExerciseSummary[];
   prCount: number;
 };
@@ -72,6 +73,7 @@ export function buildWorkoutSummary(
   let totalVolumeLbs = 0;
   let completedSets = 0;
   let totalReps = 0;
+  let totalDistanceMeters = 0;
   const rows: ExerciseSummary[] = [];
 
   for (const ex of exercises) {
@@ -95,6 +97,7 @@ export function buildWorkoutSummary(
       if (!best || better(setScore(s), setScore(best))) best = s;
     }
 
+    totalDistanceMeters += distanceMeters;
     // Exercises with nothing completed aren't part of what was done.
     if (sets.length === 0) continue;
 
@@ -115,6 +118,7 @@ export function buildWorkoutSummary(
     totalVolumeLbs,
     completedSets,
     totalReps,
+    totalDistanceMeters,
     exercises: rows,
     prCount: rows.filter((r) => r.pr != null).length,
   };

@@ -49,6 +49,7 @@ describe("buildWorkoutSummary", () => {
     expect(r.isCardio).toBe(true);
     expect(r.distanceMeters).toBe(5000);
     expect(r.durationSeconds).toBe(1500);
+    expect(s.totalDistanceMeters).toBe(5000);
   });
 
   it("leaves out exercises with no completed sets and counts PRs", () => {

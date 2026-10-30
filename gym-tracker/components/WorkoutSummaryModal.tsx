@@ -30,7 +30,10 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
   const hasPRs = summary.prCount > 0;
   const stats: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string }[] = [
     { icon: "time-outline", label: "Duration", value: formatWorkoutDuration(summary.durationSeconds) },
-    { icon: "barbell-outline", label: `Volume (${unitLabel})`, value: formatVolume(toDisplay(summary.totalVolumeLbs)) },
+    // A cardio-only session has no volume; show its distance instead of "0".
+    summary.totalVolumeLbs === 0 && summary.totalDistanceMeters > 0
+      ? { icon: "walk-outline", label: "Distance", value: formatDistance(summary.totalDistanceMeters, distanceUnit) }
+      : { icon: "barbell-outline", label: `Volume (${unitLabel})`, value: formatVolume(toDisplay(summary.totalVolumeLbs)) },
     { icon: "checkmark-done-outline", label: "Sets", value: String(summary.completedSets) },
     { icon: "trophy-outline", label: "PRs", value: String(summary.prCount) },
   ];
