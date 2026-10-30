@@ -14,7 +14,7 @@ import {
   clearSessionOrigin,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
-import { cachedRead, clearReadCache } from "./readCache";
+import { cachedRead, clearReadCache, isNetworkError } from "./readCache";
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -30,6 +30,15 @@ const signedPhotoCache = new Map<string, { url: string; expiresAt: number }>();
 // shouldUseSupabase = Supabase configured AND network available (runtime check)
 const shouldUseSupabase = () => isOnline && networkStatus.isConnected;
 
+const OFFLINE_AUTH_ERROR = { message: "You're offline. Connect to the internet to sign in or create an account." };
+
+// The signed-in Supabase user, read from the session persisted on the device.
+// Needs no network, so it keeps working in a basement gym.
+async function sessionUser() {
+  const { data } = await supabase.auth.getSession();
+  return data?.session?.user ?? null;
+}
+
 export const db = {
   // Auth
   signUp: async (email: string, password: string, username: string) => {
@@ -44,6 +53,9 @@ export const db = {
       if (signUpError) return { data: null, error: signUpError };
       return { data, error: null };
     }
+    // With Supabase configured, an offline sign-up used to create a throwaway
+    // local-only account whose workouts could never sync.
+    if (isOnline) return { data: null, error: OFFLINE_AUTH_ERROR };
     return localDb.signUp(email, password, username);
   },
 
@@ -52,6 +64,7 @@ export const db = {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       return { error };
     }
+    if (isOnline) return { error: OFFLINE_AUTH_ERROR };
     return localDb.signIn(email, password);
   },
 
@@ -99,6 +112,10 @@ export const db = {
   signOut: async () => {
     if (shouldUseSupabase()) {
       await supabase.auth.signOut();
+    } else if (isOnline) {
+      // Offline: drop the session on this device (no server call needed), so
+      // signing out actually signs out instead of silently doing nothing.
+      await supabase.auth.signOut({ scope: "local" });
     } else {
       await localDb.signOut();
     }
@@ -106,18 +123,28 @@ export const db = {
     await clearReadCache();
   },
 
+  // Auth state lives in Supabase's persisted session whenever Supabase is
+  // configured, online or not. These used to switch to the in-memory local
+  // store while offline, which has no user, so a signed-in user got
+  // "Not authenticated" when starting a workout without signal.
   getSession: async () => {
-    if (shouldUseSupabase()) {
+    if (isOnline) {
       return supabase.auth.getSession();
     }
     return localDb.getSession();
   },
 
   getUser: async () => {
-    if (shouldUseSupabase()) {
-      return supabase.auth.getUser();
+    if (!isOnline) return localDb.getUser();
+    if (networkStatus.isConnected) {
+      try {
+        const res = await supabase.auth.getUser();
+        if (!res.error || !isNetworkError(res.error)) return res;
+      } catch (e) {
+        if (!isNetworkError(e)) throw e;
+      }
     }
-    return localDb.getUser();
+    return { data: { user: await sessionUser() }, error: null };
   },
 
   getUserProfile: async (userId: string) => {
@@ -281,7 +308,7 @@ export const db = {
   },
 
   onAuthStateChange: (callback: (event: string, session: any) => void) => {
-    if (shouldUseSupabase()) {
+    if (isOnline) {
       return supabase.auth.onAuthStateChange(callback);
     }
     return localDb.onAuthStateChange(callback);
