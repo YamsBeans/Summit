@@ -4,6 +4,7 @@ import { BarChart } from "react-native-gifted-charts";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits } from "@/utils/units";
 import { SessionWithMeta } from "./WorkoutHistoryList";
+import { niceAxisMax } from "@/utils/chartScale";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,8 +43,12 @@ function durationMinutes(session: SessionWithMeta): number {
     const [h, m, s] = t.split(":").map(Number);
     return h * 3600 + m * 60 + (s ?? 0);
   };
-  return Math.max(0, (toSec(session.end_time) - toSec(session.start_time)) / 60);
+  let secs = toSec(session.end_time) - toSec(session.start_time);
+  // A workout that ran past midnight ends "before" it started.
+  if (secs < 0) secs += 24 * 3600;
+  return Math.max(0, secs / 60);
 }
+
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -71,8 +76,10 @@ export default function WorkoutChart({ sessions }: Props) {
   );
 
   const { barData, periodTotal, weekLabels } = useMemo(() => {
+    // The last `numWeeks` weeks, ending with this one. (It used to centre on
+    // today, so half the chart was empty future weeks.)
     const nowSunday = weekSunday(new Date());
-    const leftWeeks = Math.floor((numWeeks - 1) / 2);
+    const leftWeeks = numWeeks - 1;
 
     const weeks: Date[] = [];
     for (let i = -leftWeeks; i < numWeeks - leftWeeks; i++) {
@@ -92,7 +99,7 @@ export default function WorkoutChart({ sessions }: Props) {
       weekMap.set(key, (weekMap.get(key) ?? 0) + val);
     }
 
-    const labelEvery = 2;
+    const labelEvery = 3;
 
     // Full human-readable label for every week (used in header when bar is selected)
     const weekLabels: string[] = [];
@@ -105,7 +112,11 @@ export default function WorkoutChart({ sessions }: Props) {
       weekLabels.push(shortLabel(weekDate));
       return {
         value,
-        label: i % labelEvery === 0 ? shortLabel(weekDate) : "",
+        // Count back from the current week, skipping the last bar, whose
+        // label would be clipped at the chart's right edge.
+        label: (weeks.length - 1 - i) % labelEvery === 1 ? shortLabel(weekDate) : "",
+        // Labels default to the bar's width, which truncated them to "Au…".
+        labelWidth: 44,
         // frontColor updated after selectedIndex is known — patched below
         frontColor: value > 0 ? colors.primary : colors.surfaceSecondary,
         onPress: () => {
@@ -130,7 +141,7 @@ export default function WorkoutChart({ sessions }: Props) {
     return { ...item, frontColor };
   });
 
-  const maxValue = Math.max(...barData.map((d) => d.value), 1);
+  const maxValue = niceAxisMax(Math.max(...barData.map((d) => d.value), 0));
 
   const metricLabels: Record<Metric, string> = {
     reps: "Reps",
@@ -150,7 +161,7 @@ export default function WorkoutChart({ sessions }: Props) {
   const displayLabel =
     selectedIndex !== null
       ? `week of ${weekLabels[selectedIndex]}`
-      : "this period";
+      : "last 3 months";
 
   return (
     <View style={[styles.card, { backgroundColor: colors.surface }]}>

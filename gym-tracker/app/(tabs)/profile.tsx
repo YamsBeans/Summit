@@ -445,7 +445,7 @@ export default function ProfileScreen() {
           {longestStreak > 0 && (
             <View style={styles.bestStreakRow}>
               <Ionicons name="trophy-outline" size={14} color={colors.primary} />
-              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} days</Text>
+              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} {longestStreak === 1 ? "day" : "days"}</Text>
             </View>
           )}
         </View>
