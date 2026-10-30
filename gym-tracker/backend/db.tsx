@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Linking from "expo-linking";
+import { Platform } from "react-native";
 import { supabase } from "./supabaseClient";
 import { logError } from "@/utils/log";
 import { localDb } from "./localDb";
@@ -32,11 +33,34 @@ const shouldUseSupabase = () => isOnline && networkStatus.isConnected;
 
 const OFFLINE_AUTH_ERROR = { message: "You're offline. Connect to the internet to sign in or create an account." };
 
-// The signed-in Supabase user, read from the session persisted on the device.
-// Needs no network, so it keeps working in a basement gym.
+// The session as saved on the device, read straight from auth storage.
+// supabase.auth.getSession() returns null once the access token has expired
+// and the refresh can't reach the server, which is the normal state an hour
+// into being offline. The saved session is still the user's, so read it
+// directly. It's removed on sign-out, so this never resurrects a signed-out
+// user.
+async function persistedSession(): Promise<any | null> {
+  try {
+    const key: string | undefined = (supabase.auth as any).storageKey;
+    if (!key) return null;
+    const raw = Platform.OS === "web"
+      ? (typeof localStorage !== "undefined" ? localStorage.getItem(key) : null)
+      : await AsyncStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const session = parsed?.currentSession ?? parsed;
+    return session?.user ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+// The signed-in Supabase user without a network round trip, so it keeps
+// working in a basement gym.
 async function sessionUser() {
   const { data } = await supabase.auth.getSession();
-  return data?.session?.user ?? null;
+  if (data?.session?.user) return data.session.user;
+  return (await persistedSession())?.user ?? null;
 }
 
 export const db = {
@@ -129,7 +153,11 @@ export const db = {
   // "Not authenticated" when starting a workout without signal.
   getSession: async () => {
     if (isOnline) {
-      return supabase.auth.getSession();
+      const res = await supabase.auth.getSession();
+      if (res?.data?.session) return res;
+      if (networkStatus.isConnected && !isNetworkError(res?.error)) return res;
+      const saved = await persistedSession();
+      return saved ? { data: { session: saved }, error: null } : res;
     }
     return localDb.getSession();
   },

@@ -579,7 +579,7 @@ export const localDb = {
 
     const cardioSets = localSessionExerciseSets.filter(
       (s) => cardioExerciseIds.has(s.session_exercise_id) && s.completed &&
-        (s.duration_seconds != null || s.distance_meters != null)
+        (!!s.duration_seconds || !!s.distance_meters)
     );
 
     let totalDistanceMeters = 0;

@@ -15,7 +15,18 @@ export const REST_CHOICES = [0, 30, 45, 60, 90, 120, 150, 180, 240, 300];
 type RestMap = Record<string, number>;
 
 let cache: RestMap = {};
-let loaded = false;
+let loadPromise: Promise<void> | null = null;
+
+// One shared load. setRestFor waits for it, so an early change can't write
+// over the saved overrides with an empty map.
+function ensureLoaded(): Promise<void> {
+  if (!loadPromise) {
+    loadPromise = AsyncStorage.getItem(STORAGE_KEY)
+      .then((raw) => { broadcast({ ...parseRestMap(raw), ...cache }); })
+      .catch(() => {});
+  }
+  return loadPromise;
+}
 const listeners = new Set<(m: RestMap) => void>();
 
 function broadcast(m: RestMap) {
@@ -58,17 +69,13 @@ export function useExerciseRest() {
 
   useEffect(() => {
     listeners.add(setMap);
-    if (!loaded) {
-      AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-        loaded = true;
-        broadcast(parseRestMap(raw));
-      }).catch(() => {});
-    }
+    ensureLoaded();
     return () => { listeners.delete(setMap); };
   }, []);
 
   /** Set an override, or pass null to go back to the default. */
   const setRestFor = useCallback(async (exerciseId: string, secs: number | null) => {
+    await ensureLoaded();
     const next = { ...cache };
     if (secs == null) delete next[exerciseId];
     else next[exerciseId] = secs;

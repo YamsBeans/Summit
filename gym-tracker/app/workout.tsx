@@ -437,6 +437,9 @@ export default function WorkoutScreen() {
       }
     } catch (e) { logError("finishWorkout.prDetection", e); }
     if (summaryPRs.length > 0) notifySuccess();
+    // iOS won't present the summary while the "Finish Workout?" dialog is
+    // still fading out, and the summary is the only way off this screen.
+    if (Platform.OS === "ios") await new Promise((r) => setTimeout(r, 400));
     setSummary(buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds));
   }, 1000);
 
@@ -564,16 +567,19 @@ export default function WorkoutScreen() {
     // so last session's numbers show as placeholders / tap-to-fill.
     const prev = prevSets[exercise.id] ?? await loadPrevSetsFor(exercise.id);
     const template = prev.length > 0 ? prev.slice(0, 10) : [{ is_warmup: false }];
-    for (let i = 0; i < template.length; i++) {
-      const { error: setErr } = await db.insertSessionExerciseSet({
+    // In parallel, so a slow connection doesn't hold the press guard (and
+    // swallow the next "Add Exercise" tap) for one round trip per set.
+    const results = await Promise.all(template.map((t: any, i: number) =>
+      db.insertSessionExerciseSet({
         session_exercise_id: newEx.session_exercise_id,
         set_number: i + 1,
         weight: null,
         reps: null,
-        is_warmup: template[i].is_warmup === true,
-      });
-      if (setErr) { setError(setErr.message); break; }
-    }
+        is_warmup: t.is_warmup === true,
+      })
+    ));
+    const setErr = results.find((r: any) => r.error)?.error;
+    if (setErr) setError(setErr.message);
     reloadSetsForExercise(newEx.session_exercise_id);
   });
 

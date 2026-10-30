@@ -5,11 +5,13 @@ const mockGetUser = jest.fn();
 const mockSignOut = jest.fn();
 const mockSignIn = jest.fn();
 const mockNet = { isConnected: true };
+const mockGetItem = jest.fn((_key: string): Promise<string | null> => Promise.resolve(null));
 const mockLocal = { getUser: jest.fn(), getSession: jest.fn(), signIn: jest.fn(), signUp: jest.fn(), signOut: jest.fn() };
 
 jest.mock("../backend/supabaseClient", () => ({
   supabase: {
     auth: {
+      storageKey: "sb-test-auth-token",
       getSession: mockGetSession,
       getUser: mockGetUser,
       signOut: mockSignOut,
@@ -20,7 +22,7 @@ jest.mock("../backend/supabaseClient", () => ({
 jest.mock("../backend/networkStatus", () => ({ networkStatus: mockNet }));
 jest.mock("../backend/localDb", () => ({ localDb: mockLocal }));
 jest.mock("@react-native-async-storage/async-storage", () => ({
-  getItem: jest.fn(() => Promise.resolve(null)),
+  getItem: (...args: any[]) => mockGetItem(...args),
   setItem: jest.fn(),
   removeItem: jest.fn(),
   getAllKeys: jest.fn(() => Promise.resolve([])),
@@ -70,6 +72,24 @@ describe("auth while offline (Supabase configured)", () => {
     const { data } = await db.getSession();
     expect(data.session.user).toEqual(user);
     expect(mockLocal.getSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the user signed in offline after the access token expired", async () => {
+    mockNet.isConnected = false;
+    // auth-js returns no session when it can't refresh an expired token.
+    mockGetSession.mockResolvedValue({ data: { session: null }, error: { message: "Failed to fetch" } });
+    mockGetItem.mockImplementation((key: string) =>
+      Promise.resolve(key === "sb-test-auth-token" ? JSON.stringify({ access_token: "old", expires_at: 1, user }) : null));
+    expect((await db.getSession()).data.session.user).toEqual(user);
+    expect((await db.getUser()).data.user).toEqual(user);
+  });
+
+  it("stays signed out when nothing is saved", async () => {
+    mockNet.isConnected = false;
+    mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+    mockGetItem.mockResolvedValue(null);
+    expect((await db.getSession()).data.session).toBeNull();
+    expect((await db.getUser()).data.user).toBeNull();
   });
 
   it("does not create a local-only account when signing in offline", async () => {

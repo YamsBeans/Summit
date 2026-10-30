@@ -48,7 +48,8 @@ export async function clearReadCache(): Promise<void> {
  */
 export function isNetworkError(err: any): boolean {
   if (!err) return false;
-  if (err instanceof TypeError) return true;
+  // Not every TypeError: a real bug ("cannot read property of undefined")
+  // must not be mistaken for no signal and hidden behind stale cache.
   const text = `${err.name ?? ""} ${err.message ?? ""} ${err.details ?? ""}`;
   return /network request failed|failed to fetch|fetch failed|networkerror|load failed|network error|timed? ?out|aborterror|ECONNREFUSED|ENOTFOUND|ERR_INTERNET_DISCONNECTED/i.test(text);
 }
