@@ -7,6 +7,7 @@ import { showAlert } from "@/utils/alert";
 import ConfirmModal from "@/components/ConfirmModal";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 import WorkoutSummaryModal from "@/components/WorkoutSummaryModal";
+import { useExerciseRest, resolveRest, formatRest, REST_CHOICES } from "@/utils/exerciseRest";
 import { buildWorkoutSummary, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
@@ -92,10 +93,22 @@ export default function WorkoutScreen() {
   const restRemainingRef = useRef(0);
   restRemainingRef.current = restTimer.remaining;
 
-  const startRestTimer = useCallback(() => {
-    startRest();
+  // Per-exercise rest overrides (Hevy-style). Read through refs so the
+  // callback handed to every set row stays stable.
+  const { restOverrides, setRestFor } = useExerciseRest();
+  const restOverridesRef = useRef(restOverrides);
+  restOverridesRef.current = restOverrides;
+  const exercisesRef = useRef<any[]>([]);
+  exercisesRef.current = exercises;
+  const [restPickerFor, setRestPickerFor] = useState<any>(null);
+
+  const startRestTimer = useCallback((sessionExerciseId?: number) => {
+    const ex = exercisesRef.current.find((e) => e.session_exercise_id === sessionExerciseId);
+    const secs = resolveRest(restOverridesRef.current, ex?.exercise_id, restDuration);
+    if (secs <= 0) return; // rest timer turned off for this exercise
+    startRest(secs);
     AsyncStorage.getItem("@gym_tracker_notifications").then((val) => {
-      if (val === "true") scheduleRestDoneNotification(restDuration);
+      if (val === "true") scheduleRestDoneNotification(secs);
     });
   }, [startRest, restDuration]);
 
@@ -678,7 +691,19 @@ export default function WorkoutScreen() {
                     {ex.exercise_name}
                   </Text>
                 </Pressable>
-                <Pressable onPress={() => openExerciseOptions(ex)} hitSlop={8}>
+                {restOverrides[ex.exercise_id] != null && (
+                  <Pressable
+                    onPress={() => setRestPickerFor(ex)}
+                    hitSlop={6}
+                    style={[styles.restPill, { backgroundColor: colors.surfaceSecondary }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Rest timer ${formatRest(restOverrides[ex.exercise_id])}. Change`}
+                  >
+                    <Ionicons name="timer-outline" size={13} color={colors.textSecondary} />
+                    <Text style={[styles.restPillText, { color: colors.textSecondary }]}>{formatRest(restOverrides[ex.exercise_id])}</Text>
+                  </Pressable>
+                )}
+                <Pressable onPress={() => openExerciseOptions(ex)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`${ex.exercise_name} options`}>
                   <Ionicons name="ellipsis-horizontal" size={20} color={colors.textTertiary} />
                 </Pressable>
               </View>
@@ -852,6 +877,24 @@ export default function WorkoutScreen() {
               <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Replace Exercise</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </Pressable>
+            <Pressable
+              style={[modalStyles.option, { borderBottomColor: colors.border }]}
+              onPress={() => {
+                const ex = selectedExerciseForOptions;
+                closeExerciseOptions();
+                // Let the options sheet close before opening the next one (iOS).
+                setTimeout(() => setRestPickerFor(ex), Platform.OS === "ios" ? 400 : 0);
+              }}
+            >
+              <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="timer-outline" size={16} color={colors.primary} />
+              </View>
+              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Rest Timer</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 14, fontWeight: "600" }}>
+                {formatRest(resolveRest(restOverrides, selectedExerciseForOptions?.exercise_id, restDuration))}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+            </Pressable>
             <Pressable style={modalStyles.option} onPress={handleRemoveExercise}>
               <View style={[modalStyles.iconWrap, { backgroundColor: colors.dangerLight }]}>
                 <Ionicons name="trash-outline" size={16} color={colors.danger} />
@@ -866,6 +909,53 @@ export default function WorkoutScreen() {
               <Text style={[modalStyles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
             </Pressable>
           </View>
+        </Pressable>
+      </Modal>
+
+      {/* Per-exercise rest timer picker */}
+      <Modal visible={restPickerFor != null} transparent animationType="slide" onRequestClose={() => setRestPickerFor(null)}>
+        <Pressable style={modalStyles.overlay} onPress={() => setRestPickerFor(null)}>
+          <Pressable style={[modalStyles.sheet, { backgroundColor: colors.surface }]} onPress={() => {}}>
+            <View style={[modalStyles.handle, { backgroundColor: colors.border }]} />
+            <Text style={[modalStyles.sheetTitle, { color: colors.textSecondary }]} numberOfLines={1}>
+              Rest Timer · {restPickerFor?.exercise_name}
+            </Text>
+            <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 14, textAlign: "center" }}>
+              Used after each completed set of this exercise, in every workout.
+            </Text>
+            <View style={styles.restGrid}>
+              {[null, ...REST_CHOICES].map((secs) => {
+                const current = restPickerFor ? restOverrides[restPickerFor.exercise_id] : undefined;
+                const selected = secs == null ? current == null : current === secs;
+                return (
+                  <Pressable
+                    key={secs ?? "default"}
+                    onPress={() => {
+                      if (restPickerFor) setRestFor(restPickerFor.exercise_id, secs);
+                      setRestPickerFor(null);
+                    }}
+                    style={[
+                      styles.restChoice,
+                      { borderColor: selected ? colors.primary : colors.border, backgroundColor: selected ? colors.primaryLight : "transparent" },
+                      secs == null && styles.restChoiceWide,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                  >
+                    <Text style={{ color: selected ? colors.primary : colors.text, fontSize: 15, fontWeight: "700" }}>
+                      {secs == null ? `Default (${formatRest(restDuration)})` : formatRest(secs)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Pressable
+              style={[modalStyles.cancelBtn, { backgroundColor: colors.surfaceSecondary }]}
+              onPress={() => setRestPickerFor(null)}
+            >
+              <Text style={[modalStyles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
+            </Pressable>
+          </Pressable>
         </Pressable>
       </Modal>
 
@@ -949,7 +1039,7 @@ const SetRow = memo(function SetRow({
   onUpdate: (id: number, exId: number, updates: any) => void;
   onSetNumberPress: (set: any, sessionExerciseId: number) => void;
   prevSet?: any;
-  onComplete?: () => void;
+  onComplete?: (sessionExerciseId: number) => void;
 }) {
   const { colors } = useTheme();
   // Weights are stored in lbs; inputs show and accept the user's display unit.
@@ -1007,7 +1097,7 @@ const SetRow = memo(function SetRow({
     onUpdate(set.session_set_id, sessionExerciseId, updates);
     if (completing) {
       tapLight();
-      onComplete?.();
+      onComplete?.(sessionExerciseId);
     }
   }, [weight, reps, set, hasPrev, prevSet, toDisplay, weightUpdate, sessionExerciseId, onUpdate, onComplete]);
 
@@ -1206,6 +1296,17 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   exerciseNameBtn: { flex: 1, marginRight: 8 },
+  restPill: {
+    flexDirection: "row", alignItems: "center", gap: 3,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, marginRight: 10,
+  },
+  restPillText: { fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  restGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, width: "100%", marginBottom: 4 },
+  restChoice: {
+    flexBasis: "18%", flexGrow: 1, alignItems: "center", paddingVertical: 12,
+    borderRadius: 10, borderWidth: 1,
+  },
+  restChoiceWide: { flexBasis: "100%" },
   exerciseName: { fontSize: 16, fontWeight: "700" },
 
   // Column headers
