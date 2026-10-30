@@ -15,7 +15,7 @@ import {
   clearSessionOrigin,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
-import { cachedRead, clearReadCache, isNetworkError } from "./readCache";
+import { cachedRead, clearReadCache, isNetworkError, writeCache } from "./readCache";
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -832,8 +832,66 @@ export const db = {
         await supabase.from("session_exercise_sets").insert(setInserts);
       }
 
+      // Keep the offline copy of this routine fresh so it can be started
+      // without signal next time (see the offline path below).
+      await writeCache(`routineExercises:${routineId}`, exercises ?? []);
+      for (const ex of exercises ?? []) {
+        await writeCache(
+          `routineExerciseSets:${ex.routine_exercise_id}`,
+          (allTemplateSets ?? []).filter((ts: any) => ts.routine_exercise_id === ex.routine_exercise_id),
+        );
+      }
+
       await markSessionOrigin(session.session_id, false);
       return { data: session, error: null };
+    }
+    // Offline with Supabase configured: the routine only exists in the read
+    // cache (the in-memory local store is empty), so build the session from
+    // there. This used to fail with "Routine not found" even though the
+    // routine was right there on the home screen.
+    if (isOnline) {
+      const [{ data: routines }, { data: routineExercises }] = await Promise.all([
+        db.getRoutines(),
+        db.getRoutineExercises(routineId),
+      ]);
+      const routine = (routines ?? []).find((r: any) => r.routine_id === routineId);
+      if (routine) {
+        const { data: session, error } = await localDb.startWorkoutSession({
+          routine_id: routineId,
+          session_name: routine.routine_name,
+          user_id: userId,
+        });
+        if (error || !session) return { data: null, error: error ?? { message: "Couldn't start the workout" } };
+        const sorted = [...(routineExercises ?? [])].sort((a: any, b: any) => a.exercise_order - b.exercise_order);
+        for (const ex of sorted) {
+          const { data: sessionEx } = await localDb.insertSessionExercise({
+            session_id: session.session_id,
+            exercise_id: ex.exercise_id,
+            exercise_name: ex.exercise_name,
+            exercise_order: ex.exercise_order,
+            notes: null,
+            exercise_type: ex.exercise_type ?? "strength",
+          });
+          const { data: templateSets } = await db.getRoutineExerciseSets(ex.routine_exercise_id);
+          const sets = [...(templateSets ?? [])].sort((a: any, b: any) => a.set_number - b.set_number);
+          // No cached template (routine never opened online): start with one set.
+          const rows = sets.length > 0 ? sets : [{ set_number: 1, is_warmup: false }];
+          for (const ts of rows as any[]) {
+            await localDb.insertSessionExerciseSet({
+              session_exercise_id: sessionEx.session_exercise_id,
+              set_number: ts.set_number,
+              weight: ts.target_weight ?? null,
+              reps: ts.target_reps ?? null,
+              is_warmup: !!ts.is_warmup,
+              duration_seconds: ts.target_duration_seconds ?? null,
+              distance_meters: ts.target_distance_meters ?? null,
+              effort_level: ts.target_effort_level ?? null,
+            });
+          }
+        }
+        await markSessionOrigin(session.session_id, true);
+        return { data: session, error: null };
+      }
     }
     const result = await localDb.startWorkoutFromRoutine(routineId, userId);
     if (result.data) await markSessionOrigin(result.data.session_id, true);
