@@ -5,6 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { LineChart } from "react-native-gifted-charts";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useUnits, formatVolume } from "@/utils/units";
 import { bestOneRepMax, estimateOneRepMax } from "@/utils/oneRepMax";
 import CardioExerciseDetail from "@/components/CardioExerciseDetail";
@@ -32,6 +33,7 @@ function maxWeight(sets: HistorySet[]) {
 }
 
 export default function ExerciseDetailScreen() {
+  const headerTop = useHeaderTop();
   const { exerciseId, exerciseName, exerciseType } = useLocalSearchParams<{ exerciseId: string; exerciseName: string; exerciseType?: string }>();
   const router = useRouter();
   const { colors } = useTheme();
@@ -128,7 +130,7 @@ export default function ExerciseDetailScreen() {
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Header */}
       <View style={{
-        flexDirection: "row", alignItems: "center", paddingTop: 60,
+        flexDirection: "row", alignItems: "center", paddingTop: headerTop,
         paddingHorizontal: 16, paddingBottom: 14,
         borderBottomWidth: 1, borderBottomColor: colors.border,
         backgroundColor: colors.headerBackground,

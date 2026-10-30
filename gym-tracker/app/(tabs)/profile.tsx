@@ -5,6 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db, isOnline } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
@@ -108,6 +109,7 @@ type AllStats = {
 };
 
 export default function ProfileScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const { colors } = useTheme();
   const { toDisplay, label: unitLabel } = useUnits();
@@ -358,7 +360,7 @@ export default function ProfileScreen() {
   const listHeader = (
     <>
       {/* ── Top bar ── */}
-      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
+      <View style={[styles.topBar, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Text style={[styles.username, { color: colors.text }]}>
           {profile?.username ?? "Profile"}
         </Text>

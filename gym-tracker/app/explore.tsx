@@ -7,6 +7,7 @@ import { showAlert } from "@/utils/alert";
 import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { db } from "@/backend/db";
 import { PROGRAMS, Program, ProgramRoutine } from "@/utils/programsData";
 
@@ -34,6 +35,7 @@ const EQUIP_LABELS: Record<EquipFilter, string> = {
 };
 
 export default function ExploreScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const { colors } = useTheme();
 
@@ -123,7 +125,7 @@ export default function ExploreScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Pressable onPress={() => router.back()} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </Pressable>
@@ -229,11 +231,12 @@ function ProgramDetail({
   const levelLabel = program.level === 'beginner' ? 'Beginner' : 'Intermediate';
   const goalLabel = program.goal === 'hypertrophy' ? 'Muscle' : program.goal === 'strength' ? 'Strength' : 'Weight Loss';
   const equipLabel = program.equipment === 'gym' ? 'Gym Equipment' : 'Equipment-Free';
+  const headerTop = useHeaderTop();
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Pressable onPress={onBack} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </Pressable>

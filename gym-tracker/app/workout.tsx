@@ -15,6 +15,7 @@ import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import RestTimerBanner from "@/components/RestTimerBanner";
@@ -30,6 +31,7 @@ import CardioSetRow from "@/components/CardioSetRow";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
 export default function WorkoutScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const navigation = useNavigation();
   const scrollRef = useRef<ScrollView>(null);
@@ -613,7 +615,7 @@ export default function WorkoutScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       {/* ── Sticky header ── */}
-      <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: headerTop, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
         <Pressable onPress={handleMinimize} hitSlop={8} style={styles.headerBack} accessibilityRole="button" accessibilityLabel="Minimize workout">
           <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
         </Pressable>

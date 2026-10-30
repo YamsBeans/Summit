@@ -7,6 +7,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db, isOnline } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ConfirmModal from "@/components/ConfirmModal";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
@@ -24,6 +25,7 @@ function sortRoutines(list: any[]) {
 }
 
 export default function WorkoutsScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
   const hasLoadedRef = useRef(false);
@@ -187,7 +189,7 @@ export default function WorkoutsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Page header ── */}
-        <View style={[styles.pageHeader, { borderBottomColor: colors.border }]}>
+        <View style={[styles.pageHeader, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
           <Text style={[styles.pageTitle, { color: colors.text }]}>Workout</Text>
           <View style={styles.headerRight}>
             {!isOnline && (

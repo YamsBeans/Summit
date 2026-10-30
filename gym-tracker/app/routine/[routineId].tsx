@@ -7,6 +7,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import ConfirmModal from "@/components/ConfirmModal";
@@ -17,6 +18,7 @@ import { digitsToSeconds, formatDigits, formatDistance, formatDuration, kmToMete
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function RoutineScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const {
     routineId: routineIdParam,
@@ -266,7 +268,7 @@ export default function RoutineScreen() {
     >
       {/* ── Header ── */}
       {isEditing ? (
-        <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+        <View style={[styles.header, { paddingTop: headerTop, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
           <Pressable onPress={exitEditMode} hitSlop={8} style={styles.headerBack}>
             <Text style={[styles.cancelText, { color: colors.primary }]}>Cancel</Text>
           </Pressable>
@@ -281,7 +283,7 @@ export default function RoutineScreen() {
           </View>
         </View>
       ) : (
-        <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+        <View style={[styles.header, { paddingTop: headerTop, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
           <Pressable onPress={() => router.back()} hitSlop={8} style={styles.headerBack}>
             <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
           </Pressable>

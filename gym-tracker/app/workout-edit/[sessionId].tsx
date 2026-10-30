@@ -17,6 +17,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 import ExercisePicker from "@/components/ExercisePicker";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
@@ -48,6 +49,7 @@ type EditExercise = {
 };
 
 export default function WorkoutEditScreen() {
+  const headerTop = useHeaderTop();
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
   const router = useRouter();
   const { colors } = useTheme();
@@ -376,7 +378,7 @@ export default function WorkoutEditScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.background }]}>
+      <View style={[styles.header, { paddingTop: headerTop, borderBottomColor: colors.border, backgroundColor: colors.background }]}>
         <Pressable
           onPress={() => router.back()}
           hitSlop={8}
