@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits, UnitSystem } from "@/utils/units";
+import { useUnits, useDistanceUnit, UnitSystem } from "@/utils/units";
 import { useRestTimer } from "@/utils/useRestTimer";
 import { requestNotificationPermissions } from "@/utils/notifications";
 import { ModalShell, SettingItem, SettingSection } from "@/components/SettingsUI";
@@ -51,20 +51,7 @@ function AppearanceModal({ visible, onClose }: { visible: boolean; onClose: () =
 function UnitsModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { colors } = useTheme();
   const { unit, saveUnit } = useUnits();
-  const [distanceUnit, setDistanceUnit] = useState<"km" | "mi">("km");
-
-  useEffect(() => {
-    if (visible) {
-      AsyncStorage.getItem("@gym_tracker_distance_unit").then((val) => {
-        setDistanceUnit(val === "mi" ? "mi" : "km");
-      });
-    }
-  }, [visible]);
-
-  const saveDistanceUnit = async (u: "km" | "mi") => {
-    setDistanceUnit(u);
-    await AsyncStorage.setItem("@gym_tracker_distance_unit", u);
-  };
+  const { distanceUnit, saveDistanceUnit } = useDistanceUnit();
 
   const weightOptions: { label: string; value: UnitSystem; icon: string }[] = [
     { label: "Pounds (lbs)", value: "lbs", icon: "🇺🇸" },

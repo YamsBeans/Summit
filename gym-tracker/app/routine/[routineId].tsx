@@ -10,9 +10,9 @@ import { useTheme } from "@/theme/ThemeContext";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import ConfirmModal from "@/components/ConfirmModal";
-import { useUnits } from "@/utils/units";
+import { useUnits, useDistanceUnit } from "@/utils/units";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
-import { digitsToSeconds, formatDigits, formatDistance, formatDuration, metersToMiles, milesToMeters, secondsToDigits } from "@/utils/cardioUtils";
+import { digitsToSeconds, formatDigits, formatDistance, formatDuration, kmToMeters, metersToDisplay, milesToMeters, secondsToDigits } from "@/utils/cardioUtils";
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -27,6 +27,7 @@ export default function RoutineScreen() {
   const routineId = parseInt(routineIdParam, 10);
   const { colors } = useTheme();
   const { label: unitLabel } = useUnits();
+  const { distanceUnit } = useDistanceUnit();
 
   const scrollRef = useRef<ScrollView>(null);
 
@@ -394,7 +395,7 @@ export default function RoutineScreen() {
                 <Text style={[styles.colHeader, styles.colSet, { color: colors.textTertiary }]}>SET</Text>
                 {isCardio ? (
                   <>
-                    <Text style={[styles.colHeader, styles.colWeight, { color: colors.textTertiary }]}>DIST (mi)</Text>
+                    <Text style={[styles.colHeader, styles.colWeight, { color: colors.textTertiary }]}>DIST ({distanceUnit})</Text>
                     <Text style={[styles.colHeader, styles.colReps, { color: colors.textTertiary }]}>DURATION</Text>
                   </>
                 ) : (
@@ -618,7 +619,8 @@ const ViewSetRow = memo(function ViewSetRow({ set, colors }: { set: any; colors:
 // ─── CardioViewSetRow (read-only) ────────────────────────────────────────────
 
 const CardioViewSetRow = memo(function CardioViewSetRow({ set, colors }: { set: any; colors: any }) {
-  const distLabel = set.target_distance_meters != null ? formatDistance(set.target_distance_meters, 'mi') : "—";
+  const { distanceUnit } = useDistanceUnit();
+  const distLabel = set.target_distance_meters != null ? formatDistance(set.target_distance_meters, distanceUnit) : "—";
   const durLabel = set.target_duration_seconds != null ? formatDuration(set.target_duration_seconds) : "—";
   return (
     <View style={[rowStyles.row, { backgroundColor: "transparent", borderBottomColor: colors.border }]}>
@@ -646,28 +648,35 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
   onDelete: (id: number, exId: number) => void;
   colors: any;
 }) {
-  const [distance, setDistance] = useState(
-    set.target_distance_meters != null
-      ? String(parseFloat(metersToMiles(set.target_distance_meters).toFixed(3)))
-      : ""
-  );
+  // Targets are stored in meters but shown in the user's km/mi setting (this
+  // was hard-coded to miles even for km users).
+  const { distanceUnit } = useDistanceUnit();
+  const shownDistance = set.target_distance_meters != null
+    ? String(parseFloat(metersToDisplay(set.target_distance_meters, distanceUnit).toFixed(2)))
+    : "";
+  const [distance, setDistance] = useState(shownDistance);
   const [digitBuffer, setDigitBuffer] = useState(() => secondsToDigits(set.target_duration_seconds));
 
   useEffect(() => {
-    setDistance(
-      set.target_distance_meters != null
-        ? String(parseFloat(metersToMiles(set.target_distance_meters).toFixed(3)))
-        : ""
-    );
+    setDistance(shownDistance);
+  }, [shownDistance]);
+
+  useEffect(() => {
     setDigitBuffer(secondsToDigits(set.target_duration_seconds));
-  }, [set.target_duration_seconds, set.target_distance_meters]);
+  }, [set.target_duration_seconds]);
 
   const commitDistance = useCallback(() => {
-    const meters = distance ? milesToMeters(parseFloat(distance)) : null;
+    // Only write when the visible value changed, so a km↔mi round trip
+    // doesn't nudge the stored meters on every blur.
+    if (distance.trim() === shownDistance) return;
+    const val = parseDecimalInput(distance);
+    const meters = val == null || val === 0 ? null : distanceUnit === "mi" ? milesToMeters(val) : kmToMeters(val);
     if (meters !== set.target_distance_meters) {
       onUpdate(set.routine_set_id, routineExerciseId, { target_distance_meters: meters });
+    } else {
+      setDistance(shownDistance);
     }
-  }, [distance, set.target_distance_meters, set.routine_set_id, routineExerciseId, onUpdate]);
+  }, [distance, shownDistance, distanceUnit, set.target_distance_meters, set.routine_set_id, routineExerciseId, onUpdate]);
 
   const handleDurationChange = useCallback((text: string) => {
     setDigitBuffer(text.replace(/\D/g, "").slice(0, 6));
@@ -691,7 +700,7 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
         onChangeText={setDistance}
         onBlur={commitDistance}
         keyboardType="decimal-pad"
-        placeholder="mi"
+        placeholder={distanceUnit}
         placeholderTextColor={colors.textTertiary}
         returnKeyType="done"
       />

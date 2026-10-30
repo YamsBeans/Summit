@@ -5,7 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db, isOnline } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits, formatVolume } from "@/utils/units";
+import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
@@ -124,7 +124,7 @@ export default function ProfileScreen() {
   const [selectedStats, setSelectedStats] = useState<StatId[]>(DEFAULT_STATS);
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'strength' | 'cardio'>('all');
-  const [distanceUnit, setDistanceUnit] = useState<'km' | 'mi'>('km');
+  const { distanceUnit } = useDistanceUnit();
   const [cardioStats, setCardioStats] = useState<{
     totalDistanceMeters: number;
     totalDurationSeconds: number;
@@ -148,11 +148,6 @@ export default function ProfileScreen() {
       setLoading(true);
     }
     setError(null);
-
-    // Load distance unit preference
-    AsyncStorage.getItem('@gym_tracker_distance_unit').then((val) => {
-      if (val === 'mi') setDistanceUnit('mi');
-    });
 
     // Load saved stat selection in parallel with the DB fetch
     const savedStatsPromise = AsyncStorage.getItem(STATS_STORAGE_KEY).then((val) => {

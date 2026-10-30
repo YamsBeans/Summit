@@ -62,3 +62,39 @@ export function useUnits() {
 
   return { unit, saveUnit, toDisplay, toStorage, label: unit };
 }
+
+// ─── Distance unit (cardio) ──────────────────────────────────────────────────
+// Same pattern as the weight unit: one cached value shared by every screen,
+// so changing it in Settings updates the workout, routine and profile screens
+// that are already mounted (they used to read it once and keep a stale copy).
+
+export type DistanceUnit = "km" | "mi";
+const DISTANCE_KEY = "@gym_tracker_distance_unit";
+let cachedDistance: DistanceUnit = "km";
+const distanceListeners = new Set<(u: DistanceUnit) => void>();
+
+function broadcastDistance(u: DistanceUnit) {
+  cachedDistance = u;
+  distanceListeners.forEach((fn) => fn(u));
+}
+
+export function useDistanceUnit() {
+  const [distanceUnit, setDistanceUnit] = useState<DistanceUnit>(cachedDistance);
+
+  useEffect(() => {
+    distanceListeners.add(setDistanceUnit);
+    AsyncStorage.getItem(DISTANCE_KEY).then((val) => {
+      const u: DistanceUnit = val === "mi" ? "mi" : "km";
+      if (u !== cachedDistance) broadcastDistance(u);
+      else setDistanceUnit(u);
+    }).catch(() => {});
+    return () => { distanceListeners.delete(setDistanceUnit); };
+  }, []);
+
+  const saveDistanceUnit = useCallback(async (u: DistanceUnit) => {
+    broadcastDistance(u);
+    await AsyncStorage.setItem(DISTANCE_KEY, u);
+  }, []);
+
+  return { distanceUnit, saveDistanceUnit };
+}
