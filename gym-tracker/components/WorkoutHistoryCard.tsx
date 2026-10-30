@@ -161,6 +161,8 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
           style={({ pressed }) => [styles.menuBtn, pressed && { opacity: 0.4 }]}
           onPress={() => setMenuOpen(true)}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Workout options"
         >
           <Ionicons name="ellipsis-vertical" size={18} color={colors.textSecondary} />
         </Pressable>
