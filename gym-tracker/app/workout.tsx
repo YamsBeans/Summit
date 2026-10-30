@@ -7,6 +7,7 @@ import { showAlert } from "@/utils/alert";
 import ConfirmModal from "@/components/ConfirmModal";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 import WorkoutSummaryModal from "@/components/WorkoutSummaryModal";
+import PlateCalculatorModal from "@/components/PlateCalculatorModal";
 import { useExerciseRest, resolveRest, formatRest, REST_CHOICES } from "@/utils/exerciseRest";
 import { buildWorkoutSummary, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
@@ -75,6 +76,7 @@ export default function WorkoutScreen() {
   const [photoUploading, setPhotoUploading] = useState(false);
   const finishedSessionId = useRef<number | null>(null);
   const [summary, setSummary] = useState<WorkoutSummary | null>(null);
+  const [plateWeight, setPlateWeight] = useState<number | null | undefined>(undefined);
   const [setOptionsVisible, setSetOptionsVisible] = useState(false);
   const [selectedSet, setSelectedSet] = useState<any>(null);
   const [selectedExerciseId, setSelectedExerciseId] = useState<number | null>(null);
@@ -836,6 +838,26 @@ export default function WorkoutScreen() {
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </Pressable>
 
+            {exercises.find((e) => e.session_exercise_id === selectedExerciseId)?.exercise_type !== "cardio" && (
+              <Pressable
+                style={[modalStyles.option, { borderBottomColor: colors.border }]}
+                onPress={() => {
+                  const ex = exercises.find((e) => e.session_exercise_id === selectedExerciseId);
+                  const idx = (exerciseSets[selectedExerciseId ?? -1] ?? []).findIndex((s) => s.session_set_id === selectedSet?.session_set_id);
+                  const prev = ex ? prevSets[ex.exercise_id]?.[idx] : null;
+                  const w = toDisplay(selectedSet?.weight ?? prev?.weight ?? null);
+                  closeSetOptions();
+                  setTimeout(() => setPlateWeight(w), Platform.OS === "ios" ? 400 : 0);
+                }}
+              >
+                <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                  <Ionicons name="barbell-outline" size={16} color={colors.primary} />
+                </View>
+                <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Plate Calculator</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+              </Pressable>
+            )}
+
             <Pressable style={modalStyles.option} onPress={handleRemoveSet}>
               <View style={[modalStyles.iconWrap, { backgroundColor: colors.dangerLight }]}>
                 <Ionicons name="trash-outline" size={16} color={colors.danger} />
@@ -911,6 +933,12 @@ export default function WorkoutScreen() {
           </View>
         </Pressable>
       </Modal>
+
+      <PlateCalculatorModal
+        visible={plateWeight !== undefined}
+        initialWeight={plateWeight ?? null}
+        onClose={() => setPlateWeight(undefined)}
+      />
 
       {/* Per-exercise rest timer picker */}
       <Modal visible={restPickerFor != null} transparent animationType="slide" onRequestClose={() => setRestPickerFor(null)}>
