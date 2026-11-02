@@ -15,7 +15,7 @@ const mockLocal = {
 
 jest.mock("../backend/supabaseClient", () => ({ supabase: { auth: {} } }));
 jest.mock("../backend/networkStatus", () => ({ networkStatus: mockNet }));
-jest.mock("../backend/localDb", () => ({ localDb: mockLocal }));
+jest.mock("../backend/localDb", () => ({ localDb: mockLocal, isLocalId: (id: any) => typeof id === "number" && id >= 1e12, loadLocalDb: async () => {} }));
 jest.mock("@react-native-async-storage/async-storage", () => ({
   getItem: jest.fn((k: string) => Promise.resolve(mockStore[k] ?? null)),
   setItem: jest.fn((k: string, v: string) => { mockStore[k] = v; return Promise.resolve(); }),

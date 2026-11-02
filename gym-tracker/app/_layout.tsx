@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
-import { db } from "@/backend/db";
+import { db, initLocalStore } from "@/backend/db";
 import { ThemeProvider, useTheme } from "@/theme/ThemeContext";
 import { useSyncManager } from "@/utils/useSyncManager";
 import { ActiveWorkoutProvider, useActiveWorkout } from "@/utils/ActiveWorkoutContext";
@@ -34,10 +34,15 @@ function RootNav() {
   }, [userId]);
 
   useEffect(() => {
-    db.getSession().then((result: any) => {
-      setSession(result?.data?.session ?? null);
-      setLoading(false);
-    });
+    // Load the on-device store first: in local mode it holds the signed-in
+    // user, and offline it holds any unfinished workout.
+    initLocalStore()
+      .catch(() => {})
+      .then(() => db.getSession())
+      .then((result: any) => {
+        setSession(result?.data?.session ?? null);
+        setLoading(false);
+      });
 
     const result = db.onAuthStateChange(
       (_event: string, session: any) => {

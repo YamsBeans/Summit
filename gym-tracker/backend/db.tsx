@@ -3,7 +3,7 @@ import * as Linking from "expo-linking";
 import { Platform } from "react-native";
 import { supabase } from "./supabaseClient";
 import { logError } from "@/utils/log";
-import { localDb } from "./localDb";
+import { localDb, isLocalId, loadLocalDb } from "./localDb";
 import { networkStatus } from "./networkStatus";
 import {
   enqueuePendingSession,
@@ -30,6 +30,25 @@ const signedPhotoCache = new Map<string, { url: string; expiresAt: number }>();
 
 // shouldUseSupabase = Supabase configured AND network available (runtime check)
 const shouldUseSupabase = () => isOnline && networkStatus.isConnected;
+
+// A workout started with no signal lives in the on-device store (local IDs)
+// until it's finished and queued for sync. Calls about it must keep going
+// there after the signal comes back; sending its local IDs to Supabase used
+// to drop every set logged after reconnecting, and lost the whole workout
+// when it was finished online.
+const useSupabaseFor = (id: number | null | undefined) => shouldUseSupabase() && !isLocalId(id);
+
+/**
+ * Load the on-device store before the first screen reads it. In Supabase
+ * builds, finished offline workouts are already in the sync queue, so their
+ * local copies are dropped.
+ */
+export const initLocalStore = () => loadLocalDb({ pruneFinished: isOnline });
+
+// One sync at a time: the start-up sync, the reconnect listener and a
+// just-finished workout can all ask at once, and overlapping runs would
+// upload the same queued workout twice.
+let syncInFlight: Promise<{ synced: number; errors: number }> | null = null;
 
 const OFFLINE_AUTH_ERROR = { message: "You're offline. Connect to the internet to sign in or create an account." };
 
@@ -61,6 +80,86 @@ async function sessionUser() {
   const { data } = await supabase.auth.getSession();
   if (data?.session?.user) return data.session.user;
   return (await persistedSession())?.user ?? null;
+}
+
+// Undo a half-uploaded queued workout so the next sync retries it cleanly
+// instead of leaving an empty copy behind (and adding another each retry).
+async function rollbackSyncedSession(sessionId: number) {
+  try {
+    const { data: exs } = await supabase.from("session_exercises").select("session_exercise_id").eq("session_id", sessionId);
+    const ids = (exs ?? []).map((e: any) => e.session_exercise_id);
+    if (ids.length > 0) await supabase.from("session_exercise_sets").delete().in("session_exercise_id", ids);
+    await supabase.from("session_exercises").delete().eq("session_id", sessionId);
+    await supabase.from("workout_sessions").delete().eq("session_id", sessionId);
+  } catch (e) {
+    logError("rollbackSyncedSession", e);
+  }
+}
+
+async function runPendingSync(userId: string): Promise<{ synced: number; errors: number }> {
+  if (!isOnline) return { synced: 0, errors: 0 };
+  const queue = await getPendingQueue();
+  if (queue.length === 0) return { synced: 0, errors: 0 };
+
+  let synced = 0;
+  let errors = 0;
+  const successfulIndices: number[] = [];
+
+  for (let i = 0; i < queue.length; i++) {
+    const { session, exercises, sets } = queue[i];
+    try {
+      // Insert session row
+      const { data: newSession, error: sessionErr } = await supabase
+        .from("workout_sessions")
+        .insert({ ...session, user_id: userId })
+        .select()
+        .single();
+      if (sessionErr || !newSession) { errors++; continue; }
+
+      // Insert all exercises in one request, then map local→remote IDs.
+      let exIdMap: Record<number, number> = {};
+      if (exercises.length > 0) {
+        const { data: newExercises, error: exErr } = await supabase
+          .from("session_exercises")
+          .insert(exercises.map((ex) => ({
+            session_id: newSession.session_id,
+            exercise_id: ex.exercise_id,
+            exercise_name: ex.exercise_name,
+            exercise_order: ex.exercise_order,
+            notes: ex.notes,
+            exercise_type: ex.exercise_type,
+          })))
+          .select();
+        if (exErr || !newExercises) {
+        await rollbackSyncedSession(newSession.session_id);
+        errors++;
+        continue;
+      }
+        exIdMap = buildExerciseIdMap(exercises, newExercises);
+      }
+
+      // Insert sets with remapped exercise IDs
+      const setsToInsert = remapSetsForInsert(sets, exIdMap);
+      if (setsToInsert.length > 0) {
+        const { error: setErr } = await supabase.from("session_exercise_sets").insert(setsToInsert);
+        if (setErr) {
+          // This used to be ignored: the workout counted as synced with no
+          // sets, and the logged sets were gone for good.
+          await rollbackSyncedSession(newSession.session_id);
+          errors++;
+          continue;
+        }
+      }
+
+      successfulIndices.push(i);
+      synced++;
+    } catch {
+      errors++;
+    }
+  }
+
+  if (successfulIndices.length > 0) await removeFromQueue(successfulIndices);
+  return { synced, errors };
 }
 
 export const db = {
@@ -266,7 +365,7 @@ export const db = {
   },
 
   updateSessionPhotoUrl: async (sessionId: number, photoUrl: string | null) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(sessionId)) {
       return supabase.from("workout_sessions").update({ photo_url: photoUrl }).eq("session_id", sessionId);
     }
     return localDb.updateSessionPhotoUrl(sessionId, photoUrl);
@@ -492,7 +591,7 @@ export const db = {
   },
 
   finishWorkoutSession: async (sessionId: number, notes?: string | null) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(sessionId)) {
       const now = new Date();
       const result = await supabase.from("workout_sessions").update({
         end_time: now.toTimeString().split(" ")[0],
@@ -504,7 +603,9 @@ export const db = {
     // Offline: finish locally then queue the full session tree for later sync
     const result = await localDb.finishWorkoutSession(sessionId, notes);
     const origin = await getSessionOrigin();
-    if (origin?.isLocal) {
+    // Queue it for Supabase if it was logged offline (a local ID). The origin
+    // marker covers workouts from before local IDs existed.
+    if (isOnline && (isLocalId(sessionId) || (origin?.isLocal && origin.sessionId === sessionId))) {
       const [{ data: session }, { data: exercises }] = await Promise.all([
         localDb.getWorkoutSession(sessionId),
         localDb.getSessionExercises(sessionId),
@@ -533,6 +634,10 @@ export const db = {
           })),
           sets,
         });
+        // Back online already? Upload it now rather than at the next reconnect.
+        if (shouldUseSupabase()) {
+          db.syncPendingSessions(session.user_id).catch((e: unknown) => logError("finishWorkoutSession.sync", e));
+        }
       }
     }
     await clearSessionOrigin();
@@ -543,9 +648,14 @@ export const db = {
   // Called after finishing a workout so the routine reflects what was actually done.
   syncSessionSetsToRoutine: async (sessionId: number, routineId: number) => {
     if (shouldUseSupabase()) {
+      // A workout logged offline and finished after reconnecting is still in
+      // the on-device store; the routine it updates is in Supabase.
+      const sessionIsLocal = isLocalId(sessionId);
       // Fetch session exercises + routine exercises in parallel
       const [{ data: sessionExercises }, { data: routineExercises }] = await Promise.all([
-        supabase.from("session_exercises").select("*").eq("session_id", sessionId),
+        sessionIsLocal
+          ? localDb.getSessionExercises(sessionId)
+          : supabase.from("session_exercises").select("*").eq("session_id", sessionId),
         supabase.from("routine_exercises").select("*").eq("routine_id", routineId),
       ]);
       if (!sessionExercises?.length || !routineExercises?.length) return;
@@ -555,7 +665,10 @@ export const db = {
 
       // Fetch all sets in parallel
       const [{ data: sessionSets }, { data: routineSets }] = await Promise.all([
-        supabase.from("session_exercise_sets").select("*").in("session_exercise_id", sessionExIds),
+        sessionIsLocal
+          ? Promise.all(sessionExIds.map((id: number) => localDb.getSessionExerciseSets(id)))
+              .then((rs) => ({ data: rs.flatMap((r) => r.data ?? []) }))
+          : supabase.from("session_exercise_sets").select("*").in("session_exercise_id", sessionExIds),
         supabase.from("routine_exercise_sets").select("*").in("routine_exercise_id", routineExIds),
       ]);
 
@@ -641,6 +754,7 @@ export const db = {
   },
 
   getWorkoutSession: async (sessionId: number) => {
+    if (isLocalId(sessionId)) return localDb.getWorkoutSession(sessionId);
     return cachedRead(
       shouldUseSupabase(),
       `workoutSession:${sessionId}`,
@@ -653,6 +767,10 @@ export const db = {
   },
 
   getActiveSession: async (userId: string) => {
+    // An unfinished offline workout wins: it's the one the user is in, and
+    // Supabase doesn't know about it yet.
+    const local = await localDb.getActiveSession(userId);
+    if (local.data) return local;
     if (shouldUseSupabase()) {
       return supabase.from("workout_sessions")
         .select("*")
@@ -664,11 +782,11 @@ export const db = {
         .limit(1)
         .maybeSingle();
     }
-    return localDb.getActiveSession(userId);
+    return local;
   },
 
   updateWorkoutSession: async (sessionId: number, updates: { notes?: string | null; session_name?: string }) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(sessionId)) {
       return supabase.from("workout_sessions")
         .update(updates)
         .eq("session_id", sessionId);
@@ -677,7 +795,7 @@ export const db = {
   },
 
   deleteWorkoutSession: async (sessionId: number) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(sessionId)) {
       // Delete child records first (Supabase won't cascade unless FK has ON DELETE CASCADE)
       const { data: exercises } = await supabase.from("session_exercises")
         .select("session_exercise_id")
@@ -698,6 +816,7 @@ export const db = {
 
   // Session Exercises
   getSessionExercises: async (sessionId: number) => {
+    if (isLocalId(sessionId)) return localDb.getSessionExercises(sessionId);
     return cachedRead(
       shouldUseSupabase(),
       `sessionExercises:${sessionId}`,
@@ -710,14 +829,14 @@ export const db = {
   },
 
   insertSessionExercise: async (exercise: { session_id: number; exercise_id: string; exercise_name: string; exercise_order: number; notes: string | null; exercise_type?: 'strength' | 'cardio' | 'stretching' }) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(exercise.session_id)) {
       return supabase.from("session_exercises").insert({ exercise_type: 'strength', ...exercise }).select().single();
     }
     return localDb.insertSessionExercise(exercise);
   },
 
   deleteSessionExercise: async (sessionExerciseId: number) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(sessionExerciseId)) {
       await supabase.from("session_exercise_sets").delete().eq("session_exercise_id", sessionExerciseId);
       return supabase.from("session_exercises").delete().eq("session_exercise_id", sessionExerciseId);
     }
@@ -725,7 +844,7 @@ export const db = {
   },
 
   updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string }) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(sessionExerciseId)) {
       return supabase.from("session_exercises").update(updates).eq("session_exercise_id", sessionExerciseId);
     }
     return localDb.updateSessionExercise(sessionExerciseId, updates);
@@ -733,6 +852,7 @@ export const db = {
 
   // Session Exercise Sets
   getSessionExerciseSets: async (sessionExerciseId: number) => {
+    if (isLocalId(sessionExerciseId)) return localDb.getSessionExerciseSets(sessionExerciseId);
     return cachedRead(
       shouldUseSupabase(),
       `sessionExerciseSets:${sessionExerciseId}`,
@@ -745,21 +865,21 @@ export const db = {
   },
 
   insertSessionExerciseSet: async (set: { session_exercise_id: number; set_number: number; weight: number | null; reps: number | null; is_warmup: boolean; completed?: boolean; duration_seconds?: number | null; distance_meters?: number | null; pace_sec_per_km?: number | null; calories?: number | null; effort_level?: number | null }) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(set.session_exercise_id)) {
       return supabase.from("session_exercise_sets").insert(set).select().single();
     }
     return localDb.insertSessionExerciseSet(set);
   },
 
   updateSessionExerciseSet: async (sessionSetId: number, updates: { reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean; duration_seconds?: number | null; distance_meters?: number | null; pace_sec_per_km?: number | null; calories?: number | null; effort_level?: number | null }) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(sessionSetId)) {
       return supabase.from("session_exercise_sets").update(updates).eq("session_set_id", sessionSetId);
     }
     return localDb.updateSessionExerciseSet(sessionSetId, updates);
   },
 
   deleteSessionExerciseSet: async (sessionSetId: number) => {
-    if (shouldUseSupabase()) {
+    if (useSupabaseFor(sessionSetId)) {
       return supabase.from("session_exercise_sets").delete().eq("session_set_id", sessionSetId);
     }
     return localDb.deleteSessionExerciseSet(sessionSetId);
@@ -1067,59 +1187,11 @@ export const db = {
   },
 
   // Sync offline-queued sessions to Supabase when reconnected
-  syncPendingSessions: async (userId: string): Promise<{ synced: number; errors: number }> => {
-    if (!isOnline) return { synced: 0, errors: 0 };
-    const queue = await getPendingQueue();
-    if (queue.length === 0) return { synced: 0, errors: 0 };
-
-    let synced = 0;
-    let errors = 0;
-    const successfulIndices: number[] = [];
-
-    for (let i = 0; i < queue.length; i++) {
-      const { session, exercises, sets } = queue[i];
-      try {
-        // Insert session row
-        const { data: newSession, error: sessionErr } = await supabase
-          .from("workout_sessions")
-          .insert({ ...session, user_id: userId })
-          .select()
-          .single();
-        if (sessionErr || !newSession) { errors++; continue; }
-
-        // Insert all exercises in one request, then map local→remote IDs.
-        let exIdMap: Record<number, number> = {};
-        if (exercises.length > 0) {
-          const { data: newExercises, error: exErr } = await supabase
-            .from("session_exercises")
-            .insert(exercises.map((ex) => ({
-              session_id: newSession.session_id,
-              exercise_id: ex.exercise_id,
-              exercise_name: ex.exercise_name,
-              exercise_order: ex.exercise_order,
-              notes: ex.notes,
-              exercise_type: ex.exercise_type,
-            })))
-            .select();
-          if (exErr || !newExercises) { errors++; continue; }
-          exIdMap = buildExerciseIdMap(exercises, newExercises);
-        }
-
-        // Insert sets with remapped exercise IDs
-        const setsToInsert = remapSetsForInsert(sets, exIdMap);
-        if (setsToInsert.length > 0) {
-          await supabase.from("session_exercise_sets").insert(setsToInsert);
-        }
-
-        successfulIndices.push(i);
-        synced++;
-      } catch {
-        errors++;
-      }
+  syncPendingSessions: (userId: string): Promise<{ synced: number; errors: number }> => {
+    if (!syncInFlight) {
+      syncInFlight = runPendingSync(userId).finally(() => { syncInFlight = null; });
     }
-
-    if (successfulIndices.length > 0) await removeFromQueue(successfulIndices);
-    return { synced, errors };
+    return syncInFlight;
   },
 
   getPendingSessionCount: async (): Promise<number> => getPendingCount(),

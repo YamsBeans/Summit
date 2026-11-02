@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import type {
   User,
   Routine,
@@ -18,7 +19,8 @@ let localRoutineExerciseSets: RoutineExerciseSet[] = [];
 let localWorkoutSessions: WorkoutSession[] = [];
 let localSessionExercises: SessionExercise[] = [];
 let localSessionExerciseSets: SessionExerciseSet[] = [];
-let localSession: { user: { id: string; email: string } } | null = null;
+type LocalAuthSession = { user: { id: string; email: string } };
+let localSession: LocalAuthSession | null = null;
 
 // Offline auth listeners — without these, signing in/out offline updated
 // localSession but the root layout never heard about it and stayed put.
@@ -27,16 +29,24 @@ const emitAuth = (event: string) => authListeners.forEach((fn) => fn(event, loca
 
 let localPersonalRecords: PersonalRecord[] = [];
 let localCustomExercises: CustomExercise[] = [];
-let nextPrId = 1;
+// Local IDs start far above anything a Supabase serial column will reach, so
+// a row created offline can never be mistaken for (or collide with) a server
+// row. db.tsx uses isLocalId() to route a workout that was started offline to
+// this store even after the signal comes back.
+export const LOCAL_ID_BASE = 1_000_000_000_000;
+export const isLocalId = (id: number | null | undefined): boolean =>
+  typeof id === "number" && id >= LOCAL_ID_BASE;
 
-let nextRoutineId = 1;
-let nextRoutineExerciseId = 1;
-let nextRoutineSetId = 1;
-let nextSessionId = 1;
-let nextSessionExerciseId = 1;
-let nextSessionSetId = 1;
+let nextPrId = LOCAL_ID_BASE + 1;
 
-export const localDb = {
+let nextRoutineId = LOCAL_ID_BASE + 1;
+let nextRoutineExerciseId = LOCAL_ID_BASE + 1;
+let nextRoutineSetId = LOCAL_ID_BASE + 1;
+let nextSessionId = LOCAL_ID_BASE + 1;
+let nextSessionExerciseId = LOCAL_ID_BASE + 1;
+let nextSessionSetId = LOCAL_ID_BASE + 1;
+
+const rawLocalDb = {
   // Auth
   signUp: async (email: string, password: string, username: string) => {
     const userId = `local-${Date.now()}`;
@@ -639,3 +649,178 @@ export const localDb = {
     return { data: history, error: null };
   },
 };
+
+// ─── Persistence ─────────────────────────────────────────────────────────────
+// The store used to live only in memory, so a page reload or an app kill
+// wiped a local-mode user's data, and lost a workout logged with no signal
+// before it was finished and queued. It is now saved to AsyncStorage after
+// every write and loaded back before the first read.
+
+const STORAGE_KEY = "@gym_tracker_local_db_v1";
+
+type Snapshot = {
+  users: User[];
+  routines: Routine[];
+  routineExercises: RoutineExercise[];
+  routineExerciseSets: RoutineExerciseSet[];
+  workoutSessions: WorkoutSession[];
+  sessionExercises: SessionExercise[];
+  sessionExerciseSets: SessionExerciseSet[];
+  personalRecords: PersonalRecord[];
+  customExercises: CustomExercise[];
+  session: LocalAuthSession | null;
+  ids: Record<string, number>;
+};
+
+function snapshot(): Snapshot {
+  return {
+    users: localUsers,
+    routines: localRoutines,
+    routineExercises: localRoutineExercises,
+    routineExerciseSets: localRoutineExerciseSets,
+    workoutSessions: localWorkoutSessions,
+    sessionExercises: localSessionExercises,
+    sessionExerciseSets: localSessionExerciseSets,
+    personalRecords: localPersonalRecords,
+    customExercises: localCustomExercises,
+    session: localSession,
+    ids: {
+      pr: nextPrId,
+      routine: nextRoutineId,
+      routineExercise: nextRoutineExerciseId,
+      routineSet: nextRoutineSetId,
+      session: nextSessionId,
+      sessionExercise: nextSessionExerciseId,
+      sessionSet: nextSessionSetId,
+    },
+  };
+}
+
+// Never hand out an ID at or below one already stored (and never below the
+// local base), even if the saved counters are missing or stale.
+function nextAfter(saved: number | undefined, rows: any[], key: string): number {
+  let max = LOCAL_ID_BASE;
+  for (const r of rows) if (typeof r?.[key] === "number" && r[key] > max) max = r[key];
+  return Math.max(typeof saved === "number" ? saved : 0, max + 1);
+}
+
+function restore(s: Partial<Snapshot>) {
+  localUsers = s.users ?? [];
+  localRoutines = s.routines ?? [];
+  localRoutineExercises = s.routineExercises ?? [];
+  localRoutineExerciseSets = s.routineExerciseSets ?? [];
+  localWorkoutSessions = s.workoutSessions ?? [];
+  localSessionExercises = s.sessionExercises ?? [];
+  localSessionExerciseSets = s.sessionExerciseSets ?? [];
+  localPersonalRecords = s.personalRecords ?? [];
+  localCustomExercises = s.customExercises ?? [];
+  localSession = s.session ?? null;
+  const ids = s.ids ?? {};
+  nextPrId = nextAfter(ids.pr, localPersonalRecords, "pr_id");
+  nextRoutineId = nextAfter(ids.routine, localRoutines, "routine_id");
+  nextRoutineExerciseId = nextAfter(ids.routineExercise, localRoutineExercises, "routine_exercise_id");
+  nextRoutineSetId = nextAfter(ids.routineSet, localRoutineExerciseSets, "routine_set_id");
+  nextSessionId = nextAfter(ids.session, localWorkoutSessions, "session_id");
+  nextSessionExerciseId = nextAfter(ids.sessionExercise, localSessionExercises, "session_exercise_id");
+  nextSessionSetId = nextAfter(ids.sessionSet, localSessionExerciseSets, "session_set_id");
+}
+
+/**
+ * Drop finished workouts from the store. Supabase builds call this once on
+ * start-up: a finished offline workout has already been copied into the sync
+ * queue, so keeping it here would only grow storage forever.
+ */
+function pruneFinishedSessions() {
+  const finished = new Set(
+    localWorkoutSessions.filter((s) => s.end_time !== null).map((s) => s.session_id)
+  );
+  if (finished.size === 0) return;
+  const exIds = new Set(
+    localSessionExercises.filter((e) => finished.has(e.session_id)).map((e) => e.session_exercise_id)
+  );
+  localWorkoutSessions = localWorkoutSessions.filter((s) => !finished.has(s.session_id));
+  localSessionExercises = localSessionExercises.filter((e) => !finished.has(e.session_id));
+  localSessionExerciseSets = localSessionExerciseSets.filter((x) => !exIds.has(x.session_exercise_id));
+}
+
+let loadPromise: Promise<void> | null = null;
+
+function ensureLoaded(): Promise<void> {
+  if (!loadPromise) {
+    loadPromise = (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        if (raw) restore(JSON.parse(raw));
+      } catch {
+        // Corrupt or unreadable: start empty rather than crash.
+      }
+    })();
+  }
+  return loadPromise;
+}
+
+// Coalesced saves: one write in flight at a time, and a write requested while
+// one is running is done right after it, so the last change always lands.
+let saving: Promise<void> | null = null;
+let saveAgain = false;
+
+function save(): Promise<void> {
+  if (saving) {
+    saveAgain = true;
+    return saving;
+  }
+  saving = (async () => {
+    do {
+      saveAgain = false;
+      try {
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot()));
+      } catch {
+        // Best-effort: keep working from memory if storage is full/unavailable.
+      }
+    } while (saveAgain);
+    saving = null;
+  })();
+  return saving;
+}
+
+const MUTATING = /^(sign|insert|update|delete|start|finish|upsert)/;
+
+type RawLocalDb = typeof rawLocalDb;
+
+function withPersistence(raw: RawLocalDb): RawLocalDb {
+  const wrapped: any = {};
+  for (const [name, fn] of Object.entries(raw)) {
+    if (name === "onAuthStateChange") {
+      // Synchronous subscription API — nothing to load or save.
+      wrapped[name] = fn;
+      continue;
+    }
+    wrapped[name] = async (...args: any[]) => {
+      await ensureLoaded();
+      const result = await (fn as (...a: any[]) => any)(...args);
+      if (MUTATING.test(name)) await save();
+      return result;
+    };
+  }
+  return wrapped as RawLocalDb;
+}
+
+export const localDb = withPersistence(rawLocalDb);
+
+/** Load the saved store now (e.g. at start-up). Safe to call repeatedly. */
+export function loadLocalDb(options?: { pruneFinished?: boolean }): Promise<void> {
+  return ensureLoaded().then(() => {
+    if (options?.pruneFinished) {
+      pruneFinishedSessions();
+      return save();
+    }
+  });
+}
+
+/** Test helper: forget everything in memory so the next call reloads from storage. */
+export function __resetLocalDbForTests() {
+  restore({});
+  loadPromise = null;
+  saving = null;
+  saveAgain = false;
+}
