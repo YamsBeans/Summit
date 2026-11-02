@@ -1262,6 +1262,7 @@ const SetRow = memo(function SetRow({
   const [weight, setWeight] = useState(formatNumberInput(displayWeight));
   const [reps, setReps] = useState(formatNumberInput(set.reps));
   const isFocused = useRef<"weight" | "reps" | null>(null);
+  const repsRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (isFocused.current !== "weight") setWeight(formatNumberInput(toDisplay(set.weight)));
@@ -1397,6 +1398,10 @@ const SetRow = memo(function SetRow({
         onFocus={() => { isFocused.current = "weight"; }}
         onBlur={() => { isFocused.current = null; commitWeight(); }}
         keyboardType="decimal-pad"
+        // Enter / Next (Android, web) jumps to reps, like Strong.
+        returnKeyType="next"
+        submitBehavior="submit"
+        onSubmitEditing={() => repsRef.current?.focus()}
         placeholder={prevWeight != null ? String(prevWeight) : "—"}
         placeholderTextColor={colors.textTertiary}
         editable={!isCompleted}
@@ -1410,8 +1415,10 @@ const SetRow = memo(function SetRow({
           backgroundColor: isCompleted ? colors.successLight : colors.inputBackground,
           color: isCompleted ? colors.success : colors.text,
         }]}
+        ref={repsRef}
         value={reps}
         onChangeText={setReps}
+        returnKeyType="done"
         onFocus={() => { isFocused.current = "reps"; }}
         onBlur={() => { isFocused.current = null; commitReps(); }}
         keyboardType="number-pad"
