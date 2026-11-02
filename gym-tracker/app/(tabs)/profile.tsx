@@ -485,6 +485,22 @@ export default function ProfileScreen() {
         </View>
       </View>
 
+      {/* ── Personal records ── */}
+      <Pressable
+        onPress={() => router.push("/records" as any)}
+        style={({ pressed }) => [styles.card, {
+          backgroundColor: pressed ? colors.surfaceSecondary : colors.surface,
+          marginHorizontal: 16, marginBottom: 12, flexDirection: "row", alignItems: "center", gap: 12,
+        }]}
+        accessibilityRole="button"
+      >
+        <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: colors.warningLight }}>
+          <Ionicons name="trophy-outline" size={17} color={colors.warning} />
+        </View>
+        <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>Personal Records</Text>
+        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+      </Pressable>
+
       <WorkoutCalendarModal visible={calendarOpen} onClose={() => setCalendarOpen(false)} sessions={sessions} />
 
       {/* ── Progress chart ── */}
