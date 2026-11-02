@@ -94,6 +94,7 @@ export default function WorkoutsScreen() {
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
 
   const [routinePreviews, setRoutinePreviews] = useState<Record<number, string[]>>({});
+  const previewRun = useRef(0);
 
   const loadRoutines = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoadingRoutines(true);
@@ -103,7 +104,11 @@ export default function WorkoutsScreen() {
     else {
       const sorted = sortRoutines(data ?? []);
       setRoutines(sorted);
-      loadRoutinePreviews(sorted).then(setRoutinePreviews).catch(() => {});
+      // Only the newest load wins, so a slow earlier one can't overwrite it.
+      const run = ++previewRun.current;
+      loadRoutinePreviews(sorted)
+        .then((p) => { if (run === previewRun.current) setRoutinePreviews(p); })
+        .catch(() => {});
     }
     setLoadingRoutines(false);
   }, []);

@@ -122,3 +122,34 @@ export function mergeStrengthRecord(
   const bestVol = Math.max(vol, prev?.max_volume ?? 0);
   return { max_weight: bestW || null, max_volume: bestVol || null };
 }
+
+type StoredRecord = {
+  max_weight?: number | null;
+  max_volume?: number | null;
+  best_distance_meters?: number | null;
+  best_duration_seconds?: number | null;
+  best_pace_sec_per_km?: number | null;
+  [key: string]: any;
+};
+
+const higher = (a?: number | null, b?: number | null) =>
+  a == null ? b ?? null : b == null ? a : Math.max(a, b);
+const lower = (a?: number | null, b?: number | null) =>
+  a == null || a <= 0 ? (b != null && b > 0 ? b : null) : b == null || b <= 0 ? a : Math.min(a, b);
+
+/**
+ * Combine a record about to be saved with what the server already has,
+ * keeping the better value per field. A PR worked out offline from an old
+ * (or missing) cached copy must never lower one set on another device.
+ */
+export function bestOfRecords<T extends StoredRecord>(incoming: T, existing: StoredRecord | null | undefined): T {
+  if (!existing) return incoming;
+  return {
+    ...incoming,
+    max_weight: higher(incoming.max_weight, existing.max_weight),
+    max_volume: higher(incoming.max_volume, existing.max_volume),
+    best_distance_meters: higher(incoming.best_distance_meters, existing.best_distance_meters),
+    best_duration_seconds: higher(incoming.best_duration_seconds, existing.best_duration_seconds),
+    best_pace_sec_per_km: lower(incoming.best_pace_sec_per_km, existing.best_pace_sec_per_km),
+  };
+}

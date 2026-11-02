@@ -195,3 +195,15 @@ describe("detectPRs with cardio records", () => {
     expect(prs).toEqual([]);
   });
 });
+
+import { bestOfRecords } from "../utils/prDetection";
+
+describe("bestOfRecords", () => {
+  it("keeps the better value per field (lower pace is better)", () => {
+    expect(bestOfRecords(
+      { max_weight: 200, max_volume: 2000, best_pace_sec_per_km: 300, best_distance_meters: 5000 },
+      { max_weight: 250, max_volume: 1000, best_pace_sec_per_km: 280, best_distance_meters: null },
+    )).toMatchObject({ max_weight: 250, max_volume: 2000, best_pace_sec_per_km: 280, best_distance_meters: 5000 });
+    expect(bestOfRecords({ max_weight: 1 }, null)).toEqual({ max_weight: 1 });
+  });
+});

@@ -47,6 +47,10 @@ export default function WorkoutScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  // Workout notes are saved as you type (debounced) and when the screen
+  // closes, not only on Finish, so they survive the app being closed.
+  const savedNotesRef = useRef<string | null>(null);
+  const notesRef = useRef({ notes, sessionId: null as number | null });
   const startTimestamp = useRef<number>(Date.now());
 
   const isMinimizingRef = useRef(false);
@@ -86,7 +90,8 @@ export default function WorkoutScreen() {
   const [prevSets, setPrevSets] = useState<Record<string, any[]>>({});
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
   // Exercises whose note box is open (it's always shown once a note exists).
-  const [noteOpenFor, setNoteOpenFor] = useState<Set<number>>(() => new Set());
+  // Value bumps each time "Add/Edit Note" is chosen, which focuses the box.
+  const [noteFocus, setNoteFocus] = useState<Record<number, number>>({});
   const [selectedExerciseForOptions, setSelectedExerciseForOptions] = useState<any>(null);
   const exercisePickerModeRef = useRef<"add" | "replace">("add");
   const replaceTargetRef = useRef<any>(null);
@@ -196,6 +201,7 @@ export default function WorkoutScreen() {
     if (sessionResult.data) {
       setSession(sessionResult.data);
       setNotes(sessionResult.data.notes ?? "");
+      savedNotesRef.current = sessionResult.data.notes ?? "";
       // Register in context so the bar is visible even while inside the workout screen
       if (!sessionResult.data.end_time) {
         const ts = new Date(
@@ -541,25 +547,25 @@ export default function WorkoutScreen() {
   }, []);
 
   // Move an exercise up or down (swap exercise_order with its neighbour).
-  const moveExercise = useCallback(async (ex: any, dir: -1 | 1) => {
-    const idx = exercises.findIndex((e) => e.session_exercise_id === ex.session_exercise_id);
-    const other = exercises[idx + dir];
+  const moveExercise = useCallback(async (exId: number, dir: -1 | 1) => {
+    const prev = exercisesRef.current;
+    const idx = prev.findIndex((e) => e.session_exercise_id === exId);
+    const other = prev[idx + dir];
     if (idx < 0 || !other) return;
-    const next = [...exercises];
-    next[idx] = { ...other, exercise_order: ex.exercise_order };
-    next[idx + dir] = { ...ex, exercise_order: other.exercise_order };
-    // Orders can collide (e.g. two exercises added at once); keep them distinct.
-    if (ex.exercise_order === other.exercise_order) {
-      next.forEach((e, i) => { next[i] = { ...e, exercise_order: i + 1 }; });
-    }
-    setExercises(next);
+    const swapped = [...prev];
+    swapped[idx] = other;
+    swapped[idx + dir] = prev[idx];
+    // Renumber 1..n: keeps orders distinct even if two collided before.
+    const next = swapped.map((e, i) => ({ ...e, exercise_order: i + 1 }));
     const changed = next.filter((e) =>
-      exercises.find((o) => o.session_exercise_id === e.session_exercise_id)?.exercise_order !== e.exercise_order);
+      prev.find((o) => o.session_exercise_id === e.session_exercise_id)?.exercise_order !== e.exercise_order);
+    exercisesRef.current = next;
+    setExercises(next);
     const results = await Promise.all(changed.map((e) =>
       db.updateSessionExercise(e.session_exercise_id, { exercise_order: e.exercise_order })));
     const err = results.find((r: any) => r?.error)?.error;
     if (err) setError(err.message);
-  }, [exercises]);
+  }, []);
 
   const handleReplaceExercise = useGuardedPress(async (exercise: any) => {
     const target = replaceTargetRef.current;
@@ -624,6 +630,19 @@ export default function WorkoutScreen() {
   // Load once on open; loadSession reads the route param, which doesn't change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadSession(); }, []);
+
+  notesRef.current = { notes, sessionId: session && !session.end_time ? session.session_id : null };
+  const flushNotes = useCallback(() => {
+    const { notes: n, sessionId } = notesRef.current;
+    if (sessionId == null || savedNotesRef.current == null || n === savedNotesRef.current) return;
+    savedNotesRef.current = n;
+    db.updateWorkoutSession(sessionId, { notes: n || null }).catch(() => {});
+  }, []);
+  useEffect(() => {
+    const id = setTimeout(flushNotes, 1000);
+    return () => clearTimeout(id);
+  }, [notes, flushNotes]);
+  useEffect(() => flushNotes, [flushNotes]); // on unmount
 
   if (loading) {
     return (
@@ -756,10 +775,10 @@ export default function WorkoutScreen() {
                 </Pressable>
               </View>
 
-              {(ex.notes || noteOpenFor.has(ex.session_exercise_id)) && (
+              {(ex.notes || noteFocus[ex.session_exercise_id] != null) && (
                 <ExerciseNote
                   initial={ex.notes ?? ""}
-                  autoFocus={!ex.notes}
+                  focusKey={noteFocus[ex.session_exercise_id] ?? 0}
                   onSave={(text) => saveExerciseNote(ex.session_exercise_id, text)}
                 />
               )}
@@ -840,9 +859,6 @@ export default function WorkoutScreen() {
           placeholderTextColor={colors.textTertiary}
           value={notes}
           onChangeText={setNotes}
-          // Saved as you go, not only on Finish, so notes survive the app
-          // being closed mid-workout.
-          onBlur={() => { db.updateWorkoutSession(session.session_id, { notes: notes || null }).catch(() => {}); }}
           multiline
         />
 
@@ -946,7 +962,7 @@ export default function WorkoutScreen() {
               onPress={() => {
                 const ex = selectedExerciseForOptions;
                 closeExerciseOptions();
-                if (ex) setNoteOpenFor((prev) => new Set(prev).add(ex.session_exercise_id));
+                if (ex) setNoteFocus((prev) => ({ ...prev, [ex.session_exercise_id]: (prev[ex.session_exercise_id] ?? 0) + 1 }));
               }}
             >
               <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
@@ -972,7 +988,7 @@ export default function WorkoutScreen() {
                       onPress={() => {
                         const ex = selectedExerciseForOptions;
                         closeExerciseOptions();
-                        if (ex) moveExercise(ex, dir);
+                        if (ex) moveExercise(ex.session_exercise_id, dir);
                       }}
                       accessibilityRole="button"
                       accessibilityLabel={label}
@@ -1147,24 +1163,59 @@ function formatElapsed(seconds: number) {
 // Owns the once-a-second tick so only this label re-renders, not the whole
 // workout screen and every exercise card under it.
 // A note under an exercise ("seat 4", "felt heavy"), saved when you leave it.
-const ExerciseNote = memo(function ExerciseNote({ initial, autoFocus, onSave }: {
+// A note under an exercise ("seat 4", "felt heavy"). Saved shortly after
+// you stop typing and when the screen closes; a blur alone isn't enough, as
+// tapping Finish or minimize doesn't blur the box.
+const ExerciseNote = memo(function ExerciseNote({ initial, focusKey, onSave }: {
   initial: string;
-  autoFocus: boolean;
+  /** Changes when "Add/Edit Note" is chosen, to focus the box. */
+  focusKey: number;
   onSave: (text: string) => void;
 }) {
   const { colors } = useTheme();
   const [text, setText] = useState(initial);
-  useEffect(() => { setText(initial); }, [initial]);
+  const inputRef = useRef<TextInput>(null);
+  const saved = useRef(initial);
+  const latest = useRef({ text, onSave });
+  latest.current = { text, onSave };
+
+  // Take a new value from outside only if it isn't our own save echoing back.
+  useEffect(() => {
+    if (initial.trim() !== saved.current.trim()) {
+      saved.current = initial;
+      setText(initial);
+    }
+  }, [initial]);
+
+  const flush = useCallback(() => {
+    const { text: t, onSave: save } = latest.current;
+    if (t.trim() !== saved.current.trim()) {
+      saved.current = t;
+      save(t);
+    }
+  }, []);
+
+  useEffect(() => {
+    const id = setTimeout(flush, 800);
+    return () => clearTimeout(id);
+  }, [text, flush]);
+  useEffect(() => flush, [flush]); // on unmount
+
+  useEffect(() => {
+    if (focusKey > 0) {
+      const id = setTimeout(() => inputRef.current?.focus(), Platform.OS === "ios" ? 450 : 50);
+      return () => clearTimeout(id);
+    }
+  }, [focusKey]);
+
   return (
     <TextInput
+      ref={inputRef}
       value={text}
       onChangeText={setText}
-      // An emptied box stays open until the screen reloads; closing it on
-      // blur made it vanish as soon as the options sheet took focus.
-      onBlur={() => { if (text.trim() !== initial.trim()) onSave(text); }}
+      onBlur={flush}
       placeholder="Add a note…"
       placeholderTextColor={colors.textTertiary}
-      autoFocus={autoFocus}
       multiline
       maxLength={300}
       style={{

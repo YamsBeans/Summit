@@ -19,6 +19,7 @@ import {
   forgetSyncedLocalSessions,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
+import { bestOfRecords } from "@/utils/prDetection";
 import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache, writeCacheMany } from "./readCache";
 import {
   OutboxOp,
@@ -307,7 +308,18 @@ async function executeOp(op: OutboxOp): Promise<ExecuteResult & { row?: any }> {
       return { ok: true, id: data[pk], row: data };
     }
     if (op.kind === "upsert") {
-      const { error, status } = await supabase.from(op.table).upsert(op.values ?? {}, { onConflict: op.onConflict });
+      let values = op.values ?? {};
+      if (op.table === "personal_records") {
+        // Merge with the server's row so a PR computed from a stale offline
+        // copy can't overwrite a better one.
+        const { data: existing, error: readErr, status: readStatus } = await supabase.from("personal_records")
+          .select("*")
+          .eq("user_id", values.user_id).eq("exercise_id", values.exercise_id).eq("pr_type", values.pr_type)
+          .maybeSingle();
+        if (readErr) return fail(readErr, readStatus);
+        values = bestOfRecords(values, existing);
+      }
+      const { error, status } = await supabase.from(op.table).upsert(values, { onConflict: op.onConflict });
       return error ? fail(error, status) : { ok: true };
     }
     if (op.kind === "update") {
@@ -1359,9 +1371,9 @@ export const db = {
           const i = rows.findIndex((r) => r.exercise_id === values.exercise_id && (r.pr_type ?? "strength") === values.pr_type);
           if (i < 0) return [...rows, values];
           const next = [...rows];
-          next[i] = { ...next[i], ...values };
+          next[i] = bestOfRecords(values, next[i]);
           return next;
-        }, true),
+        }),
       );
     }
     return localDb.upsertPersonalRecord(record);

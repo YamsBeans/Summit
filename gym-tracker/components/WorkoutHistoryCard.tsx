@@ -1,5 +1,5 @@
 import { memo, useState } from "react";
-import { ActivityIndicator, Image, Modal, Pressable, Share, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Modal, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from "react-native";
 import { ModalShell } from "@/components/SettingsUI";
 import { showAlert } from "@/utils/alert";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -127,8 +127,16 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
     }
   };
 
-  const handleRepeat = async () => {
+  // iOS won't present a modal or alert while the action sheet is still
+  // sliding away, so the next one waits for it.
+  const afterSheetCloses = (fn: () => void) => {
     setMenuOpen(false);
+    setTimeout(fn, Platform.OS === "ios" ? 450 : 0);
+  };
+
+  const handleRepeat = () => afterSheetCloses(repeatNow);
+
+  const repeatNow = async () => {
     if (activeWorkout) {
       showAlert("Workout in progress", `Finish or discard "${activeWorkout.sessionName}" before starting another.`);
       return;
@@ -150,11 +158,10 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
     }
   };
 
-  const openSaveAsRoutine = () => {
-    setMenuOpen(false);
+  const openSaveAsRoutine = () => afterSheetCloses(() => {
     setRoutineName(sessionName);
     setSaveOpen(true);
-  };
+  });
 
   const handleSaveAsRoutine = async () => {
     if (savingRoutine) return;
@@ -165,8 +172,11 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
       if (!userId) return;
       const res = await saveWorkoutAsRoutine(db, session_id, userId, routineName);
       setSaveOpen(false);
-      if ("error" in res) showAlert("Couldn't save routine", res.error);
-      else showAlert("Routine saved", `"${routineName.trim() || sessionName}" is in your routines on the Workout tab.`);
+      const name = routineName.trim() || sessionName;
+      setTimeout(() => {
+        if ("error" in res) showAlert("Couldn't save routine", res.error);
+        else showAlert("Routine saved", `"${name}" is in your routines on the Workout tab.`);
+      }, Platform.OS === "ios" ? 450 : 0);
     } finally {
       setSavingRoutine(false);
     }

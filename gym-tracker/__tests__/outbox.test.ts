@@ -256,3 +256,12 @@ it("keeps a PR set offline and uploads it with the rest", async () => {
   await db.syncPendingSessions("u1");
   expect(server.personal_records).toEqual([expect.objectContaining({ exercise_id: "bench", max_weight: 225, pr_type: "strength" })]);
 });
+
+it("never lowers a better PR already on the server", async () => {
+  server.personal_records = [{ user_id: "u1", exercise_id: "bench", pr_type: "strength", max_weight: 300, max_volume: 900 }];
+  goOffline();
+  await db.upsertPersonalRecord({ user_id: "u1", exercise_id: "bench", max_weight: 225, max_volume: 1125 });
+  goOnline();
+  await db.syncPendingSessions("u1");
+  expect(server.personal_records[0]).toMatchObject({ max_weight: 300, max_volume: 1125 });
+});
