@@ -11,6 +11,7 @@ import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ConfirmModal from "@/components/ConfirmModal";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
+import { duplicateRoutine } from "@/utils/repeatWorkout";
 import { defaultWorkoutName } from "@/utils/workoutName";
 
 
@@ -222,6 +223,18 @@ export default function WorkoutsScreen() {
     loadRoutines(!hasLoadedRef.current);
     hasLoadedRef.current = true;
   }, [loadRoutines]));
+
+  // Copy a routine (e.g. to make a "heavy" and "light" version).
+  const handleDuplicateRoutine = useGuardedPress(async () => {
+    const source = selectedRoutine;
+    closeRoutineOptions();
+    if (!source) return;
+    const { data: { user } } = await db.getUser();
+    if (!user) { setError("Not authenticated"); return; }
+    const res = await duplicateRoutine(db, source, user.id);
+    if ("error" in res) setError(res.error);
+    loadRoutines(false);
+  });
 
   const selectedIdx = routines.findIndex((r) => r.routine_id === selectedRoutine?.routine_id);
 
@@ -435,6 +448,15 @@ export default function WorkoutsScreen() {
                 <Ionicons name="pencil-outline" size={16} color={colors.primary} />
               </View>
               <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Edit Routine</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+            </Pressable>
+
+            {/* Duplicate */}
+            <Pressable style={[modalStyles.option, { borderBottomColor: colors.border }]} onPress={handleDuplicateRoutine}>
+              <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="copy-outline" size={16} color={colors.primary} />
+              </View>
+              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Duplicate Routine</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </Pressable>
 

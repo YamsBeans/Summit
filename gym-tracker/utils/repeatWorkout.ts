@@ -122,3 +122,53 @@ export async function saveWorkoutAsRoutine(
   }
   return { routineId: routine.routine_id };
 }
+
+export type DuplicateRoutineDb = Pick<SaveAsRoutineDb, "insertRoutine" | "insertRoutineExercise" | "insertRoutineExerciseSet"> & {
+  getRoutineExercises: (routineId: number) => Promise<DbResult<any[]>>;
+  getRoutineExerciseSets: (routineExerciseId: number) => Promise<DbResult<any[]>>;
+};
+
+/** Copy a routine (exercises and target sets) under a new name. */
+export async function duplicateRoutine(
+  db: DuplicateRoutineDb,
+  source: { routine_id: number; routine_name: string; description: string | null },
+  userId: string,
+): Promise<{ routineId: number } | { error: string }> {
+  const { data: exercises, error: readErr } = await db.getRoutineExercises(source.routine_id);
+  if (readErr) return { error: readErr.message ?? "Couldn't load that routine." };
+  const ordered = [...(exercises ?? [])].sort((a, b) => a.exercise_order - b.exercise_order);
+  const setsPer = await Promise.all(ordered.map((ex) => db.getRoutineExerciseSets(ex.routine_exercise_id)));
+
+  const { data: routine, error } = await db.insertRoutine({
+    routine_name: `${source.routine_name} (copy)`,
+    description: source.description,
+    user_id: userId,
+  });
+  if (error || !routine) return { error: error?.message ?? "Couldn't create the routine." };
+
+  for (let i = 0; i < ordered.length; i++) {
+    const ex = ordered[i];
+    const { data: rEx, error: exErr } = await db.insertRoutineExercise({
+      routine_id: routine.routine_id,
+      exercise_id: ex.exercise_id,
+      exercise_name: ex.exercise_name,
+      exercise_order: i + 1,
+      exercise_type: ex.exercise_type ?? "strength",
+    });
+    if (exErr || !rEx) continue;
+    const sets = [...(setsPer[i]?.data ?? [])].sort((a, b) => a.set_number - b.set_number);
+    for (const s of sets) {
+      await db.insertRoutineExerciseSet({
+        routine_exercise_id: rEx.routine_exercise_id,
+        set_number: s.set_number,
+        target_weight: s.target_weight ?? null,
+        target_reps: s.target_reps ?? null,
+        is_warmup: !!s.is_warmup,
+        target_duration_seconds: s.target_duration_seconds ?? null,
+        target_distance_meters: s.target_distance_meters ?? null,
+        target_effort_level: s.target_effort_level ?? null,
+      });
+    }
+  }
+  return { routineId: routine.routine_id };
+}

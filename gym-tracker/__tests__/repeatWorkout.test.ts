@@ -74,3 +74,24 @@ it("saves a workout as a routine with its completed sets as targets", async () =
   // Nothing checked off for OHP: all its sets are used.
   expect(made.sets.filter((s) => s.routine_exercise_id === made.exercises[1].routine_exercise_id)[0]).toMatchObject({ target_weight: 95, target_reps: 8 });
 });
+
+import { duplicateRoutine } from "../utils/repeatWorkout";
+
+it("duplicates a routine with its exercises and target sets", async () => {
+  const made = { routines: [] as any[], exercises: [] as any[], sets: [] as any[] };
+  let id = 50;
+  const res = await duplicateRoutine({
+    getRoutineExercises: async () => ({ data: [
+      { routine_exercise_id: 2, exercise_id: "row", exercise_name: "Row", exercise_order: 2 },
+      { routine_exercise_id: 1, exercise_id: "pull", exercise_name: "Pull-up", exercise_order: 1 },
+    ], error: null }),
+    getRoutineExerciseSets: async (reId: number) => ({ data: reId === 1 ? [{ set_number: 1, target_reps: 8, is_warmup: false }] : [], error: null }),
+    insertRoutine: async (r: any) => { const row = { routine_id: id++, ...r }; made.routines.push(row); return { data: row, error: null }; },
+    insertRoutineExercise: async (e: any) => { const row = { routine_exercise_id: id++, ...e }; made.exercises.push(row); return { data: row, error: null }; },
+    insertRoutineExerciseSet: async (s: any) => { made.sets.push(s); return { error: null }; },
+  }, { routine_id: 9, routine_name: "Pull Day", description: "Back" }, "u1");
+  expect(res).toEqual({ routineId: 50 });
+  expect(made.routines[0]).toMatchObject({ routine_name: "Pull Day (copy)", description: "Back" });
+  expect(made.exercises.map((e) => e.exercise_id)).toEqual(["pull", "row"]);
+  expect(made.sets).toEqual([expect.objectContaining({ routine_exercise_id: made.exercises[0].routine_exercise_id, target_reps: 8 })]);
+});
