@@ -306,6 +306,10 @@ async function executeOp(op: OutboxOp): Promise<ExecuteResult & { row?: any }> {
       if (error || !data) return fail(error ?? { message: "Insert returned no row" }, status);
       return { ok: true, id: data[pk], row: data };
     }
+    if (op.kind === "upsert") {
+      const { error, status } = await supabase.from(op.table).upsert(op.values ?? {}, { onConflict: op.onConflict });
+      return error ? fail(error, status) : { ok: true };
+    }
     if (op.kind === "update") {
       const { error, status } = await supabase.from(op.table).update(op.values ?? {}).eq(pk, op.id);
       return error ? fail(error, status) : { ok: true };
@@ -347,6 +351,7 @@ const ROW_DEFAULTS: Record<string, Record<string, any>> = {
   },
   session_exercises: { notes: null, exercise_type: "strength" },
   workout_sessions: {},
+  personal_records: {},
 };
 
 /**
@@ -1344,10 +1349,19 @@ export const db = {
     best_pace_sec_per_km?: number | null;
     best_duration_seconds?: number | null;
   }) => {
-    if (shouldUseSupabase()) {
-      return supabase.from("personal_records").upsert(
-        { pr_type: 'strength', ...record },
-        { onConflict: "user_id,exercise_id,pr_type" }
+    if (isOnline) {
+      // Offline (or no signal), the PR is queued and shown from the cache;
+      // it used to be written to the device store and never reach Supabase.
+      const values = { pr_type: "strength", ...record };
+      return writeServerRow(
+        { kind: "upsert", table: "personal_records", values, onConflict: "user_id,exercise_id,pr_type" },
+        () => patchCachedList(`personalRecords:${record.user_id}`, (rows) => {
+          const i = rows.findIndex((r) => r.exercise_id === values.exercise_id && (r.pr_type ?? "strength") === values.pr_type);
+          if (i < 0) return [...rows, values];
+          const next = [...rows];
+          next[i] = { ...next[i], ...values };
+          return next;
+        }, true),
       );
     }
     return localDb.upsertPersonalRecord(record);

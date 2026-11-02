@@ -18,13 +18,13 @@ const PK: Record<string, string> = {
   session_exercises: "session_exercise_id",
   session_exercise_sets: "session_set_id",
 };
-const server: Record<string, Row[]> = { workout_sessions: [], session_exercises: [], session_exercise_sets: [] };
+const server: Record<string, Row[]> = { workout_sessions: [], session_exercises: [], session_exercise_sets: [], personal_records: [] };
 let nextServerId = 500;
 const mockNet = { isConnected: true, reachable: true };
 const NETWORK_ERROR = { message: "Network request failed" };
 
 function mockQuery(table: string) {
-  let mode: "select" | "insert" | "update" | "delete" = "select";
+  let mode: "select" | "insert" | "update" | "delete" | "upsert" = "select";
   let payload: any = null;
   const filters: ((r: Row) => boolean)[] = [];
   let single = false;
@@ -32,6 +32,7 @@ function mockQuery(table: string) {
     select: () => q,
     insert: (v: any) => { mode = "insert"; payload = v; return q; },
     update: (v: any) => { mode = "update"; payload = v; return q; },
+    upsert: (v: any) => { mode = "upsert"; payload = v; return q; },
     delete: () => { mode = "delete"; return q; },
     eq: (k: string, v: any) => { filters.push((r) => r[k] === v); return q; },
     in: (k: string, vs: any[]) => { filters.push((r) => vs.includes(r[k])); return q; },
@@ -50,6 +51,12 @@ function mockQuery(table: string) {
       const items = (Array.isArray(payload) ? payload : [payload]).map((v: Row) => ({ ...v, [PK[table]]: nextServerId++ }));
       rows.push(...items);
       return { data: single ? items[0] : items, error: null };
+    }
+    if (mode === "upsert") {
+      const i = rows.findIndex((r) => r.user_id === payload.user_id && r.exercise_id === payload.exercise_id && r.pr_type === payload.pr_type);
+      if (i >= 0) rows[i] = { ...rows[i], ...payload };
+      else rows.push({ ...payload });
+      return { data: null, error: null };
     }
     if (mode === "update") {
       rows.filter(match).forEach((r) => Object.assign(r, payload));
@@ -96,6 +103,7 @@ beforeEach(() => {
   outbox.__resetOutboxForTests();
   server.workout_sessions = [{ session_id: 1, user_id: "u1", session_name: "Push", end_time: null, session_date: "2026-11-02", start_time: "17:00:00" }];
   server.session_exercises = [{ session_exercise_id: 10, session_id: 1, exercise_id: "bench", exercise_name: "Bench", exercise_order: 1 }];
+  server.personal_records = [];
   server.session_exercise_sets = [{ session_set_id: 100, session_exercise_id: 10, set_number: 1, weight: 135, reps: 5, completed: false }];
   nextServerId = 500;
   goOnline();
@@ -235,4 +243,16 @@ it("retries server trouble a few times before giving up on a change", async () =
   }
   expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(0);
   expect(dropped).toHaveLength(1);
+});
+
+it("keeps a PR set offline and uploads it with the rest", async () => {
+  await db.getPersonalRecords("u1");
+  goOffline();
+  await db.upsertPersonalRecord({ user_id: "u1", exercise_id: "bench", max_weight: 225, max_volume: 1125 });
+  const prs = (await db.getPersonalRecords("u1")).data;
+  expect(prs).toEqual([expect.objectContaining({ exercise_id: "bench", max_weight: 225 })]);
+  expect(server.personal_records).toHaveLength(0);
+  goOnline();
+  await db.syncPendingSessions("u1");
+  expect(server.personal_records).toEqual([expect.objectContaining({ exercise_id: "bench", max_weight: 225, pr_type: "strength" })]);
 });
