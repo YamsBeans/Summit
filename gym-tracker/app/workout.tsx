@@ -533,14 +533,18 @@ export default function WorkoutScreen() {
     const target = replaceTargetRef.current;
     if (!target) return;
     setShowAddExercise(false);
+    // Swapping squats for a run must switch the rows to distance/time too;
+    // the type used to stay as it was.
+    const exType = exercise.exercise_type ?? target.exercise_type ?? "strength";
     const { error } = await db.updateSessionExercise(target.session_exercise_id, {
       exercise_id: exercise.id,
       exercise_name: exercise.name,
+      exercise_type: exType,
     });
     if (error) { setError(error.message); replaceTargetRef.current = null; return; }
     setExercises((prev) => prev.map((e) =>
       e.session_exercise_id === target.session_exercise_id
-        ? { ...e, exercise_id: exercise.id, exercise_name: exercise.name }
+        ? { ...e, exercise_id: exercise.id, exercise_name: exercise.name, exercise_type: exType }
         : e
     ));
     replaceTargetRef.current = null;
@@ -794,6 +798,9 @@ export default function WorkoutScreen() {
           placeholderTextColor={colors.textTertiary}
           value={notes}
           onChangeText={setNotes}
+          // Saved as you go, not only on Finish, so notes survive the app
+          // being closed mid-workout.
+          onBlur={() => { db.updateWorkoutSession(session.session_id, { notes: notes || null }).catch(() => {}); }}
           multiline
         />
 

@@ -355,7 +355,7 @@ const rawLocalDb = {
     return { data: newExercise, error: null };
   },
 
-  updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string }) => {
+  updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string; exercise_type?: ExerciseType }) => {
     localSessionExercises = localSessionExercises.map((e) =>
       e.session_exercise_id === sessionExerciseId ? { ...e, ...updates } : e
     );

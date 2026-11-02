@@ -1,3 +1,4 @@
+import type { ExerciseType } from "@/backend/types";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -339,13 +340,15 @@ export default function WorkoutEditScreen() {
     ]);
   }
 
-  async function handleReplaceExercise(exercise: { id: string; name: string }) {
+  async function handleReplaceExercise(exercise: { id: string; name: string; exercise_type?: ExerciseType }) {
     const target = replaceTargetRef.current;
     if (!target) return;
     setShowPicker(false);
+    const exType = (exercise.exercise_type ?? target.exercise_type ?? "strength") as ExerciseType;
     const { error: err } = await db.updateSessionExercise(target.session_exercise_id, {
       exercise_id: exercise.id,
       exercise_name: exercise.name,
+      exercise_type: exType,
     });
     if (err) {
       setError((err as any).message ?? "Failed to replace exercise");
@@ -355,7 +358,7 @@ export default function WorkoutEditScreen() {
     setExercises((prev) =>
       prev.map((ex) =>
         ex.session_exercise_id === target.session_exercise_id
-          ? { ...ex, exercise_id: exercise.id, exercise_name: exercise.name }
+          ? { ...ex, exercise_id: exercise.id, exercise_name: exercise.name, exercise_type: exType }
           : ex
       )
     );

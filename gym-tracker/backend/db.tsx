@@ -3,6 +3,7 @@ import * as Linking from "expo-linking";
 import { Platform } from "react-native";
 import { supabase } from "./supabaseClient";
 import { logError } from "@/utils/log";
+import type { ExerciseType } from "./types";
 import { localDb, isLocalId, loadLocalDb, finishedLocalSessionIds, removeLocalSessions } from "./localDb";
 import { networkStatus } from "./networkStatus";
 import {
@@ -1094,7 +1095,7 @@ export const db = {
     return localDb.deleteSessionExercise(sessionExerciseId);
   },
 
-  updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string }) => {
+  updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string; exercise_type?: ExerciseType }) => {
     if (!onDevice(sessionExerciseId)) {
       return writeServerRow({ kind: "update", table: "session_exercises", id: sessionExerciseId, values: updates }, async () => {
         const sessionId = exerciseParent.get(sessionExerciseId);
