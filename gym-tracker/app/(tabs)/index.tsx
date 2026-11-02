@@ -24,6 +24,44 @@ function sortRoutines(list: any[]) {
   });
 }
 
+// Each card lists its exercises, like Strong's templates. Reading them also
+// keeps every routine's offline copy fresh, so any routine (not just ones
+// opened before) can be started with no signal.
+async function loadRoutinePreviews(list: any[]): Promise<Record<number, string[]>> {
+  const results = await Promise.all(list.map((r) =>
+    db.getRoutineExercises(r.routine_id).then((res: any) => [r.routine_id, res.data ?? []] as const).catch(() => null)
+  ));
+  const next: Record<number, string[]> = {};
+  for (const entry of results) {
+    if (!entry) continue;
+    const [id, exs] = entry;
+    next[id] = [...exs].sort((a: any, b: any) => a.exercise_order - b.exercise_order).map((e: any) => e.exercise_name);
+    warmRoutineSets(exs);
+  }
+  return next;
+}
+
+// "Bench Press · Squat · Row +2 more"
+function exercisePreview(names: string[], shown = 3): string {
+  const head = names.slice(0, shown).join(" · ");
+  return names.length > shown ? `${head} +${names.length - shown} more` : head;
+}
+
+// Template sets are fetched once per app run per exercise, in the background,
+// purely to warm the offline cache used when starting a routine offline.
+const warmedRoutineExercises = new Set<number>();
+async function warmRoutineSets(exercises: any[]) {
+  for (const ex of exercises) {
+    if (warmedRoutineExercises.has(ex.routine_exercise_id)) continue;
+    warmedRoutineExercises.add(ex.routine_exercise_id);
+    try {
+      await db.getRoutineExerciseSets(ex.routine_exercise_id);
+    } catch {
+      warmedRoutineExercises.delete(ex.routine_exercise_id);
+    }
+  }
+}
+
 export default function WorkoutsScreen() {
   const headerTop = useHeaderTop();
   const router = useRouter();
@@ -55,14 +93,20 @@ export default function WorkoutsScreen() {
   // Delete confirm
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
 
-  const loadRoutines = async (showSpinner = true) => {
+  const [routinePreviews, setRoutinePreviews] = useState<Record<number, string[]>>({});
+
+  const loadRoutines = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoadingRoutines(true);
     setError(null);
     const { data, error: err } = await db.getRoutines();
     if (err) setError(err.message);
-    else setRoutines(sortRoutines(data ?? []));
+    else {
+      const sorted = sortRoutines(data ?? []);
+      setRoutines(sorted);
+      loadRoutinePreviews(sorted).then(setRoutinePreviews).catch(() => {});
+    }
     setLoadingRoutines(false);
-  };
+  }, []);
 
   const insertRoutine = useGuardedPress(async () => {
     if (!routineName.trim()) { setError("Routine name is required"); return; }
@@ -172,7 +216,7 @@ export default function WorkoutsScreen() {
   useFocusEffect(useCallback(() => {
     loadRoutines(!hasLoadedRef.current);
     hasLoadedRef.current = true;
-  }, []));
+  }, [loadRoutines]));
 
   const selectedIdx = routines.findIndex((r) => r.routine_id === selectedRoutine?.routine_id);
 
@@ -328,6 +372,13 @@ export default function WorkoutsScreen() {
                     {item.description ? (
                       <Text style={[styles.routineDesc, { color: colors.textSecondary }]} numberOfLines={1}>
                         {item.description}
+                      </Text>
+                    ) : null}
+                    {routinePreviews[item.routine_id] ? (
+                      <Text style={[styles.routineDesc, { color: colors.textTertiary }]} numberOfLines={2}>
+                        {routinePreviews[item.routine_id].length > 0
+                          ? exercisePreview(routinePreviews[item.routine_id])
+                          : "No exercises yet — tap to add some"}
                       </Text>
                     ) : null}
                   </View>
