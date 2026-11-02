@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
-import { Image, Modal, Pressable, Share, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Modal, Pressable, Share, StyleSheet, Text, TextInput, View } from "react-native";
+import { ModalShell } from "@/components/SettingsUI";
 import { showAlert } from "@/utils/alert";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
@@ -9,7 +10,7 @@ import { useUnits, formatVolume } from "@/utils/units";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
-import { repeatWorkout } from "@/utils/repeatWorkout";
+import { repeatWorkout, saveWorkoutAsRoutine } from "@/utils/repeatWorkout";
 
 type WorkoutHistoryCardProps = {
   session_id: number;
@@ -93,6 +94,9 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   const [deleting, setDeleting] = useState(false);
   const [photoOpen, setPhotoOpen] = useState(false);
   const [repeating, setRepeating] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [routineName, setRoutineName] = useState("");
+  const [savingRoutine, setSavingRoutine] = useState(false);
   const { activeWorkout } = useActiveWorkout();
 
   const duration = parseDuration(sessionDate, startTime, endTime);
@@ -143,6 +147,28 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
       router.push({ pathname: "/workout", params: { sessionId: String(res.sessionId) } });
     } finally {
       setRepeating(false);
+    }
+  };
+
+  const openSaveAsRoutine = () => {
+    setMenuOpen(false);
+    setRoutineName(sessionName);
+    setSaveOpen(true);
+  };
+
+  const handleSaveAsRoutine = async () => {
+    if (savingRoutine) return;
+    setSavingRoutine(true);
+    try {
+      const { data: userData } = await db.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return;
+      const res = await saveWorkoutAsRoutine(db, session_id, userId, routineName);
+      setSaveOpen(false);
+      if ("error" in res) showAlert("Couldn't save routine", res.error);
+      else showAlert("Routine saved", `"${routineName.trim() || sessionName}" is in your routines on the Workout tab.`);
+    } finally {
+      setSavingRoutine(false);
     }
   };
 
@@ -258,6 +284,41 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
         </Pressable>
       </Modal>
 
+      {/* ── Save as routine ── */}
+      <ModalShell visible={saveOpen} onClose={() => setSaveOpen(false)} title="Save as Routine">
+        <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 8 }}>
+          {"Exercises and the sets you completed become the routine’s targets."}
+        </Text>
+        <TextInput
+          value={routineName}
+          onChangeText={setRoutineName}
+          placeholder="Routine name"
+          placeholderTextColor={colors.textTertiary}
+          maxLength={60}
+          autoFocus
+          returnKeyType="done"
+          onSubmitEditing={handleSaveAsRoutine}
+          style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12, fontSize: 16, color: colors.text, backgroundColor: colors.inputBackground }}
+        />
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+          <Pressable
+            onPress={() => setSaveOpen(false)}
+            style={{ flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center", backgroundColor: colors.surfaceSecondary }}
+          >
+            <Text style={{ fontWeight: "600", color: colors.textSecondary }}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            onPress={handleSaveAsRoutine}
+            disabled={savingRoutine}
+            style={{ flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center", backgroundColor: colors.primary }}
+          >
+            {savingRoutine
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={{ fontWeight: "700", color: "#fff" }}>Save</Text>}
+          </Pressable>
+        </View>
+      </ModalShell>
+
       {/* ── Action sheet ── */}
       <Modal visible={menuOpen} transparent animationType="slide" onRequestClose={() => setMenuOpen(false)}>
         <Pressable style={styles.overlay} onPress={() => setMenuOpen(false)}>
@@ -279,6 +340,17 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
                 <Text style={[styles.sheetLabel, { color: colors.text }]}>Repeat Workout</Text>
                 <Text style={{ fontSize: 12, color: colors.textTertiary, marginTop: 1 }}>Same exercises and sets, last numbers as a guide</Text>
               </View>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: colors.surfaceSecondary }]}
+              onPress={openSaveAsRoutine}
+              accessibilityRole="button"
+            >
+              <View style={[styles.sheetIcon, { backgroundColor: colors.surfaceSecondary }]}>
+                <Ionicons name="bookmark-outline" size={18} color={colors.textSecondary} />
+              </View>
+              <Text style={[styles.sheetLabel, { color: colors.text }]}>Save as Routine</Text>
             </Pressable>
 
             <Pressable

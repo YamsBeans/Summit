@@ -42,3 +42,35 @@ it("reports a workout that can't be loaded", async () => {
   db.getWorkoutSession = async () => ({ data: null, error: { message: "nope" } });
   expect(await repeatWorkout(db, 1, "u1")).toEqual({ error: "Couldn't load that workout." });
 });
+
+import { saveWorkoutAsRoutine } from "../utils/repeatWorkout";
+
+it("saves a workout as a routine with its completed sets as targets", async () => {
+  const { db } = fakeDb();
+  const made = { routines: [] as any[], exercises: [] as any[], sets: [] as any[] };
+  let id = 1;
+  const sdb = {
+    ...db,
+    getSessionExerciseSets: async (exId: number) => ({
+      data: exId === 10
+        ? [
+            { set_number: 1, is_warmup: true, weight: 95, reps: 10, completed: true },
+            { set_number: 2, is_warmup: false, weight: 185, reps: 5, completed: true },
+            { set_number: 3, is_warmup: false, weight: null, reps: null, completed: false },
+          ]
+        : [{ set_number: 1, is_warmup: false, weight: 95, reps: 8, completed: false }],
+      error: null,
+    }),
+    insertRoutine: async (r: any) => { const row = { routine_id: id++, ...r }; made.routines.push(row); return { data: row, error: null }; },
+    insertRoutineExercise: async (e: any) => { const row = { routine_exercise_id: id++, ...e }; made.exercises.push(row); return { data: row, error: null }; },
+    insertRoutineExerciseSet: async (s: any) => { made.sets.push(s); return { data: null, error: null }; },
+  };
+  const res = await saveWorkoutAsRoutine(sdb, 1, "u1", "  My Push ");
+  expect(res).toEqual({ routineId: 1 });
+  expect(made.routines[0]).toMatchObject({ routine_name: "My Push", user_id: "u1" });
+  expect(made.exercises.map((e) => e.exercise_id)).toEqual(["bench", "ohp"]);
+  const bench = made.sets.filter((s) => s.routine_exercise_id === made.exercises[0].routine_exercise_id);
+  expect(bench.map((s) => [s.set_number, s.is_warmup, s.target_weight, s.target_reps])).toEqual([[1, true, 95, 10], [2, false, 185, 5]]);
+  // Nothing checked off for OHP: all its sets are used.
+  expect(made.sets.filter((s) => s.routine_exercise_id === made.exercises[1].routine_exercise_id)[0]).toMatchObject({ target_weight: 95, target_reps: 8 });
+});
