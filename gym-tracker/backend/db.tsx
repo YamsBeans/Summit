@@ -412,7 +412,9 @@ const onDevice = (id: number | null | undefined) => !isOnline || isLocalId(id);
 async function mirrorPerParent(rows: any, parentIds: number[], parentKey: string, prefix: string) {
   if (!Array.isArray(rows)) return;
   rememberRows(rows);
-  if (!shouldUseSupabase()) return;
+  // Only for small batches (one workout on the edit screen). The profile's
+  // all-history batch would mean thousands of storage writes per visit.
+  if (!shouldUseSupabase() || parentIds.length > 30) return;
   const byParent = new Map<number, any[]>(parentIds.map((id) => [id, []]));
   for (const r of rows) byParent.get(r[parentKey])?.push(r);
   await writeCacheMany([...byParent].map(([id, list]) => [`${prefix}:${id}`, list]));
@@ -1423,7 +1425,9 @@ export const db = {
     }
     // Offline changes are waiting: read each workout's (patched) offline
     // copy instead of the batch cache or the not-yet-updated server.
-    if (await hasPendingOps()) {
+    // (Small batches only: the profile's whole-history read would turn into
+    // one request per workout. It catches up once the changes upload.)
+    if (sessionIds.length <= 30 && (await hasPendingOps())) {
       const rs = await Promise.all(sessionIds.map((id) => db.getSessionExercises(id)));
       return { data: rs.flatMap((r: any) => r.data ?? []), error: null };
     }
@@ -1454,7 +1458,7 @@ export const db = {
     }
     // Temporary IDs (exercises added offline) or offline changes waiting:
     // per exercise, which knows both.
-    if (exerciseIds.some(isTempId) || (await hasPendingOps())) {
+    if (exerciseIds.some(isTempId) || (exerciseIds.length <= 30 && (await hasPendingOps()))) {
       const rs = await Promise.all(exerciseIds.map((id) => db.getSessionExerciseSets(id)));
       return { data: rs.flatMap((r: any) => r.data ?? []), error: null };
     }
