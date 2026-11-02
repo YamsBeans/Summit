@@ -85,6 +85,8 @@ export default function WorkoutScreen() {
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [prevSets, setPrevSets] = useState<Record<string, any[]>>({});
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
+  // Exercises whose note box is open (it's always shown once a note exists).
+  const [noteOpenFor, setNoteOpenFor] = useState<Set<number>>(() => new Set());
   const [selectedExerciseForOptions, setSelectedExerciseForOptions] = useState<any>(null);
   const exercisePickerModeRef = useRef<"add" | "replace">("add");
   const replaceTargetRef = useRef<any>(null);
@@ -203,7 +205,7 @@ export default function WorkoutScreen() {
       }
     }
 
-    const exs = exercisesResult.data ?? [];
+    const exs = [...(exercisesResult.data ?? [])].sort((a: any, b: any) => a.exercise_order - b.exercise_order);
     setExercises(exs);
 
     const userId = userResult.data?.user?.id;
@@ -529,6 +531,36 @@ export default function WorkoutScreen() {
     closeExerciseOptions();
   });
 
+  const saveExerciseNote = useCallback(async (sessionExerciseId: number, text: string) => {
+    const notes = text.trim();
+    setExercises((prev) => prev.map((e) =>
+      e.session_exercise_id === sessionExerciseId ? { ...e, notes } : e
+    ));
+    const { error } = await db.updateSessionExercise(sessionExerciseId, { notes });
+    if (error) setError(error.message);
+  }, []);
+
+  // Move an exercise up or down (swap exercise_order with its neighbour).
+  const moveExercise = useCallback(async (ex: any, dir: -1 | 1) => {
+    const idx = exercises.findIndex((e) => e.session_exercise_id === ex.session_exercise_id);
+    const other = exercises[idx + dir];
+    if (idx < 0 || !other) return;
+    const next = [...exercises];
+    next[idx] = { ...other, exercise_order: ex.exercise_order };
+    next[idx + dir] = { ...ex, exercise_order: other.exercise_order };
+    // Orders can collide (e.g. two exercises added at once); keep them distinct.
+    if (ex.exercise_order === other.exercise_order) {
+      next.forEach((e, i) => { next[i] = { ...e, exercise_order: i + 1 }; });
+    }
+    setExercises(next);
+    const changed = next.filter((e) =>
+      exercises.find((o) => o.session_exercise_id === e.session_exercise_id)?.exercise_order !== e.exercise_order);
+    const results = await Promise.all(changed.map((e) =>
+      db.updateSessionExercise(e.session_exercise_id, { exercise_order: e.exercise_order })));
+    const err = results.find((r: any) => r?.error)?.error;
+    if (err) setError(err.message);
+  }, [exercises]);
+
   const handleReplaceExercise = useGuardedPress(async (exercise: any) => {
     const target = replaceTargetRef.current;
     if (!target) return;
@@ -724,6 +756,14 @@ export default function WorkoutScreen() {
                 </Pressable>
               </View>
 
+              {(ex.notes || noteOpenFor.has(ex.session_exercise_id)) && (
+                <ExerciseNote
+                  initial={ex.notes ?? ""}
+                  autoFocus={!ex.notes}
+                  onSave={(text) => saveExerciseNote(ex.session_exercise_id, text)}
+                />
+              )}
+
               {/* Column headers — vary by exercise type */}
               {ex.exercise_type === 'cardio' ? (
                 <View style={[styles.colHeaders, { borderBottomColor: colors.border }]}>
@@ -904,6 +944,54 @@ export default function WorkoutScreen() {
             <Pressable
               style={[modalStyles.option, { borderBottomColor: colors.border }]}
               onPress={() => {
+                const ex = selectedExerciseForOptions;
+                closeExerciseOptions();
+                if (ex) setNoteOpenFor((prev) => new Set(prev).add(ex.session_exercise_id));
+              }}
+            >
+              <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="create-outline" size={16} color={colors.primary} />
+              </View>
+              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>
+                {selectedExerciseForOptions?.notes ? "Edit Note" : "Add Note"}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+            </Pressable>
+            {exercises.length > 1 && (
+              <View style={[modalStyles.option, { borderBottomColor: colors.border, gap: 10 }]}>
+                <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                  <Ionicons name="reorder-three-outline" size={16} color={colors.primary} />
+                </View>
+                <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Reorder</Text>
+                {(() => {
+                  const idx = exercises.findIndex((e) => e.session_exercise_id === selectedExerciseForOptions?.session_exercise_id);
+                  const btn = (dir: -1 | 1, icon: "arrow-up" | "arrow-down", label: string, disabled: boolean) => (
+                    <Pressable
+                      key={label}
+                      disabled={disabled}
+                      onPress={() => {
+                        const ex = selectedExerciseForOptions;
+                        closeExerciseOptions();
+                        if (ex) moveExercise(ex, dir);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={label}
+                      hitSlop={6}
+                      style={{ padding: 8, borderRadius: 8, backgroundColor: colors.surfaceSecondary, opacity: disabled ? 0.35 : 1 }}
+                    >
+                      <Ionicons name={icon} size={16} color={colors.text} />
+                    </Pressable>
+                  );
+                  return [
+                    btn(-1, "arrow-up", "Move up", idx <= 0),
+                    btn(1, "arrow-down", "Move down", idx < 0 || idx >= exercises.length - 1),
+                  ];
+                })()}
+              </View>
+            )}
+            <Pressable
+              style={[modalStyles.option, { borderBottomColor: colors.border }]}
+              onPress={() => {
                 exercisePickerModeRef.current = "replace";
                 replaceTargetRef.current = selectedExerciseForOptions;
                 closeExerciseOptions();
@@ -1058,6 +1146,36 @@ function formatElapsed(seconds: number) {
 
 // Owns the once-a-second tick so only this label re-renders, not the whole
 // workout screen and every exercise card under it.
+// A note under an exercise ("seat 4", "felt heavy"), saved when you leave it.
+const ExerciseNote = memo(function ExerciseNote({ initial, autoFocus, onSave }: {
+  initial: string;
+  autoFocus: boolean;
+  onSave: (text: string) => void;
+}) {
+  const { colors } = useTheme();
+  const [text, setText] = useState(initial);
+  useEffect(() => { setText(initial); }, [initial]);
+  return (
+    <TextInput
+      value={text}
+      onChangeText={setText}
+      // An emptied box stays open until the screen reloads; closing it on
+      // blur made it vanish as soon as the options sheet took focus.
+      onBlur={() => { if (text.trim() !== initial.trim()) onSave(text); }}
+      placeholder="Add a note…"
+      placeholderTextColor={colors.textTertiary}
+      autoFocus={autoFocus}
+      multiline
+      maxLength={300}
+      style={{
+        marginHorizontal: 16, marginBottom: 8, paddingHorizontal: 10, paddingVertical: 6,
+        borderRadius: 8, fontSize: 13, color: colors.text, backgroundColor: colors.surfaceSecondary,
+      }}
+      accessibilityLabel="Exercise note"
+    />
+  );
+});
+
 function ElapsedTime({ startTs, running, style }: { startTs: number | null; running: boolean; style: any }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

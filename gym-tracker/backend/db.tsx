@@ -1095,7 +1095,7 @@ export const db = {
     return localDb.deleteSessionExercise(sessionExerciseId);
   },
 
-  updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string; exercise_type?: ExerciseType }) => {
+  updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string; exercise_type?: ExerciseType; exercise_order?: number }) => {
     if (!onDevice(sessionExerciseId)) {
       return writeServerRow({ kind: "update", table: "session_exercises", id: sessionExerciseId, values: updates }, async () => {
         const sessionId = exerciseParent.get(sessionExerciseId);
