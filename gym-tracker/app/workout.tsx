@@ -589,6 +589,8 @@ export default function WorkoutScreen() {
     reloadSetsForExercise(newEx.session_exercise_id);
   });
 
+  // Load once on open; loadSession reads the route param, which doesn't change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadSession(); }, []);
 
   if (loading) {

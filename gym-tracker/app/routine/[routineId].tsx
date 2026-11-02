@@ -81,11 +81,15 @@ export default function RoutineScreen() {
     setLoading(false);
   };
 
-  const reloadSetsForExercise = async (routineExerciseId: number) => {
+  // Stable, so the set callbacks below (and the memoized rows) don't change
+  // on every render.
+  const reloadSetsForExercise = useCallback(async (routineExerciseId: number) => {
     const { data } = await db.getRoutineExerciseSets(routineExerciseId);
     setExerciseSets((prev) => ({ ...prev, [routineExerciseId]: data ?? [] }));
-  };
+  }, []);
 
+  // Reload on focus; loadData reads the route param, which doesn't change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useFocusEffect(useCallback(() => { loadData(); }, []));
 
   // ─── Mode transitions ──────────────────────────────────────────────────────

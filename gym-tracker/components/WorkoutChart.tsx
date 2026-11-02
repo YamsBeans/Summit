@@ -126,7 +126,7 @@ export default function WorkoutChart({ sessions }: Props) {
     });
 
     return { barData, periodTotal: total, weekLabels };
-  }, [sessions, metric, range, numWeeks, colors, toDisplay]);
+  }, [sessions, metric, numWeeks, colors, toDisplay]);
 
   // Apply selection-aware colors without rerunning the full memo
   const coloredBarData = barData.map((item, i) => {

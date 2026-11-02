@@ -75,7 +75,7 @@ function RootNav() {
     } else if (!session && !inAuthScreen && !inResetPassword) {
       router.replace("/auth");
     }
-  }, [session, loading, segments]);
+  }, [session, loading, segments, router]);
 
   if (loading) return null;
 

@@ -78,9 +78,9 @@ export default function WorkoutEditScreen() {
   const pickerModeRef = useRef<"add" | "replace">("add");
   const replaceTargetRef = useRef<EditExercise | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  // Load once on open; loadData reads the route param, which doesn't change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true);

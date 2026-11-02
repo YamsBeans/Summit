@@ -21,6 +21,11 @@ type Props = {
   distanceUnit: "km" | "mi";
 };
 
+// Stored meters → the text shown in the distance box, in the user's unit.
+function toDistStr(meters: number | null | undefined, unit: "km" | "mi"): string {
+  return meters != null ? String(parseFloat(metersToDisplay(meters, unit).toFixed(2))) : "";
+}
+
 const CardioSetRow = memo(function CardioSetRow({
   set,
   sessionExerciseId,
@@ -32,16 +37,11 @@ const CardioSetRow = memo(function CardioSetRow({
 }: Props) {
   const { colors } = useTheme();
 
-  const toDistStr = (meters: number | null | undefined) =>
-    meters != null
-      ? String(parseFloat(metersToDisplay(meters, distanceUnit).toFixed(2)))
-      : "";
-
-  const [distanceInput, setDistanceInput] = useState(toDistStr(set.distance_meters));
+  const [distanceInput, setDistanceInput] = useState(toDistStr(set.distance_meters, distanceUnit));
   const [digitBuffer, setDigitBuffer] = useState(() => secondsToDigits(set.duration_seconds));
 
   useEffect(() => {
-    setDistanceInput(toDistStr(set.distance_meters));
+    setDistanceInput(toDistStr(set.distance_meters, distanceUnit));
   }, [set.distance_meters, distanceUnit]);
 
   useEffect(() => {
