@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LineChart } from "react-native-gifted-charts";
+import { niceAxisRange } from "@/utils/chartScale";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
@@ -103,16 +104,9 @@ export default function ExerciseDetailScreen() {
       .filter(Boolean) as { value: number; label: string; dataPointText: string }[];
   }, [history, metric, toDisplay]);
 
-  // Round the y-axis to friendly numbers (0/50/100/150…) instead of 17, 34, 51…
-  const chartMax = useMemo(() => {
-    const top = Math.max(0, ...chartData.map((d) => d.value));
-    if (top <= 0) return 10;
-    const sections = 4;
-    const rawStep = (top * 1.1) / sections;
-    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((c) => c >= rawStep) ?? 10 * mag;
-    return step * sections;
-  }, [chartData]);
+  // Friendly axis numbers, zoomed to the data's range when it sits far
+  // from zero, so going from 185 to 205 is visible.
+  const axis = useMemo(() => niceAxisRange(chartData.map((d) => d.value)), [chartData]);
 
   // Cardio gets its own view (distance/time/pace). Detect it from the data too,
   // for entry points that don't pass the type.
@@ -235,7 +229,8 @@ export default function ExerciseDetailScreen() {
                     textFontSize={10}
                     textShiftY={-6}
                     textShiftX={-6}
-                    maxValue={chartMax}
+                    maxValue={axis.span}
+                    yAxisOffset={axis.offset}
                     noOfSections={4}
                     rulesColor={colors.border}
                     rulesType="dashed"

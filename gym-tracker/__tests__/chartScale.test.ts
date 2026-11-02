@@ -23,3 +23,29 @@ describe("niceAxisMax", () => {
     }
   });
 });
+
+import { niceAxisRange } from "@/utils/chartScale";
+
+describe("niceAxisRange", () => {
+  it("zooms in on a narrow band far from zero", () => {
+    const { offset, span } = niceAxisRange([185, 205]);
+    expect(offset).toBeGreaterThan(100);
+    expect(offset).toBeLessThanOrEqual(185);
+    expect(offset + span).toBeGreaterThanOrEqual(205);
+    expect(Number.isInteger(span / 4)).toBe(true);
+  });
+
+  it("keeps zero for wide ranges and empty data", () => {
+    expect(niceAxisRange([20, 200]).offset).toBe(0);
+    expect(niceAxisRange([]).offset).toBe(0);
+    expect(niceAxisRange([0, 5]).offset).toBe(0);
+  });
+
+  it("always contains every value", () => {
+    for (const vals of [[1, 1], [99, 101], [500, 510, 530], [1234, 1300], [45.5, 47.5], [10000, 10500]]) {
+      const { offset, span } = niceAxisRange(vals);
+      expect(offset).toBeLessThanOrEqual(Math.min(...vals));
+      expect(offset + span).toBeGreaterThanOrEqual(Math.max(...vals));
+    }
+  });
+});
