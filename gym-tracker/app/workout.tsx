@@ -819,6 +819,8 @@ export default function WorkoutScreen() {
                   <SetRow
                     key={set.session_set_id}
                     set={set}
+                    // Working sets count 1, 2, 3 after any warm-ups (W), like Strong.
+                    workingNumber={sets.slice(0, idx + 1).filter((x: any) => !x.is_warmup).length}
                     sessionExerciseId={ex.session_exercise_id}
                     onUpdate={updateSet}
                     onSetNumberPress={openSetOptions}
@@ -1247,8 +1249,10 @@ const SetRow = memo(function SetRow({
   onSetNumberPress,
   prevSet,
   onComplete,
+  workingNumber,
 }: {
   set: any;
+  workingNumber?: number;
   sessionExerciseId: number;
   onUpdate: (id: number, exId: number, updates: any) => void;
   onSetNumberPress: (set: any, sessionExerciseId: number) => void;
@@ -1370,7 +1374,7 @@ const SetRow = memo(function SetRow({
           isWarmup && { color: colors.warning },
           isCompleted && { color: colors.success },
         ]}>
-          {isWarmup ? "W" : set.set_number}
+          {isWarmup ? "W" : workingNumber ?? set.set_number}
         </Text>
       </Pressable>
 
