@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { db, initLocalStore } from "@/backend/db";
 import { ThemeProvider, useTheme } from "@/theme/ThemeContext";
@@ -16,6 +17,8 @@ function RootNav() {
   const userId = session?.user?.id ?? null;
   const { isSyncing, lastSyncedCount } = useSyncManager(userId);
   const { activeWorkout, minimizeWorkout } = useActiveWorkout();
+  // The sync banners sit above every screen, so they need the notch inset.
+  const { top: safeTop } = useSafeAreaInsets();
 
   // The in-progress workout only lived in memory, so after the app was killed
   // (or the web page reloaded) the "resume workout" bar vanished and the
@@ -79,13 +82,13 @@ function RootNav() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {isSyncing && (
-        <View style={{ backgroundColor: colors.primary, paddingVertical: 6, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <View style={{ backgroundColor: colors.primary, paddingTop: safeTop + 6, paddingBottom: 6, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 8 }}>
           <ActivityIndicator size="small" color="#fff" />
-          <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>Syncing offline workouts…</Text>
+          <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>Syncing workouts logged offline…</Text>
         </View>
       )}
       {!isSyncing && lastSyncedCount > 0 && (
-        <View style={{ backgroundColor: colors.success, paddingVertical: 6, paddingHorizontal: 16 }}>
+        <View style={{ backgroundColor: colors.success, paddingTop: safeTop + 6, paddingBottom: 6, paddingHorizontal: 16 }}>
           <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>
             {lastSyncedCount} workout{lastSyncedCount > 1 ? "s" : ""} synced!
           </Text>

@@ -1203,10 +1203,15 @@ export const db = {
         .from("session_exercises").insert(exerciseInserts).select();
       if (exErr) return { data: null, error: exErr };
 
-      // Round 4: batch insert all sets at once (sessionExercises preserves insertion order)
+      // Round 4: batch insert all sets at once. Match each new row to its
+      // template by order and exercise, not by position: PostgREST doesn't
+      // promise to return inserted rows in the order they were sent.
       const setInserts: any[] = [];
-      (sessionExercises ?? []).forEach((sessionEx: any, i: number) => {
-        const origEx = (exercises ?? [])[i];
+      const unmatched = [...(exercises ?? [])];
+      (sessionExercises ?? []).forEach((sessionEx: any) => {
+        const at = unmatched.findIndex((e: any) =>
+          e.exercise_order === sessionEx.exercise_order && e.exercise_id === sessionEx.exercise_id);
+        const origEx = at >= 0 ? unmatched.splice(at, 1)[0] : undefined;
         const templateSets = (allTemplateSets ?? []).filter(
           (ts: any) => ts.routine_exercise_id === origEx?.routine_exercise_id
         );
@@ -1224,7 +1229,8 @@ export const db = {
         }
       });
       if (setInserts.length > 0) {
-        await supabase.from("session_exercise_sets").insert(setInserts);
+        const { error: setErr } = await supabase.from("session_exercise_sets").insert(setInserts);
+        if (setErr) logError("startWorkoutFromRoutine.sets", setErr);
       }
 
       // Keep the offline copy of this routine fresh so it can be started
