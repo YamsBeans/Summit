@@ -11,7 +11,6 @@ import {
   removeFromQueue,
   getPendingCount,
   markSessionOrigin,
-  getSessionOrigin,
   clearSessionOrigin,
   updateQueuedSession,
   getSyncedLocalSessions,
@@ -19,7 +18,21 @@ import {
   forgetSyncedLocalSessions,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
-import { cachedRead, clearReadCache, isNetworkError, writeCache } from "./readCache";
+import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache } from "./readCache";
+import {
+  OutboxOp,
+  ExecuteResult,
+  PRIMARY_KEY,
+  enqueueOp,
+  flushOutbox,
+  hasPendingOps,
+  inOutboxOrder,
+  isTempId,
+  newTempId,
+  pendingOpCount,
+  resolveId,
+  translateWithKnownIds,
+} from "./outbox";
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -175,6 +188,8 @@ async function rollbackSyncedSession(sessionId: number) {
 
 async function runPendingSync(userId: string): Promise<{ synced: number; errors: number }> {
   if (!isOnline) return { synced: 0, errors: 0 };
+  // Changes to server workouts made offline go first, in order.
+  await flushNow();
   const queue = await getPendingQueue();
   if (queue.length === 0) return { synced: 0, errors: 0 };
 
@@ -239,6 +254,138 @@ async function runPendingSync(userId: string): Promise<{ synced: number; errors:
 
   if (successfulIndices.length > 0) await removeFromQueue(successfulIndices);
   return { synced, errors };
+}
+
+
+// ─── Offline changes to server workouts ──────────────────────────────────────
+// A workout that started online (or an old one being edited) keeps working
+// with no signal: changes go to the outbox (outbox.ts) and the read cache is
+// updated to match, so the screen shows what was logged. They used to be
+// written to the empty local store and vanish.
+
+// Which exercise a set belongs to, and which workout an exercise belongs to,
+// learned from reads, so an offline change can update the right cached list.
+const setParent = new Map<number, number>();
+const exerciseParent = new Map<number, number>();
+
+function rememberRows(rows: any) {
+  for (const r of Array.isArray(rows) ? rows : rows ? [rows] : []) {
+    if (r?.session_set_id != null && r.session_exercise_id != null) setParent.set(r.session_set_id, r.session_exercise_id);
+    else if (r?.session_exercise_id != null && r.session_id != null) exerciseParent.set(r.session_exercise_id, r.session_id);
+  }
+}
+
+async function patchCachedList(key: string, fn: (rows: any[]) => any[], createIfMissing = false) {
+  const current = await readCache<any[]>(key);
+  if (current == null && !createIfMissing) return;
+  await writeCache(key, fn(Array.isArray(current) ? current : []));
+}
+
+async function patchCachedRow(key: string, values: Record<string, any>) {
+  const current = await readCache<any>(key);
+  if (current && typeof current === "object") await writeCache(key, { ...current, ...values });
+}
+
+// Send one change to Supabase. Network trouble → retry later; anything else
+// is the server refusing it.
+async function executeOp(op: OutboxOp): Promise<ExecuteResult & { row?: any }> {
+  const pk = PRIMARY_KEY[op.table];
+  const fail = (error: any): ExecuteResult => ({ ok: false, retry: isNetworkError(error), error });
+  try {
+    if (op.kind === "insert") {
+      const { data, error } = await supabase.from(op.table).insert(op.values ?? {}).select().single();
+      if (error || !data) return fail(error ?? { message: "Insert returned no row" });
+      return { ok: true, id: data[pk], row: data };
+    }
+    if (op.kind === "update") {
+      const { error } = await supabase.from(op.table).update(op.values ?? {}).eq(pk, op.id);
+      return error ? fail(error) : { ok: true };
+    }
+    // Delete children first (Supabase won't cascade unless the FK says so).
+    if (op.table === "workout_sessions") {
+      const { data: exercises, error } = await supabase.from("session_exercises")
+        .select("session_exercise_id").eq("session_id", op.id);
+      if (error) return fail(error);
+      const exerciseIds = (exercises ?? []).map((ex: any) => ex.session_exercise_id);
+      if (exerciseIds.length > 0) {
+        const r = await supabase.from("session_exercise_sets").delete().in("session_exercise_id", exerciseIds);
+        if (r.error) return fail(r.error);
+      }
+      const r = await supabase.from("session_exercises").delete().eq("session_id", op.id);
+      if (r.error) return fail(r.error);
+    } else if (op.table === "session_exercises") {
+      const r = await supabase.from("session_exercise_sets").delete().eq("session_exercise_id", op.id);
+      if (r.error) return fail(r.error);
+    }
+    const { error } = await supabase.from(op.table).delete().eq(pk, op.id);
+    return error ? fail(error) : { ok: true };
+  } catch (e) {
+    // A thrown fetch is almost always no connection.
+    return { ok: false, retry: true, error: e };
+  }
+}
+
+const flushNow = () =>
+  flushOutbox(executeOp).catch((e) => {
+    logError("flushOutbox", e);
+    return { done: 0, dropped: 0, remaining: -1 };
+  });
+
+const ROW_DEFAULTS: Record<string, Record<string, any>> = {
+  session_exercise_sets: {
+    completed: false, duration_seconds: null, distance_meters: null,
+    pace_sec_per_km: null, calories: null, effort_level: null,
+  },
+  session_exercises: { notes: null, exercise_type: "strength" },
+  workout_sessions: {},
+};
+
+/**
+ * Write a change to a server workout: straight to Supabase when it's
+ * reachable and nothing is waiting in the outbox (so changes stay in order),
+ * otherwise into the outbox, with `preview` updating the read cache.
+ */
+async function writeServerRow(
+  op: OutboxOp,
+  preview: (row: any) => Promise<void>,
+): Promise<{ data: any; error: any }> {
+  if (networkStatus.isConnected && !(await hasPendingOps())) {
+    const ready = await translateWithKnownIds(op);
+    if (ready) {
+      const r = await executeOp(ready);
+      if (r.ok) {
+        rememberRows(r.row);
+        // Keep the offline copy current too.
+        await inOutboxOrder(() => preview(r.row ?? null)).catch(() => {});
+        return { data: r.row ?? null, error: null };
+      }
+      if (!r.retry) return { data: null, error: r.error };
+    }
+  }
+  const pk = PRIMARY_KEY[op.table];
+  const tempId = op.kind === "insert" ? newTempId() : undefined;
+  const row = op.kind === "insert" ? { ...ROW_DEFAULTS[op.table], ...op.values, [pk]: tempId } : null;
+  rememberRows(row);
+  await enqueueOp({ ...op, tempId }, () => preview(row));
+  if (networkStatus.isConnected) flushNow();
+  return { data: row, error: null };
+}
+
+// Route by where a workout's rows live: the device store (local-only builds,
+// and workouts started offline) or Supabase (directly or via the outbox).
+const onDevice = (id: number | null | undefined) => !isOnline || isLocalId(id);
+
+const ACTIVE_SESSION_KEY = "activeSession";
+
+// While offline changes are waiting to upload, the cached copy (which has
+// them applied) is newer than the server's, so read that instead.
+async function offlineCopyIsNewer(cacheKey: string): Promise<boolean> {
+  if (!(await hasPendingOps())) return false;
+  return (await readCache(cacheKey)) != null;
+}
+async function forgetCachedActiveSession(sessionId: number) {
+  const cached = await readCache<any>(ACTIVE_SESSION_KEY);
+  if (cached && cached.session_id === sessionId) await writeCache(ACTIVE_SESSION_KEY, false);
 }
 
 export const db = {
@@ -672,21 +819,25 @@ export const db = {
   },
 
   finishWorkoutSession: async (sessionId: number, notes?: string | null) => {
-    if (useSupabaseFor(sessionId)) {
-      const now = new Date();
-      const result = await supabase.from("workout_sessions").update({
-        end_time: now.toTimeString().split(" ")[0],
-        notes,
-      }).eq("session_id", sessionId);
+    if (!onDevice(sessionId)) {
+      const values = { end_time: new Date().toTimeString().split(" ")[0], notes: notes ?? null };
+      const result = await writeServerRow(
+        { kind: "update", table: "workout_sessions", id: sessionId, values },
+        async () => {
+          await patchCachedRow(`workoutSession:${sessionId}`, values);
+          await forgetCachedActiveSession(sessionId);
+        },
+      );
       await clearSessionOrigin();
+      // If the signal is back, upload everything before the caller reads the
+      // routine and PRs back from the server.
+      if (networkStatus.isConnected && (await hasPendingOps())) await flushNow();
       return result;
     }
     // Offline: finish locally then queue the full session tree for later sync
     const result = await localDb.finishWorkoutSession(sessionId, notes);
-    const origin = await getSessionOrigin();
-    // Queue it for Supabase if it was logged offline (a local ID). The origin
-    // marker covers workouts from before local IDs existed.
-    if (isOnline && (isLocalId(sessionId) || (origin?.isLocal && origin.sessionId === sessionId))) {
+    // Logged offline in a Supabase build: queue it for upload.
+    if (isOnline && isLocalId(sessionId)) {
       const queued = await queueLocalSession(sessionId);
       // Back online already? Upload it now rather than at the next reconnect.
       if (queued && shouldUseSupabase()) {
@@ -809,7 +960,7 @@ export const db = {
   getWorkoutSession: async (sessionId: number) => {
     if (isLocalId(sessionId)) return localDb.getWorkoutSession(sessionId);
     return cachedRead(
-      shouldUseSupabase(),
+      shouldUseSupabase() && !(await offlineCopyIsNewer(`workoutSession:${sessionId}`)),
       `workoutSession:${sessionId}`,
       () => supabase.from("workout_sessions")
         .select("*")
@@ -824,8 +975,11 @@ export const db = {
     // Supabase doesn't know about it yet.
     const local = await localDb.getActiveSession(userId);
     if (local.data) return local;
-    if (shouldUseSupabase()) {
-      return supabase.from("workout_sessions")
+    if (!isOnline) return local;
+    // Cached too (including "none"), so a workout started online can still
+    // be resumed after reopening the app in a gym with no signal.
+    if (shouldUseSupabase() && !(await offlineCopyIsNewer(ACTIVE_SESSION_KEY))) {
+      const res = await supabase.from("workout_sessions")
         .select("*")
         .eq("user_id", userId)
         .is("end_time", null)
@@ -834,15 +988,22 @@ export const db = {
         .order("session_id", { ascending: false })
         .limit(1)
         .maybeSingle();
+      if (!res.error) {
+        await writeCache(ACTIVE_SESSION_KEY, res.data ?? false);
+        return res;
+      }
+      if (!isNetworkError(res.error)) return res;
     }
-    return local;
+    const cached = await readCache<any>(ACTIVE_SESSION_KEY);
+    return { data: cached && cached.user_id === userId ? cached : null, error: null };
   },
 
   updateWorkoutSession: async (sessionId: number, updates: { notes?: string | null; session_name?: string }) => {
-    if (useSupabaseFor(sessionId)) {
-      return supabase.from("workout_sessions")
-        .update(updates)
-        .eq("session_id", sessionId);
+    if (!onDevice(sessionId)) {
+      return writeServerRow(
+        { kind: "update", table: "workout_sessions", id: sessionId, values: updates },
+        () => patchCachedRow(`workoutSession:${sessionId}`, updates),
+      );
     }
     const result = await localDb.updateWorkoutSession(sessionId, updates);
     if (isLocalId(sessionId)) await updateFinishedLocalSession(sessionId, updates);
@@ -850,21 +1011,11 @@ export const db = {
   },
 
   deleteWorkoutSession: async (sessionId: number) => {
-    if (useSupabaseFor(sessionId)) {
-      // Delete child records first (Supabase won't cascade unless FK has ON DELETE CASCADE)
-      const { data: exercises } = await supabase.from("session_exercises")
-        .select("session_exercise_id")
-        .eq("session_id", sessionId);
-
-      // Delete all child sets in one request instead of one per exercise.
-      const exerciseIds = (exercises ?? []).map((ex: any) => ex.session_exercise_id);
-      if (exerciseIds.length > 0) {
-        await supabase.from("session_exercise_sets")
-          .delete()
-          .in("session_exercise_id", exerciseIds);
-      }
-      await supabase.from("session_exercises").delete().eq("session_id", sessionId);
-      return supabase.from("workout_sessions").delete().eq("session_id", sessionId);
+    if (!onDevice(sessionId)) {
+      return writeServerRow(
+        { kind: "delete", table: "workout_sessions", id: sessionId },
+        () => forgetCachedActiveSession(sessionId),
+      );
     }
     return localDb.deleteWorkoutSession(sessionId);
   },
@@ -872,8 +1023,8 @@ export const db = {
   // Session Exercises
   getSessionExercises: async (sessionId: number) => {
     if (isLocalId(sessionId)) return localDb.getSessionExercises(sessionId);
-    return cachedRead(
-      shouldUseSupabase(),
+    const res = await cachedRead(
+      shouldUseSupabase() && !(await offlineCopyIsNewer(`sessionExercises:${sessionId}`)),
       `sessionExercises:${sessionId}`,
       () => supabase.from("session_exercises")
         .select("*")
@@ -881,26 +1032,44 @@ export const db = {
         .order("exercise_order"),
       () => localDb.getSessionExercises(sessionId),
     );
+    rememberRows(res.data);
+    return res;
   },
 
   insertSessionExercise: async (exercise: { session_id: number; exercise_id: string; exercise_name: string; exercise_order: number; notes: string | null; exercise_type?: 'strength' | 'cardio' | 'stretching' }) => {
-    if (useSupabaseFor(exercise.session_id)) {
-      return supabase.from("session_exercises").insert({ exercise_type: 'strength', ...exercise }).select().single();
+    if (!onDevice(exercise.session_id)) {
+      return writeServerRow(
+        { kind: "insert", table: "session_exercises", values: { exercise_type: "strength", ...exercise } },
+        async (row) => {
+          await patchCachedList(`sessionExercises:${exercise.session_id}`, (rows) => [...rows, row], true);
+          await writeCache(`sessionExerciseSets:${row.session_exercise_id}`, []);
+        },
+      );
     }
     return localDb.insertSessionExercise(exercise);
   },
 
   deleteSessionExercise: async (sessionExerciseId: number) => {
-    if (useSupabaseFor(sessionExerciseId)) {
-      await supabase.from("session_exercise_sets").delete().eq("session_exercise_id", sessionExerciseId);
-      return supabase.from("session_exercises").delete().eq("session_exercise_id", sessionExerciseId);
+    if (!onDevice(sessionExerciseId)) {
+      return writeServerRow({ kind: "delete", table: "session_exercises", id: sessionExerciseId }, async () => {
+        const sessionId = exerciseParent.get(sessionExerciseId);
+        if (sessionId != null) {
+          await patchCachedList(`sessionExercises:${sessionId}`, (rows) => rows.filter((r) => r.session_exercise_id !== sessionExerciseId));
+        }
+      });
     }
     return localDb.deleteSessionExercise(sessionExerciseId);
   },
 
   updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string }) => {
-    if (useSupabaseFor(sessionExerciseId)) {
-      return supabase.from("session_exercises").update(updates).eq("session_exercise_id", sessionExerciseId);
+    if (!onDevice(sessionExerciseId)) {
+      return writeServerRow({ kind: "update", table: "session_exercises", id: sessionExerciseId, values: updates }, async () => {
+        const sessionId = exerciseParent.get(sessionExerciseId);
+        if (sessionId != null) {
+          await patchCachedList(`sessionExercises:${sessionId}`, (rows) =>
+            rows.map((r) => (r.session_exercise_id === sessionExerciseId ? { ...r, ...updates } : r)));
+        }
+      });
     }
     return localDb.updateSessionExercise(sessionExerciseId, updates);
   },
@@ -908,34 +1077,52 @@ export const db = {
   // Session Exercise Sets
   getSessionExerciseSets: async (sessionExerciseId: number) => {
     if (isLocalId(sessionExerciseId)) return localDb.getSessionExerciseSets(sessionExerciseId);
-    return cachedRead(
-      shouldUseSupabase(),
+    // An exercise added offline has a temporary ID: once uploaded, ask the
+    // server under its real one; until then, only the offline view exists.
+    const realId = isTempId(sessionExerciseId) ? await resolveId(sessionExerciseId) : sessionExerciseId;
+    const res = await cachedRead(
+      shouldUseSupabase() && realId != null && !(await offlineCopyIsNewer(`sessionExerciseSets:${sessionExerciseId}`)),
       `sessionExerciseSets:${sessionExerciseId}`,
       () => supabase.from("session_exercise_sets")
         .select("*")
-        .eq("session_exercise_id", sessionExerciseId)
+        .eq("session_exercise_id", realId)
         .order("set_number"),
-      () => localDb.getSessionExerciseSets(sessionExerciseId),
+      async () => ({ data: [], error: null }),
     );
+    rememberRows(res.data);
+    return res;
   },
 
   insertSessionExerciseSet: async (set: { session_exercise_id: number; set_number: number; weight: number | null; reps: number | null; is_warmup: boolean; completed?: boolean; duration_seconds?: number | null; distance_meters?: number | null; pace_sec_per_km?: number | null; calories?: number | null; effort_level?: number | null }) => {
-    if (useSupabaseFor(set.session_exercise_id)) {
-      return supabase.from("session_exercise_sets").insert(set).select().single();
+    if (!onDevice(set.session_exercise_id)) {
+      return writeServerRow({ kind: "insert", table: "session_exercise_sets", values: set }, (row) =>
+        patchCachedList(`sessionExerciseSets:${set.session_exercise_id}`, (rows) => [...rows, row], true),
+      );
     }
     return localDb.insertSessionExerciseSet(set);
   },
 
   updateSessionExerciseSet: async (sessionSetId: number, updates: { reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean; duration_seconds?: number | null; distance_meters?: number | null; pace_sec_per_km?: number | null; calories?: number | null; effort_level?: number | null }) => {
-    if (useSupabaseFor(sessionSetId)) {
-      return supabase.from("session_exercise_sets").update(updates).eq("session_set_id", sessionSetId);
+    if (!onDevice(sessionSetId)) {
+      return writeServerRow({ kind: "update", table: "session_exercise_sets", id: sessionSetId, values: updates }, async () => {
+        const exId = setParent.get(sessionSetId);
+        if (exId != null) {
+          await patchCachedList(`sessionExerciseSets:${exId}`, (rows) =>
+            rows.map((r) => (r.session_set_id === sessionSetId ? { ...r, ...updates } : r)));
+        }
+      });
     }
     return localDb.updateSessionExerciseSet(sessionSetId, updates);
   },
 
   deleteSessionExerciseSet: async (sessionSetId: number) => {
-    if (useSupabaseFor(sessionSetId)) {
-      return supabase.from("session_exercise_sets").delete().eq("session_set_id", sessionSetId);
+    if (!onDevice(sessionSetId)) {
+      return writeServerRow({ kind: "delete", table: "session_exercise_sets", id: sessionSetId }, async () => {
+        const exId = setParent.get(sessionSetId);
+        if (exId != null) {
+          await patchCachedList(`sessionExerciseSets:${exId}`, (rows) => rows.filter((r) => r.session_set_id !== sessionSetId));
+        }
+      });
     }
     return localDb.deleteSessionExerciseSet(sessionSetId);
   },
@@ -1275,7 +1462,8 @@ export const db = {
     return syncInFlight;
   },
 
-  getPendingSessionCount: async (): Promise<number> => getPendingCount(),
+  // Workouts waiting to upload, plus queued changes to server workouts.
+  getPendingSessionCount: async (): Promise<number> => (await getPendingCount()) + (await pendingOpCount()),
 
   // Cardio aggregate stats
   getCardioStats: async (userId: string) => {
