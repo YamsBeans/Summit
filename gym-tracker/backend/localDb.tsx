@@ -725,15 +725,8 @@ function restore(s: Partial<Snapshot>) {
   nextSessionSetId = nextAfter(ids.sessionSet, localSessionExerciseSets, "session_set_id");
 }
 
-/**
- * Drop finished workouts from the store. Supabase builds call this once on
- * start-up: a finished offline workout has already been copied into the sync
- * queue, so keeping it here would only grow storage forever.
- */
-function pruneFinishedSessions() {
-  const finished = new Set(
-    localWorkoutSessions.filter((s) => s.end_time !== null).map((s) => s.session_id)
-  );
+function removeSessions(ids: number[]) {
+  const finished = new Set(ids);
   if (finished.size === 0) return;
   const exIds = new Set(
     localSessionExercises.filter((e) => finished.has(e.session_id)).map((e) => e.session_exercise_id)
@@ -744,15 +737,31 @@ function pruneFinishedSessions() {
 }
 
 let loadPromise: Promise<void> | null = null;
+// False when storage couldn't be read: saving the (empty) in-memory store
+// then would overwrite the user's real data, which may well read fine on the
+// next launch.
+let canSave = true;
 
 function ensureLoaded(): Promise<void> {
   if (!loadPromise) {
     loadPromise = (async () => {
+      let raw: string | null;
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (raw) restore(JSON.parse(raw));
+        raw = await AsyncStorage.getItem(STORAGE_KEY);
       } catch {
-        // Corrupt or unreadable: start empty rather than crash.
+        canSave = false;
+        return;
+      }
+      if (!raw) return;
+      try {
+        restore(JSON.parse(raw));
+      } catch {
+        // Corrupt: keep a copy for recovery, then start fresh.
+        try {
+          await AsyncStorage.setItem(`${STORAGE_KEY}_corrupt_${Date.now()}`, raw);
+        } catch {
+          canSave = false;
+        }
       }
     })();
   }
@@ -765,6 +774,7 @@ let saving: Promise<void> | null = null;
 let saveAgain = false;
 
 function save(): Promise<void> {
+  if (!canSave) return Promise.resolve();
   if (saving) {
     saveAgain = true;
     return saving;
@@ -808,13 +818,26 @@ function withPersistence(raw: RawLocalDb): RawLocalDb {
 export const localDb = withPersistence(rawLocalDb);
 
 /** Load the saved store now (e.g. at start-up). Safe to call repeatedly. */
-export function loadLocalDb(options?: { pruneFinished?: boolean }): Promise<void> {
-  return ensureLoaded().then(() => {
-    if (options?.pruneFinished) {
-      pruneFinishedSessions();
-      return save();
-    }
-  });
+export function loadLocalDb(): Promise<void> {
+  return ensureLoaded();
+}
+
+/** IDs of finished workouts in the store. */
+export async function finishedLocalSessionIds(): Promise<number[]> {
+  await ensureLoaded();
+  return localWorkoutSessions.filter((s) => s.end_time !== null).map((s) => s.session_id);
+}
+
+/**
+ * Drop workouts (with their exercises and sets) from the store. Supabase
+ * builds use this once a finished offline workout is safely in the sync
+ * queue, so storage doesn't grow forever.
+ */
+export async function removeLocalSessions(ids: number[]): Promise<void> {
+  await ensureLoaded();
+  if (ids.length === 0) return;
+  removeSessions(ids);
+  await save();
 }
 
 /** Test helper: forget everything in memory so the next call reloads from storage. */
@@ -823,4 +846,5 @@ export function __resetLocalDbForTests() {
   loadPromise = null;
   saving = null;
   saveAgain = false;
+  canSave = true;
 }

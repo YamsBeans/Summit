@@ -10,8 +10,9 @@ jest.mock("@react-native-async-storage/async-storage", () => ({
 
 import {
   localDb,
-  loadLocalDb,
   isLocalId,
+  finishedLocalSessionIds,
+  removeLocalSessions,
   LOCAL_ID_BASE,
   __resetLocalDbForTests,
 } from "../backend/localDb";
@@ -84,7 +85,7 @@ it("never reuses an ID even if the saved counters are missing", async () => {
   expect(b!.session_id).toBeGreaterThan(LOCAL_ID_BASE);
 });
 
-it("drops finished workouts on load when asked (Supabase builds queue them instead)", async () => {
+it("removes finished workouts with their exercises and sets", async () => {
   const userId = await signedInUser();
   const { data: done } = await localDb.startWorkoutSession({ routine_id: null, session_name: "Done", user_id: userId });
   const { data: ex } = await localDb.insertSessionExercise({
@@ -95,7 +96,9 @@ it("drops finished workouts on load when asked (Supabase builds queue them inste
   const { data: open } = await localDb.startWorkoutSession({ routine_id: null, session_name: "Open", user_id: userId });
 
   restart();
-  await loadLocalDb({ pruneFinished: true });
+  const finished = await finishedLocalSessionIds();
+  expect(finished).toEqual([done!.session_id]);
+  await removeLocalSessions(finished);
 
   expect((await localDb.getWorkoutSession(done!.session_id)).data).toBeNull();
   expect((await localDb.getSessionExerciseSets(ex!.session_exercise_id)).data).toEqual([]);
@@ -106,8 +109,23 @@ it("drops finished workouts on load when asked (Supabase builds queue them inste
   expect((await localDb.getWorkoutSession(done!.session_id)).data).toBeNull();
 });
 
-it("starts empty instead of crashing on corrupt storage", async () => {
+it("starts empty on corrupt storage but keeps a copy of it", async () => {
   mockStore[KEY] = "{not json";
   const { data } = await localDb.getRoutines();
   expect(data).toEqual([]);
+  const backup = Object.keys(mockStore).find((k) => k.startsWith(KEY + "_corrupt_"));
+  expect(backup && mockStore[backup]).toBe("{not json");
+});
+
+it("never overwrites saved data it couldn't read", async () => {
+  const userId = await signedInUser();
+  await localDb.startWorkoutSession({ routine_id: null, session_name: "Keep me", user_id: userId });
+  const saved = mockStore[KEY];
+
+  restart();
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const AsyncStorage = require("@react-native-async-storage/async-storage");
+  AsyncStorage.getItem.mockImplementationOnce(() => Promise.reject(new Error("storage unavailable")));
+  await localDb.insertRoutine({ routine_name: "New", description: null, user_id: userId });
+  expect(mockStore[KEY]).toBe(saved);
 });

@@ -4,6 +4,7 @@
 const mockNet = { isConnected: true };
 const mockStore: Record<string, string> = {};
 const LOCAL = 1_000_000_000_001;
+let mockFinished: number[] = [];
 
 const mockLocal = {
   getActiveSession: jest.fn(async () => ({ data: null as any, error: null })),
@@ -16,6 +17,7 @@ const mockLocal = {
   insertSessionExerciseSet: jest.fn(async (s: any) => ({ data: { session_set_id: LOCAL + 9, ...s }, error: null })),
   updateSessionExerciseSet: jest.fn(async () => ({ error: null })),
   finishWorkoutSession: jest.fn(async () => ({ error: null })),
+  updateSessionPhotoUrl: jest.fn(async () => ({ error: null })) as any,
 };
 
 // Minimal chainable Supabase stub that records which tables were touched.
@@ -37,6 +39,8 @@ jest.mock("../backend/localDb", () => ({
   localDb: mockLocal,
   isLocalId: (id: any) => typeof id === "number" && id >= 1e12,
   loadLocalDb: async () => {},
+  finishedLocalSessionIds: jest.fn(async () => mockFinished),
+  removeLocalSessions: jest.fn(async () => {}),
 }));
 jest.mock("@react-native-async-storage/async-storage", () => ({
   getItem: jest.fn((k: string) => Promise.resolve(mockStore[k] ?? null)),
@@ -58,6 +62,7 @@ beforeEach(() => {
   touched.length = 0;
   for (const k of Object.keys(mockStore)) delete mockStore[k];
   mockNet.isConnected = true;
+  mockFinished = [];
 });
 
 it("logs sets of an offline-started workout locally even when back online", async () => {
@@ -99,4 +104,30 @@ it("queues an offline-started workout finished online instead of losing it", asy
   expect(queue[0].sets[0]).toMatchObject({ weight: 135, reps: 5 });
   // It tried to upload right away instead of waiting for a reconnect.
   expect(touched).toContain("workout_sessions");
+});
+
+it("queues a finished offline workout that never reached the queue before dropping it", async () => {
+  mockNet.isConnected = false;
+  mockFinished = [LOCAL];
+  const { initLocalStore } = require("../backend/db");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { removeLocalSessions } = require("../backend/localDb");
+  await initLocalStore();
+  const queue = JSON.parse(mockStore["@gym_tracker_offline_sessions"] ?? "[]");
+  expect(queue).toHaveLength(1);
+  expect(queue[0].local_session_id).toBe(LOCAL);
+  expect(removeLocalSessions).toHaveBeenCalledWith([LOCAL]);
+
+  // Running again doesn't queue it twice.
+  await initLocalStore();
+  expect(JSON.parse(mockStore["@gym_tracker_offline_sessions"])).toHaveLength(1);
+});
+
+it("adds a photo taken after finishing to the queued copy", async () => {
+  mockNet.isConnected = false;
+  await db.finishWorkoutSession(LOCAL, null);
+  mockLocal.updateSessionPhotoUrl = jest.fn(async () => ({ error: null }));
+  await db.updateSessionPhotoUrl(LOCAL, "progress-photos/u1/x.jpg");
+  const queue = JSON.parse(mockStore["@gym_tracker_offline_sessions"]);
+  expect(queue[0].session.photo_url).toBe("progress-photos/u1/x.jpg");
 });

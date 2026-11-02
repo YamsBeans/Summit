@@ -3,7 +3,7 @@ import * as Linking from "expo-linking";
 import { Platform } from "react-native";
 import { supabase } from "./supabaseClient";
 import { logError } from "@/utils/log";
-import { localDb, isLocalId, loadLocalDb } from "./localDb";
+import { localDb, isLocalId, loadLocalDb, finishedLocalSessionIds, removeLocalSessions } from "./localDb";
 import { networkStatus } from "./networkStatus";
 import {
   enqueuePendingSession,
@@ -13,6 +13,10 @@ import {
   markSessionOrigin,
   getSessionOrigin,
   clearSessionOrigin,
+  updateQueuedSession,
+  getSyncedLocalSessions,
+  markLocalSessionsSynced,
+  forgetSyncedLocalSessions,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
 import { cachedRead, clearReadCache, isNetworkError, writeCache } from "./readCache";
@@ -38,17 +42,90 @@ const shouldUseSupabase = () => isOnline && networkStatus.isConnected;
 // when it was finished online.
 const useSupabaseFor = (id: number | null | undefined) => shouldUseSupabase() && !isLocalId(id);
 
+// Copy a finished offline workout (session, exercises, sets) into the sync
+// queue. Returns the queued session row, or null if it isn't in the store.
+async function queueLocalSession(sessionId: number) {
+  const [{ data: session }, { data: exercises }] = await Promise.all([
+    localDb.getWorkoutSession(sessionId),
+    localDb.getSessionExercises(sessionId),
+  ]);
+  if (!session) return null;
+  const sets = (
+    await Promise.all((exercises ?? []).map(ex => localDb.getSessionExerciseSets(ex.session_exercise_id)))
+  ).flatMap(r => r.data ?? []);
+  await enqueuePendingSession({
+    local_session_id: isLocalId(sessionId) ? sessionId : undefined,
+    session: {
+      routine_id: session.routine_id,
+      session_name: session.session_name,
+      session_date: session.session_date,
+      start_time: session.start_time,
+      end_time: session.end_time,
+      notes: session.notes,
+      user_id: session.user_id,
+      photo_url: session.photo_url ?? null,
+    },
+    exercises: (exercises ?? []).map(ex => ({
+      session_exercise_id: ex.session_exercise_id,
+      exercise_id: ex.exercise_id,
+      exercise_name: ex.exercise_name,
+      exercise_order: ex.exercise_order,
+      notes: ex.notes,
+      exercise_type: ex.exercise_type,
+    })),
+    sets,
+  });
+  return session;
+}
+
 /**
  * Load the on-device store before the first screen reads it. In Supabase
- * builds, finished offline workouts are already in the sync queue, so their
- * local copies are dropped.
+ * builds, finished offline workouts are then dropped from it, but only once
+ * they're safely queued or uploaded: one finished just before the app was
+ * killed (before it reached the queue) is queued here first.
  */
-export const initLocalStore = () => loadLocalDb({ pruneFinished: isOnline });
+export async function initLocalStore(): Promise<void> {
+  await loadLocalDb();
+  if (!isOnline) return;
+  const finished = await finishedLocalSessionIds();
+  if (finished.length === 0) return;
+  const [queue, synced] = await Promise.all([getPendingQueue(), getSyncedLocalSessions()]);
+  const inQueue = new Set(queue.map((p) => p.local_session_id));
+  const safe: number[] = [];
+  for (const id of finished) {
+    if (inQueue.has(id) || synced[String(id)] != null) {
+      safe.push(id);
+      continue;
+    }
+    try {
+      if (await queueLocalSession(id)) safe.push(id);
+    } catch (e) {
+      logError("initLocalStore.queue", e);
+    }
+  }
+  await removeLocalSessions(safe);
+  await forgetSyncedLocalSessions(safe.filter((id) => synced[String(id)] != null));
+}
+
+// A change to a finished offline workout (photo, notes, name). The local
+// copy is updated; so is the queued copy, or the server copy once uploaded.
+// Without this, a progress photo added on the summary screen was lost.
+async function updateFinishedLocalSession(sessionId: number, updates: Record<string, any>) {
+  if (!isOnline) return;
+  if (await updateQueuedSession(sessionId, updates)) return;
+  const serverId = (await getSyncedLocalSessions())[String(sessionId)];
+  if (serverId != null && shouldUseSupabase()) {
+    const { error } = await supabase.from("workout_sessions").update(updates).eq("session_id", serverId);
+    if (error) logError("updateFinishedLocalSession", error);
+  }
+}
 
 // One sync at a time: the start-up sync, the reconnect listener and a
 // just-finished workout can all ask at once, and overlapping runs would
-// upload the same queued workout twice.
+// upload the same queued workout twice. A request made while a run is going
+// gets one more run afterwards, so a workout queued mid-sync isn't skipped.
 let syncInFlight: Promise<{ synced: number; errors: number }> | null = null;
+let syncAgain = false;
 
 const OFFLINE_AUTH_ERROR = { message: "You're offline. Connect to the internet to sign in or create an account." };
 
@@ -153,6 +230,8 @@ async function runPendingSync(userId: string): Promise<{ synced: number; errors:
 
       successfulIndices.push(i);
       synced++;
+      const localId = queue[i].local_session_id;
+      if (localId != null) await markLocalSessionsSynced({ [localId]: newSession.session_id });
     } catch {
       errors++;
     }
@@ -368,7 +447,9 @@ export const db = {
     if (useSupabaseFor(sessionId)) {
       return supabase.from("workout_sessions").update({ photo_url: photoUrl }).eq("session_id", sessionId);
     }
-    return localDb.updateSessionPhotoUrl(sessionId, photoUrl);
+    const result = await localDb.updateSessionPhotoUrl(sessionId, photoUrl);
+    if (isLocalId(sessionId)) await updateFinishedLocalSession(sessionId, { photo_url: photoUrl });
+    return result;
   },
 
   // Confirms the current password before a password change, so someone using an
@@ -606,38 +687,10 @@ export const db = {
     // Queue it for Supabase if it was logged offline (a local ID). The origin
     // marker covers workouts from before local IDs existed.
     if (isOnline && (isLocalId(sessionId) || (origin?.isLocal && origin.sessionId === sessionId))) {
-      const [{ data: session }, { data: exercises }] = await Promise.all([
-        localDb.getWorkoutSession(sessionId),
-        localDb.getSessionExercises(sessionId),
-      ]);
-      const sets = (
-        await Promise.all((exercises ?? []).map(ex => localDb.getSessionExerciseSets(ex.session_exercise_id)))
-      ).flatMap(r => r.data ?? []);
-      if (session) {
-        await enqueuePendingSession({
-          session: {
-            routine_id: session.routine_id,
-            session_name: session.session_name,
-            session_date: session.session_date,
-            start_time: session.start_time,
-            end_time: session.end_time,
-            notes: session.notes,
-            user_id: session.user_id,
-          },
-          exercises: (exercises ?? []).map(ex => ({
-            session_exercise_id: ex.session_exercise_id,
-            exercise_id: ex.exercise_id,
-            exercise_name: ex.exercise_name,
-            exercise_order: ex.exercise_order,
-            notes: ex.notes,
-            exercise_type: ex.exercise_type,
-          })),
-          sets,
-        });
-        // Back online already? Upload it now rather than at the next reconnect.
-        if (shouldUseSupabase()) {
-          db.syncPendingSessions(session.user_id).catch((e: unknown) => logError("finishWorkoutSession.sync", e));
-        }
+      const queued = await queueLocalSession(sessionId);
+      // Back online already? Upload it now rather than at the next reconnect.
+      if (queued && shouldUseSupabase()) {
+        db.syncPendingSessions(queued.user_id).catch((e: unknown) => logError("finishWorkoutSession.sync", e));
       }
     }
     await clearSessionOrigin();
@@ -791,7 +844,9 @@ export const db = {
         .update(updates)
         .eq("session_id", sessionId);
     }
-    return localDb.updateWorkoutSession(sessionId, updates);
+    const result = await localDb.updateWorkoutSession(sessionId, updates);
+    if (isLocalId(sessionId)) await updateFinishedLocalSession(sessionId, updates);
+    return result;
   },
 
   deleteWorkoutSession: async (sessionId: number) => {
@@ -1102,8 +1157,16 @@ export const db = {
   },
 
   // Batch queries (profile performance — collapse N requests into 1)
-  getBatchSessionExercises: async (sessionIds: number[]) => {
-    if (sessionIds.length === 0) return { data: [], error: null };
+  getBatchSessionExercises: async (allSessionIds: number[]): Promise<{ data: any; error: any }> => {
+    if (allSessionIds.length === 0) return { data: [], error: null };
+    // Offline-logged workouts are read from the device, the rest as usual.
+    const localIds = allSessionIds.filter((id) => isLocalId(id));
+    const sessionIds = allSessionIds.filter((id) => !isLocalId(id));
+    if (localIds.length > 0) {
+      const local = (await Promise.all(localIds.map((id) => localDb.getSessionExercises(id)))).flatMap((r) => r.data ?? []);
+      const remote = await db.getBatchSessionExercises(sessionIds);
+      return { data: [...(remote.data ?? []), ...local], error: remote.error };
+    }
     return cachedRead(
       shouldUseSupabase(),
       `batchSessionExercises:${[...sessionIds].sort((a, b) => a - b).join(",")}`,
@@ -1118,8 +1181,15 @@ export const db = {
     );
   },
 
-  getBatchSessionExerciseSets: async (exerciseIds: number[]) => {
-    if (exerciseIds.length === 0) return { data: [], error: null };
+  getBatchSessionExerciseSets: async (allExerciseIds: number[]): Promise<{ data: any; error: any }> => {
+    if (allExerciseIds.length === 0) return { data: [], error: null };
+    const localIds = allExerciseIds.filter((id) => isLocalId(id));
+    const exerciseIds = allExerciseIds.filter((id) => !isLocalId(id));
+    if (localIds.length > 0) {
+      const local = (await Promise.all(localIds.map((id) => localDb.getSessionExerciseSets(id)))).flatMap((r) => r.data ?? []);
+      const remote = await db.getBatchSessionExerciseSets(exerciseIds);
+      return { data: [...(remote.data ?? []), ...local], error: remote.error };
+    }
     return cachedRead(
       shouldUseSupabase(),
       `batchSessionExerciseSets:${[...exerciseIds].sort((a, b) => a - b).join(",")}`,
@@ -1188,9 +1258,20 @@ export const db = {
 
   // Sync offline-queued sessions to Supabase when reconnected
   syncPendingSessions: (userId: string): Promise<{ synced: number; errors: number }> => {
-    if (!syncInFlight) {
-      syncInFlight = runPendingSync(userId).finally(() => { syncInFlight = null; });
+    if (syncInFlight) {
+      syncAgain = true;
+      return syncInFlight;
     }
+    syncInFlight = (async () => {
+      const total = { synced: 0, errors: 0 };
+      do {
+        syncAgain = false;
+        const r = await runPendingSync(userId);
+        total.synced += r.synced;
+        total.errors += r.errors;
+      } while (syncAgain);
+      return total;
+    })().finally(() => { syncInFlight = null; });
     return syncInFlight;
   },
 
