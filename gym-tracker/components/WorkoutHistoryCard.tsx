@@ -8,6 +8,8 @@ import { useTheme } from "@/theme/ThemeContext";
 import { useUnits, formatVolume } from "@/utils/units";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
+import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
+import { repeatWorkout } from "@/utils/repeatWorkout";
 
 type WorkoutHistoryCardProps = {
   session_id: number;
@@ -90,6 +92,8 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [photoOpen, setPhotoOpen] = useState(false);
+  const [repeating, setRepeating] = useState(false);
+  const { activeWorkout } = useActiveWorkout();
 
   const duration = parseDuration(sessionDate, startTime, endTime);
   const volumeDisplay = formatVolume(toDisplay(totalVolume));
@@ -119,6 +123,29 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
     }
   };
 
+  const handleRepeat = async () => {
+    setMenuOpen(false);
+    if (activeWorkout) {
+      showAlert("Workout in progress", `Finish or discard "${activeWorkout.sessionName}" before starting another.`);
+      return;
+    }
+    if (repeating) return;
+    setRepeating(true);
+    try {
+      const { data: userData } = await db.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return;
+      const res = await repeatWorkout(db, session_id, userId);
+      if ("error" in res) {
+        showAlert("Couldn't repeat workout", res.error);
+        return;
+      }
+      router.push({ pathname: "/workout", params: { sessionId: String(res.sessionId) } });
+    } finally {
+      setRepeating(false);
+    }
+  };
+
   const handleDelete = () => {
     setMenuOpen(false);
     showAlert(
@@ -141,7 +168,7 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   };
 
   return (
-    <View style={[styles.card, { borderBottomColor: colors.border, opacity: deleting ? 0.4 : 1 }]}>
+    <View style={[styles.card, { borderBottomColor: colors.border, opacity: deleting || repeating ? 0.4 : 1 }]}>
       {/* Date header row */}
       <View style={styles.dateRow}>
         <View style={[styles.dateIcon, { backgroundColor: colors.surfaceSecondary }]}>
@@ -239,6 +266,20 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
             <Text style={[styles.sheetTitle, { color: colors.textSecondary }]} numberOfLines={1}>
               {sessionName}
             </Text>
+
+            <Pressable
+              style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: colors.surfaceSecondary }]}
+              onPress={handleRepeat}
+              accessibilityRole="button"
+            >
+              <View style={[styles.sheetIcon, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="repeat" size={18} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.sheetLabel, { color: colors.text }]}>Repeat Workout</Text>
+                <Text style={{ fontSize: 12, color: colors.textTertiary, marginTop: 1 }}>Same exercises and sets, last numbers as a guide</Text>
+              </View>
+            </Pressable>
 
             <Pressable
               style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: colors.surfaceSecondary }]}
