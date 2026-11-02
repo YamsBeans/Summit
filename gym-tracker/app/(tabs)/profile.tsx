@@ -9,6 +9,7 @@ import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
+import WorkoutCalendarModal from "@/components/WorkoutCalendarModal";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
 import WorkoutChart from "@/components/WorkoutChart";
 import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardioUtils";
@@ -119,6 +120,7 @@ export default function ProfileScreen() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<any>(null);
   const [sessions, setSessions] = useState<SessionWithMeta[]>([]);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [stats, setStats] = useState<AllStats>({
     totalWorkouts: 0, totalVolume: 0, totalExercises: 0, totalSets: 0,
     totalReps: 0, heaviestWeight: 0, longestSession: 0, avgDuration: 0,
@@ -444,12 +446,24 @@ export default function ProfileScreen() {
       <View style={[styles.card, { backgroundColor: colors.surface, marginHorizontal: 16, marginBottom: 12 }]}>
         <View style={styles.cardHeader}>
           <Text style={[styles.cardTitle, { color: colors.textSecondary }]}>THIS WEEK</Text>
-          {longestStreak > 0 && (
-            <View style={styles.bestStreakRow}>
-              <Ionicons name="trophy-outline" size={14} color={colors.primary} />
-              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} {longestStreak === 1 ? "day" : "days"}</Text>
-            </View>
-          )}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            {longestStreak > 0 && (
+              <View style={styles.bestStreakRow}>
+                <Ionicons name="trophy-outline" size={14} color={colors.primary} />
+                <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} {longestStreak === 1 ? "day" : "days"}</Text>
+              </View>
+            )}
+            <Pressable
+              onPress={() => setCalendarOpen(true)}
+              hitSlop={8}
+              style={styles.bestStreakRow}
+              accessibilityRole="button"
+              accessibilityLabel="Open workout calendar"
+            >
+              <Ionicons name="calendar-outline" size={14} color={colors.primary} />
+              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Calendar</Text>
+            </Pressable>
+          </View>
         </View>
         <View style={styles.dotsRow}>
           {last7.map(({ dateStr, label }, i) => {
@@ -470,6 +484,8 @@ export default function ProfileScreen() {
           })}
         </View>
       </View>
+
+      <WorkoutCalendarModal visible={calendarOpen} onClose={() => setCalendarOpen(false)} sessions={sessions} />
 
       {/* ── Progress chart ── */}
       {sessions.length > 0 && <WorkoutChart sessions={sessions} />}
