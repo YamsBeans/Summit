@@ -8,6 +8,7 @@ jest.mock("@react-native-async-storage/async-storage", () => ({
   removeItem: jest.fn((k: string) => { delete mockStore[k]; return Promise.resolve(); }),
   getAllKeys: jest.fn(() => Promise.resolve(Object.keys(mockStore))),
   multiRemove: jest.fn(() => Promise.resolve()),
+  multiSet: jest.fn((entries: [string, string][]) => { for (const [k, v] of entries) mockStore[k] = v; return Promise.resolve(); }),
 }));
 
 // ─── A tiny in-memory Supabase ───────────────────────────────────────────────
@@ -192,4 +193,46 @@ it("drops a change the server refuses instead of blocking the rest", async () =>
   });
   expect(seen).toEqual([1, 2]);
   expect(res).toEqual({ done: 1, dropped: 1, remaining: 0 });
+});
+
+it("resumes a workout started after the app opened, then logged offline", async () => {
+  await db.getActiveSession("u1"); // app start
+  server.workout_sessions[0].end_time = "16:00:00"; // no active one yet…
+  await db.getActiveSession("u1");
+  const { data: started } = await db.startWorkoutSession({ routine_id: null, session_name: "Legs", user_id: "u1" });
+  goOffline();
+  expect((await db.getActiveSession("u1")).data?.session_id).toBe(started.session_id);
+});
+
+it("doesn't offer to resume a workout finished offline once back online", async () => {
+  await db.getWorkoutSession(1);
+  goOffline();
+  await db.finishWorkoutSession(1, null);
+  mockNet.isConnected = true; // signal back, upload not done yet
+  expect((await db.getActiveSession("u1")).data).toBeNull();
+});
+
+it("shows offline edits on the edit screen's batch read", async () => {
+  await db.getBatchSessionExercises([1]);
+  await db.getBatchSessionExerciseSets([10]);
+  goOffline();
+  await db.updateSessionExerciseSet(100, { reps: 12 });
+  const { data: newEx } = await db.insertSessionExercise({ session_id: 1, exercise_id: "dip", exercise_name: "Dip", exercise_order: 2, notes: null });
+  await db.insertSessionExerciseSet({ session_exercise_id: newEx.session_exercise_id, set_number: 1, weight: null, reps: 10, is_warmup: false });
+
+  const exs = (await db.getBatchSessionExercises([1])).data;
+  expect(exs.map((e: any) => e.exercise_id)).toEqual(["bench", "dip"]);
+  const sets = (await db.getBatchSessionExerciseSets(exs.map((e: any) => e.session_exercise_id))).data;
+  expect(sets.map((s: any) => s.reps)).toEqual([12, 10]);
+});
+
+it("retries server trouble a few times before giving up on a change", async () => {
+  await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 1, values: {} });
+  const dropped: any[] = [];
+  const exec = async () => ({ ok: false, retry: false, transient: true });
+  for (let i = 0; i < 4; i++) {
+    expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(1);
+  }
+  expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(0);
+  expect(dropped).toHaveLength(1);
 });

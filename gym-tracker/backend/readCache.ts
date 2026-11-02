@@ -21,6 +21,16 @@ export async function writeCache(key: string, data: unknown): Promise<void> {
   }
 }
 
+/** Mirror several reads at once (one storage call). Best-effort; never throws. */
+export async function writeCacheMany(entries: [string, unknown][]): Promise<void> {
+  if (entries.length === 0) return;
+  try {
+    await AsyncStorage.multiSet(entries.map(([k, v]) => [PREFIX + k, JSON.stringify(v)]));
+  } catch {
+    // best-effort
+  }
+}
+
 /** Read a previously-cached server response, or null if absent/corrupt. */
 export async function readCache<T = any>(key: string): Promise<T | null> {
   try {

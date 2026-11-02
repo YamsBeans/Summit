@@ -18,12 +18,13 @@ import {
   forgetSyncedLocalSessions,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
-import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache } from "./readCache";
+import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache, writeCacheMany } from "./readCache";
 import {
   OutboxOp,
   ExecuteResult,
   PRIMARY_KEY,
-  enqueueOp,
+  enqueueOpHoldingLock,
+  hasPendingOp,
   flushOutbox,
   hasPendingOps,
   inOutboxOrder,
@@ -290,16 +291,23 @@ async function patchCachedRow(key: string, values: Record<string, any>) {
 // is the server refusing it.
 async function executeOp(op: OutboxOp): Promise<ExecuteResult & { row?: any }> {
   const pk = PRIMARY_KEY[op.table];
-  const fail = (error: any): ExecuteResult => ({ ok: false, retry: isNetworkError(error), error });
+  const fail = (error: any, status?: number): ExecuteResult => ({
+    ok: false,
+    retry: isNetworkError(error),
+    // Server trouble or a login that expired while offline: worth retrying
+    // (a few times) rather than throwing the user's sets away.
+    transient: (status ?? 0) >= 500 || /jwt|token|expired|PGRST301/i.test(`${error?.code ?? ""} ${error?.message ?? ""}`),
+    error,
+  });
   try {
     if (op.kind === "insert") {
-      const { data, error } = await supabase.from(op.table).insert(op.values ?? {}).select().single();
-      if (error || !data) return fail(error ?? { message: "Insert returned no row" });
+      const { data, error, status } = await supabase.from(op.table).insert(op.values ?? {}).select().single();
+      if (error || !data) return fail(error ?? { message: "Insert returned no row" }, status);
       return { ok: true, id: data[pk], row: data };
     }
     if (op.kind === "update") {
-      const { error } = await supabase.from(op.table).update(op.values ?? {}).eq(pk, op.id);
-      return error ? fail(error) : { ok: true };
+      const { error, status } = await supabase.from(op.table).update(op.values ?? {}).eq(pk, op.id);
+      return error ? fail(error, status) : { ok: true };
     }
     // Delete children first (Supabase won't cascade unless the FK says so).
     if (op.table === "workout_sessions") {
@@ -317,8 +325,8 @@ async function executeOp(op: OutboxOp): Promise<ExecuteResult & { row?: any }> {
       const r = await supabase.from("session_exercise_sets").delete().eq("session_exercise_id", op.id);
       if (r.error) return fail(r.error);
     }
-    const { error } = await supabase.from(op.table).delete().eq(pk, op.id);
-    return error ? fail(error) : { ok: true };
+    const { error, status } = await supabase.from(op.table).delete().eq(pk, op.id);
+    return error ? fail(error, status) : { ok: true };
   } catch (e) {
     // A thrown fetch is almost always no connection.
     return { ok: false, retry: true, error: e };
@@ -326,7 +334,7 @@ async function executeOp(op: OutboxOp): Promise<ExecuteResult & { row?: any }> {
 }
 
 const flushNow = () =>
-  flushOutbox(executeOp).catch((e) => {
+  flushOutbox(executeOp, (op, error) => logError(`outbox dropped ${op.kind} ${op.table}`, error)).catch((e) => {
     logError("flushOutbox", e);
     return { done: 0, dropped: 0, remaining: -1 };
   });
@@ -349,31 +357,48 @@ async function writeServerRow(
   op: OutboxOp,
   preview: (row: any) => Promise<void>,
 ): Promise<{ data: any; error: any }> {
-  if (networkStatus.isConnected && !(await hasPendingOps())) {
-    const ready = await translateWithKnownIds(op);
-    if (ready) {
-      const r = await executeOp(ready);
-      if (r.ok) {
-        rememberRows(r.row);
-        // Keep the offline copy current too.
-        await inOutboxOrder(() => preview(r.row ?? null)).catch(() => {});
-        return { data: r.row ?? null, error: null };
+  // One write at a time, in the same order as queued ones: otherwise an older
+  // change that times out and gets queued could land after a newer one that
+  // went straight through (weight 105 reverting to 100 on replay).
+  const result = await inOutboxOrder(async () => {
+    if (networkStatus.isConnected && !(await hasPendingOps())) {
+      const ready = await translateWithKnownIds(op);
+      if (ready) {
+        const r = await executeOp(ready);
+        if (r.ok) {
+          rememberRows(r.row);
+          // Keep the offline copy current too.
+          await preview(r.row ?? null).catch(() => {});
+          return { data: r.row ?? null, error: null, queued: false };
+        }
+        if (!r.retry) return { data: null, error: r.error, queued: false };
       }
-      if (!r.retry) return { data: null, error: r.error };
     }
-  }
-  const pk = PRIMARY_KEY[op.table];
-  const tempId = op.kind === "insert" ? newTempId() : undefined;
-  const row = op.kind === "insert" ? { ...ROW_DEFAULTS[op.table], ...op.values, [pk]: tempId } : null;
-  rememberRows(row);
-  await enqueueOp({ ...op, tempId }, () => preview(row));
-  if (networkStatus.isConnected) flushNow();
-  return { data: row, error: null };
+    const pk = PRIMARY_KEY[op.table];
+    const tempId = op.kind === "insert" ? newTempId() : undefined;
+    const row = op.kind === "insert" ? { ...ROW_DEFAULTS[op.table], ...op.values, [pk]: tempId } : null;
+    rememberRows(row);
+    await enqueueOpHoldingLock({ ...op, tempId }, () => preview(row));
+    return { data: row, error: null, queued: true };
+  });
+  if (result.queued && networkStatus.isConnected) flushNow();
+  return { data: result.data, error: result.error };
 }
 
 // Route by where a workout's rows live: the device store (local-only builds,
 // and workouts started offline) or Supabase (directly or via the outbox).
 const onDevice = (id: number | null | undefined) => !isOnline || isLocalId(id);
+
+// A batch read also fills the per-workout / per-exercise cache entries, which
+// are what offline edits patch and what's read while edits are waiting.
+async function mirrorPerParent(rows: any, parentIds: number[], parentKey: string, prefix: string) {
+  if (!Array.isArray(rows)) return;
+  rememberRows(rows);
+  if (!shouldUseSupabase()) return;
+  const byParent = new Map<number, any[]>(parentIds.map((id) => [id, []]));
+  for (const r of rows) byParent.get(r[parentKey])?.push(r);
+  await writeCacheMany([...byParent].map(([id, list]) => [`${prefix}:${id}`, list]));
+}
 
 const ACTIVE_SESSION_KEY = "activeSession";
 
@@ -810,7 +835,10 @@ export const db = {
         start_time: now.toTimeString().split(" ")[0],
         user_id: params.user_id,
       }).select().single();
-      if (result.data) await markSessionOrigin(result.data.session_id, false);
+      if (result.data) {
+        await markSessionOrigin(result.data.session_id, false);
+        await writeCache(ACTIVE_SESSION_KEY, result.data);
+      }
       return result;
     }
     const result = await localDb.startWorkoutSession(params);
@@ -978,7 +1006,7 @@ export const db = {
     if (!isOnline) return local;
     // Cached too (including "none"), so a workout started online can still
     // be resumed after reopening the app in a gym with no signal.
-    if (shouldUseSupabase() && !(await offlineCopyIsNewer(ACTIVE_SESSION_KEY))) {
+    if (shouldUseSupabase()) {
       const res = await supabase.from("workout_sessions")
         .select("*")
         .eq("user_id", userId)
@@ -989,8 +1017,13 @@ export const db = {
         .limit(1)
         .maybeSingle();
       if (!res.error) {
-        await writeCache(ACTIVE_SESSION_KEY, res.data ?? false);
-        return res;
+        // Finished or discarded offline, but the server hasn't heard yet.
+        const endedOffline = res.data && (await hasPendingOp((op) =>
+          op.table === "workout_sessions" && op.id === res.data.session_id &&
+          (op.kind === "delete" || op.values?.end_time != null)));
+        const data = endedOffline ? null : res.data;
+        await writeCache(ACTIVE_SESSION_KEY, data ?? false);
+        return { ...res, data };
       }
       if (!isNetworkError(res.error)) return res;
     }
@@ -1205,6 +1238,7 @@ export const db = {
       }
 
       await markSessionOrigin(session.session_id, false);
+      await writeCache(ACTIVE_SESSION_KEY, session);
       return { data: session, error: null };
     }
     // Offline with Supabase configured: the routine only exists in the read
@@ -1354,7 +1388,13 @@ export const db = {
       const remote = await db.getBatchSessionExercises(sessionIds);
       return { data: [...(remote.data ?? []), ...local], error: remote.error };
     }
-    return cachedRead(
+    // Offline changes are waiting: read each workout's (patched) offline
+    // copy instead of the batch cache or the not-yet-updated server.
+    if (await hasPendingOps()) {
+      const rs = await Promise.all(sessionIds.map((id) => db.getSessionExercises(id)));
+      return { data: rs.flatMap((r: any) => r.data ?? []), error: null };
+    }
+    const batchRes = await cachedRead(
       shouldUseSupabase(),
       `batchSessionExercises:${[...sessionIds].sort((a, b) => a - b).join(",")}`,
       () => supabase.from("session_exercises")
@@ -1366,6 +1406,8 @@ export const db = {
         return { data: results.flatMap(r => r.data ?? []), error: null };
       },
     );
+    await mirrorPerParent(batchRes.data, sessionIds, "session_id", "sessionExercises");
+    return batchRes;
   },
 
   getBatchSessionExerciseSets: async (allExerciseIds: number[]): Promise<{ data: any; error: any }> => {
@@ -1377,7 +1419,13 @@ export const db = {
       const remote = await db.getBatchSessionExerciseSets(exerciseIds);
       return { data: [...(remote.data ?? []), ...local], error: remote.error };
     }
-    return cachedRead(
+    // Temporary IDs (exercises added offline) or offline changes waiting:
+    // per exercise, which knows both.
+    if (exerciseIds.some(isTempId) || (await hasPendingOps())) {
+      const rs = await Promise.all(exerciseIds.map((id) => db.getSessionExerciseSets(id)));
+      return { data: rs.flatMap((r: any) => r.data ?? []), error: null };
+    }
+    const batchRes = await cachedRead(
       shouldUseSupabase(),
       `batchSessionExerciseSets:${[...exerciseIds].sort((a, b) => a - b).join(",")}`,
       () => supabase.from("session_exercise_sets")
@@ -1389,6 +1437,8 @@ export const db = {
         return { data: results.flatMap(r => r.data ?? []), error: null };
       },
     );
+    await mirrorPerParent(batchRes.data, exerciseIds, "session_exercise_id", "sessionExerciseSets");
+    return batchRes;
   },
 
   // Exercise history for progression charts

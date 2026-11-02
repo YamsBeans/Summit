@@ -19,7 +19,11 @@ export type OutboxOp = {
   /** Temporary ID handed out for an insert. */
   tempId?: number;
   values?: Record<string, any>;
+  /** Server-side failures so far (a 5xx, an expired login); dropped after MAX_ATTEMPTS. */
+  attempts?: number;
 };
+
+const MAX_ATTEMPTS = 5;
 
 export const PRIMARY_KEY: Record<OutboxTable, string> = {
   workout_sessions: "session_id",
@@ -98,18 +102,27 @@ export async function hasPendingOps(): Promise<boolean> {
  * changes themselves even when several are made at once.
  */
 export function enqueueOp(op: OutboxOp, afterSave?: () => Promise<void>): Promise<void> {
-  return withLock(async () => {
-    await ensureLoaded();
-    ops.push(op);
-    await persist();
-    if (afterSave) {
-      try {
-        await afterSave();
-      } catch {
-        // The change is saved; only the offline preview failed.
-      }
+  return withLock(() => enqueueOpHoldingLock(op, afterSave));
+}
+
+/** enqueueOp for code already running inside inOutboxOrder (taking the lock again would deadlock). */
+export async function enqueueOpHoldingLock(op: OutboxOp, afterSave?: () => Promise<void>): Promise<void> {
+  await ensureLoaded();
+  ops.push(op);
+  await persist();
+  if (afterSave) {
+    try {
+      await afterSave();
+    } catch {
+      // The change is saved; only the offline preview failed.
     }
-  });
+  }
+}
+
+/** True if a queued change matches (e.g. "this workout was finished offline"). */
+export async function hasPendingOp(match: (op: OutboxOp) => boolean): Promise<boolean> {
+  await ensureLoaded();
+  return ops.some(match);
 }
 
 /** Run something in order with queued changes (e.g. a read-modify-write of the cache). */
@@ -120,8 +133,10 @@ export function inOutboxOrder<T>(fn: () => Promise<T>): Promise<T> {
 export type ExecuteResult =
   | { ok: true; id?: number }
   // retry: couldn't reach the server, stop and try again later.
+  // transient: the server had a problem (5xx, expired login); try again
+  //   later, but give up after a few attempts so it can't block forever.
   // Otherwise the server refused it; drop it so it can't block the rest.
-  | { ok: false; retry: boolean; error?: unknown };
+  | { ok: false; retry: boolean; transient?: boolean; error?: unknown };
 
 /** The op with temporary IDs swapped for real ones, or null if one isn't known yet. */
 export function translateOp(op: OutboxOp, map: Record<string, number>): OutboxOp | null {
@@ -154,6 +169,7 @@ let flushAgain = false;
  */
 export function flushOutbox(
   execute: (op: OutboxOp) => Promise<ExecuteResult>,
+  onDrop?: (op: OutboxOp, error: unknown) => void,
 ): Promise<{ done: number; dropped: number; remaining: number }> {
   if (flushing) {
     flushAgain = true;
@@ -171,6 +187,14 @@ export function flushOutbox(
         // A change to a row whose creation was refused can never apply.
         const result: ExecuteResult = ready ? await execute(ready) : { ok: false, retry: false };
         if (!result.ok && result.retry) break;
+        if (!result.ok && result.transient && (op.attempts ?? 0) + 1 < MAX_ATTEMPTS) {
+          await withLock(async () => {
+            op.attempts = (op.attempts ?? 0) + 1;
+            await persist();
+          });
+          break;
+        }
+        if (!result.ok) onDrop?.(op, result.error);
         await withLock(async () => {
           ops.shift();
           if (result.ok) {
