@@ -20,7 +20,7 @@ import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import RestTimerBanner from "@/components/RestTimerBanner";
 import { useRestTimer } from "@/utils/useRestTimer";
-import { detectPRs, detectCardioPRs, mergeStrengthRecord } from "@/utils/prDetection";
+import { detectPRs, detectCardioPRs, mergeStrengthRecord, groupSetsByExercise } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
@@ -424,8 +424,10 @@ export default function WorkoutScreen() {
         // Strength PRs
         const strengthExercises = exercises.filter((e: any) => e.exercise_type !== 'cardio');
         const prs = detectPRs(strengthExercises, exerciseSets, existingPRs ?? []);
+        const setsByExercise = new Map(
+          groupSetsByExercise(exercises, exerciseSets).map((g) => [g.exercise.exercise_id, g.sets]));
         for (const pr of prs) {
-          const sets = exerciseSets[exercises.find((e: any) => e.exercise_id === pr.exerciseId)?.session_exercise_id] ?? [];
+          const sets = setsByExercise.get(pr.exerciseId) ?? [];
           const prev = (existingPRs ?? []).find((r: any) => r.exercise_id === pr.exerciseId && r.pr_type !== 'cardio');
           const merged = mergeStrengthRecord(sets, prev);
           await db.upsertPersonalRecord({ user_id: userId, exercise_id: pr.exerciseId, ...merged, pr_type: 'strength' });
@@ -433,8 +435,7 @@ export default function WorkoutScreen() {
 
         // Cardio PRs
         const cardioExercises = exercises.filter((e: any) => e.exercise_type === 'cardio');
-        for (const ex of cardioExercises) {
-          const sets = (exerciseSets[ex.session_exercise_id] ?? []);
+        for (const { exercise: ex, sets } of groupSetsByExercise(cardioExercises, exerciseSets)) {
           const existingPR = (existingPRs ?? []).find((r: any) => r.exercise_id === ex.exercise_id && r.pr_type === 'cardio') ?? null;
           const cardioPR = detectCardioPRs(ex, sets, existingPR);
           if (cardioPR) {

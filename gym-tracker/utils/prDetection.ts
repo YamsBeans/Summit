@@ -65,6 +65,25 @@ export function detectCardioPRs(
   };
 }
 
+/**
+ * Merge every instance of the same exercise in a session into one entry so
+ * an exercise logged twice (e.g. Bench early and again at the end) is judged
+ * and saved once, on all of its sets.
+ */
+export function groupSetsByExercise<E extends { session_exercise_id: number; exercise_id: string }, S>(
+  exercises: E[],
+  exerciseSets: Record<number, S[]>,
+): { exercise: E; sets: S[] }[] {
+  const groups = new Map<string, { exercise: E; sets: S[] }>();
+  for (const ex of exercises) {
+    const sets = exerciseSets[ex.session_exercise_id] ?? [];
+    const g = groups.get(ex.exercise_id);
+    if (g) g.sets.push(...sets);
+    else groups.set(ex.exercise_id, { exercise: ex, sets: [...sets] });
+  }
+  return [...groups.values()];
+}
+
 export function detectPRs(
   exercises: Array<{ session_exercise_id: number; exercise_id: string; exercise_name: string }>,
   exerciseSets: Record<number, CurrentSet[]>,
@@ -76,8 +95,8 @@ export function detectPRs(
     previousRecords.filter((r) => r.pr_type !== "cardio").map((r) => [r.exercise_id, r])
   );
 
-  for (const ex of exercises) {
-    const sets = (exerciseSets[ex.session_exercise_id] ?? []).filter((s) => s.completed);
+  for (const { exercise: ex, sets: allSets } of groupSetsByExercise(exercises, exerciseSets)) {
+    const sets = allSets.filter((s) => s.completed);
     if (sets.length === 0) continue;
 
     const maxWeight = sets.reduce((m, s) => (s.weight != null && s.weight > m ? s.weight : m), 0);

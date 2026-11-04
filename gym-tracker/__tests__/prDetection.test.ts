@@ -207,3 +207,28 @@ describe("bestOfRecords", () => {
     expect(bestOfRecords({ max_weight: 1 }, null)).toEqual({ max_weight: 1 });
   });
 });
+
+describe("same exercise twice in one workout", () => {
+  const exercises = [
+    { session_exercise_id: 1, exercise_id: "bench", exercise_name: "Bench" },
+    { session_exercise_id: 2, exercise_id: "squat", exercise_name: "Squat" },
+    { session_exercise_id: 3, exercise_id: "bench", exercise_name: "Bench" },
+  ];
+  const sets = {
+    1: [{ weight: 135, reps: 5, completed: true }],
+    2: [{ weight: 100, reps: 5, completed: true }],
+    3: [{ weight: 225, reps: 3, completed: true }],
+  };
+
+  it("reports one PR per exercise using all its sets", () => {
+    const { detectPRs, mergeStrengthRecord, groupSetsByExercise } = require("@/utils/prDetection");
+    const prs = detectPRs(exercises, sets, [{ exercise_id: "bench", max_weight: 200, max_volume: 2000 }]);
+    const bench = prs.filter((p: any) => p.exerciseId === "bench");
+    expect(bench).toHaveLength(1);
+    expect(bench[0].type).toBe("weight");
+    const groups = groupSetsByExercise(exercises, sets);
+    expect(groups).toHaveLength(2);
+    const benchSets = groups.find((g: any) => g.exercise.exercise_id === "bench").sets;
+    expect(mergeStrengthRecord(benchSets, { max_weight: 200, max_volume: 2000 }).max_weight).toBe(225);
+  });
+});
