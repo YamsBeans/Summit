@@ -10,6 +10,8 @@ import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useUnits, formatVolume } from "@/utils/units";
 import { bestOneRepMax, estimateOneRepMax } from "@/utils/oneRepMax";
 import CardioExerciseDetail from "@/components/CardioExerciseDetail";
+import { buildRepRecords } from "@/utils/repRecords";
+import { workingSetNumber } from "@/utils/setNumbers";
 
 type HistorySet = {
   weight: number | null; reps: number | null; completed: boolean; is_warmup?: boolean | null;
@@ -103,6 +105,8 @@ export default function ExerciseDetailScreen() {
       })
       .filter(Boolean) as { value: number; label: string; dataPointText: string }[];
   }, [history, metric, toDisplay]);
+
+  const repRecords = useMemo(() => buildRepRecords(history), [history]);
 
   // Friendly axis numbers, zoomed to the data's range when it sits far
   // from zero, so going from 185 to 205 is visible.
@@ -255,6 +259,46 @@ export default function ExerciseDetailScreen() {
             </View>
           ) : null}
 
+          {/* Rep records: heaviest weight per rep count */}
+          {repRecords.length > 0 && (
+            <View style={{ backgroundColor: colors.surface, borderRadius: 14, borderWidth: 1, borderColor: colors.border, marginBottom: 20, overflow: "hidden" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10 }}>
+                <Ionicons name="trophy-outline" size={16} color={colors.warning} style={{ marginRight: 6 }} />
+                <Text style={{ flex: 1, fontSize: 15, fontWeight: "700", color: colors.text }}>Rep Records</Text>
+                <Text style={{ fontSize: 11, fontWeight: "700", color: colors.textTertiary, letterSpacing: 0.4 }}>EST. 1RM</Text>
+              </View>
+              {repRecords.map((r, i) => {
+                const e1rm = estimateOneRepMax(r.weight, r.reps);
+                return (
+                  <View
+                    key={r.reps}
+                    style={{
+                      flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10,
+                      borderTopWidth: i === 0 ? 1 : 0, borderBottomWidth: i === repRecords.length - 1 ? 0 : 1,
+                      borderColor: colors.border,
+                    }}
+                    accessibilityLabel={`${r.reps} rep${r.reps === 1 ? "" : "s"}: ${toDisplay(r.weight)} ${unitLabel}`}
+                  >
+                    <Text style={{ width: 64, fontSize: 13, fontWeight: "700", color: colors.textSecondary }}>
+                      {r.reps} rep{r.reps === 1 ? "" : "s"}
+                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 15, fontWeight: "700", color: colors.text }}>
+                        {toDisplay(r.weight)} {unitLabel}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: colors.textTertiary, marginTop: 1 }}>
+                        {parseLocalDate(r.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </Text>
+                    </View>
+                    <Text style={{ fontSize: 13, fontWeight: "600", color: colors.textSecondary }}>
+                      {e1rm != null ? `${Math.round(toDisplay(e1rm) ?? e1rm)} ${unitLabel}` : "—"}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+
           {/* Session History List */}
           <Text style={{ fontSize: 16, fontWeight: "700", color: colors.text, marginBottom: 12 }}>Session History</Text>
           {history.length === 0 ? (
@@ -302,7 +346,7 @@ export default function ExerciseDetailScreen() {
                   <View style={{ marginTop: 8, gap: 3 }}>
                     {h.sets.map((s, si) => (
                       <Text key={si} style={{ fontSize: 12, color: si === bestIdx ? colors.text : colors.textTertiary, fontWeight: si === bestIdx ? "600" : "400" }}>
-                        {s.is_warmup ? "W" : `Set ${si + 1}`}: {toDisplay(s.weight) ?? "—"} {unitLabel} × {s.reps ?? "—"} reps
+                        {s.is_warmup ? "W" : `Set ${workingSetNumber(h.sets, si)}`}: {s.weight ? `${toDisplay(s.weight)} ${unitLabel}` : "Bodyweight"} × {s.reps ?? "—"} {s.reps === 1 ? "rep" : "reps"}
                         {si === bestIdx && h.sets.length > 1 ? "  ★" : ""}
                       </Text>
                     ))}
