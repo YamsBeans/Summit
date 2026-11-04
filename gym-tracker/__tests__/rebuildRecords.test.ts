@@ -64,6 +64,21 @@ describe("online", () => {
     expect(write.values).toMatchObject({ exercise_id: "bench", max_weight: 225, max_volume: 1125 });
   });
 
+  it("catches up on exercises edited while offline", async () => {
+    mockNet.isConnected = false;
+    await db.rebuildStrengthRecords("u1", ["squat"]);
+    mockNet.isConnected = true;
+    mockResults.personal_records = { data: [{ exercise_id: "squat", pr_type: "strength", max_weight: 999, max_volume: 999 }], error: null };
+    mockResults.session_exercises = { data: [{ session_exercise_id: 8, workout_sessions: { session_id: 2, session_date: "2026-11-01" } }], error: null };
+    mockResults.session_exercise_sets = { data: [{ session_exercise_id: 8, weight: 315, reps: 3, completed: true }], error: null };
+    // e.g. called after a sync, with nothing new
+    await db.rebuildStrengthRecords("u1", []);
+    expect(mockUpserts.find((u) => u.table === "personal_records")?.values).toMatchObject({ exercise_id: "squat", max_weight: 315 });
+    mockUpserts.length = 0;
+    await db.rebuildStrengthRecords("u1", []);
+    expect(mockUpserts).toEqual([]);
+  });
+
   it("never writes when the history read fails", async () => {
     mockResults.personal_records = { data: [{ exercise_id: "bench", pr_type: "strength", max_weight: 300, max_volume: 3000 }], error: null };
     mockResults.session_exercises = { data: null, error: { message: "statement timeout" } };

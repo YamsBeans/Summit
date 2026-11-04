@@ -469,6 +469,26 @@ async function fetchExerciseHistory(exerciseId: string, userId: string): Promise
   return { data: history, error: null };
 }
 
+// Exercises whose records need rebuilding once the server is up to date
+// (an edit or delete made offline), per user.
+const DIRTY_RECORDS_KEY = "@gym_tracker_records_dirty";
+
+async function takeDirtyRecordIds(userId: string): Promise<string[]> {
+  try {
+    const all = JSON.parse((await AsyncStorage.getItem(DIRTY_RECORDS_KEY)) ?? "{}");
+    return Array.isArray(all[userId]) ? all[userId] : [];
+  } catch { return []; }
+}
+
+async function setDirtyRecordIds(userId: string, ids: string[]): Promise<void> {
+  try {
+    const all = JSON.parse((await AsyncStorage.getItem(DIRTY_RECORDS_KEY)) ?? "{}");
+    if (ids.length > 0) all[userId] = [...new Set(ids)];
+    else delete all[userId];
+    await AsyncStorage.setItem(DIRTY_RECORDS_KEY, JSON.stringify(all));
+  } catch (e) { logError("setDirtyRecordIds", e); }
+}
+
 const ACTIVE_SESSION_KEY = "activeSession";
 
 // While offline changes are waiting to upload, the cached copy (which has
@@ -1452,7 +1472,6 @@ export const db = {
    */
   rebuildStrengthRecords: async (userId: string, exerciseIds: string[]): Promise<void> => {
     const ids = [...new Set(exerciseIds)].filter(Boolean);
-    if (ids.length === 0) return;
 
     if (!isOnline) {
       // Local-only: the device store is the whole truth.
@@ -1468,7 +1487,13 @@ export const db = {
       return;
     }
 
-    if (!shouldUseSupabase()) return;
+    // Anything left over from an edit made offline goes along too; whatever
+    // can't be done now is kept for the next sync.
+    const wanted = [...new Set([...(await takeDirtyRecordIds(userId)), ...ids])];
+    if (wanted.length === 0) return;
+    let done = false;
+    const deferRest = () => setDirtyRecordIds(userId, done ? [] : wanted);
+    if (!shouldUseSupabase()) { await deferRest(); return; }
     if (await hasPendingOps()) await flushNow();
     // Inside the outbox lock so no other write lands between reading the
     // history and writing the record; straight from Supabase (never the read
@@ -1478,7 +1503,7 @@ export const db = {
       const { data: records, error: recErr } = await supabase
         .from("personal_records").select("*").eq("user_id", userId).eq("pr_type", "strength");
       if (recErr) { logError("rebuildStrengthRecords.read", recErr); return; }
-      for (const exerciseId of ids) {
+      for (const exerciseId of wanted) {
         const { data: history, error } = await fetchExerciseHistory(exerciseId, userId);
         if (error || !Array.isArray(history)) { logError("rebuildStrengthRecords.history", error); return; }
         const rebuilt = strengthRecordFromHistory(history);
@@ -1497,7 +1522,9 @@ export const db = {
           return next;
         });
       }
+      done = true;
     });
+    await deferRest();
   },
 
   // Custom Exercises
@@ -1621,6 +1648,8 @@ export const db = {
         total.synced += r.synced;
         total.errors += r.errors;
       } while (syncAgain);
+      // Records edited offline can be rebuilt now the server has everything.
+      await db.rebuildStrengthRecords(userId, []).catch((e: unknown) => logError("syncPendingSessions.rebuildRecords", e));
       return total;
     })().finally(() => { syncInFlight = null; });
     return syncInFlight;
