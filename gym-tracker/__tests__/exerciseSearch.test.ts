@@ -13,7 +13,7 @@ const names = (r: { name: string }[]) => r.map((e) => e.name);
 
 describe("searchExercises", () => {
   it("matches every word in any order", () => {
-    expect(names(searchExercises(list, "press bench"))).toEqual([
+    expect(names(searchExercises(list, "press bench")).sort()).toEqual([
       "Barbell Bench Press - Medium Grip",
       "Dumbbell Bench Press",
     ]);
@@ -56,5 +56,34 @@ describe("pushRecent", () => {
   it("moves the pick to the front without duplicates and caps the list", () => {
     expect(pushRecent(["a", "b", "c"], "b")).toEqual(["b", "a", "c"]);
     expect(pushRecent(["a", "b", "c"], "d", 3)).toEqual(["d", "a", "b"]);
+  });
+});
+
+describe("searchExercises on the real exercise list", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const all = require("../assets/data/exercises.json");
+  const top = (q: string, n = 3) => names(searchExercises(all, q)).slice(0, n);
+
+  it("puts the staple lift first for short queries", () => {
+    expect(top("bench press", 1)).toEqual(["Barbell Bench Press - Medium Grip"]);
+    expect(top("squat", 1)).toEqual(["Barbell Squat"]);
+    expect(top("deadlift", 1)).toEqual(["Barbell Deadlift"]);
+    expect(top("lat pulldown", 1)).toEqual(["Wide-Grip Lat Pulldown"]);
+  });
+
+  it("matches the start of words, so run finds running and not crunches", () => {
+    const hits = names(searchExercises(all, "run"));
+    expect(hits).toContain("Running, Treadmill");
+    expect(hits.some((n) => /crunch/i.test(n))).toBe(false);
+  });
+
+  it("falls back to substrings when no word starts with the query", () => {
+    expect(names(searchExercises(all, "ullup")).length).toBeGreaterThan(0);
+  });
+
+  it("every staple id exists", () => {
+    const { STAPLE_EXERCISE_IDS } = require("@/utils/exerciseSearch");
+    const ids = new Set(all.map((e: any) => e.id));
+    expect([...STAPLE_EXERCISE_IDS].filter((id: string) => !ids.has(id))).toEqual([]);
   });
 });
