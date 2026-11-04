@@ -512,14 +512,16 @@ export default function WorkoutEditScreen() {
             {/* Column headers */}
             {ex.sets.length > 0 && (
               <View style={styles.setHeaderRow}>
-                <Text style={[styles.setColLabel, { color: colors.textTertiary, width: 36 }]}>SET</Text>
-                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>
+                <Text style={[styles.setColLabel, { color: colors.textTertiary, width: 28, textAlign: "center" }]}>SET</Text>
+                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1, textAlign: "center" }]}>
                   {ex.exercise_type === "cardio" ? `DIST (${distanceUnit})` : unitLabel.toUpperCase()}
                 </Text>
-                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>
+                <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1, textAlign: "center" }]}>
                   {ex.exercise_type === "cardio" ? "TIME" : "REPS"}
                 </Text>
-                <Text style={[styles.setColLabel, { color: colors.textTertiary, width: 32 }]}>DONE</Text>
+                <View style={{ width: 32, alignItems: "center" }}>
+                  <Ionicons name="checkmark" size={14} color={colors.textTertiary} />
+                </View>
                 <View style={{ width: 28 }} />
               </View>
             )}
@@ -753,6 +755,8 @@ const styles = StyleSheet.create({
   },
   setNumText: { fontSize: 12, fontWeight: "700" },
   setInput: {
+    // minWidth 0 lets flex shrink web inputs below their intrinsic width.
+    minWidth: 0,
     borderWidth: 1, borderRadius: 8,
     paddingHorizontal: 8, paddingVertical: 8,
     fontSize: 15, textAlign: "center",
