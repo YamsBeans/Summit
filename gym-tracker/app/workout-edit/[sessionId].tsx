@@ -69,6 +69,19 @@ export default function WorkoutEditScreen() {
   const [sessionName, setSessionName] = useState("");
   const [sessionNotes, setSessionNotes] = useState("");
   const [exercises, setExercises] = useState<EditExercise[]>([]);
+  const loadedExerciseIds = useRef<string[]>([]);
+  const exercisesRef = useRef(exercises);
+  exercisesRef.current = exercises;
+  // Set edits are saved as you go and may have raised or lowered a PR (a
+  // 2250 lb typo fixed to 225), so recompute on the way out, however the
+  // screen is left.
+  useEffect(() => () => {
+    const touched = [...loadedExerciseIds.current, ...exercisesRef.current.map((e) => e.exercise_id)];
+    if (touched.length === 0) return;
+    db.getUser()
+      .then(({ data }) => data?.user?.id && db.rebuildStrengthRecords(data.user.id, touched))
+      .catch((e: unknown) => logError("workoutEdit.rebuildRecords", e));
+  }, []);
 
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const photoSrc = useProgressPhotoUrl(photoUrl);
@@ -133,6 +146,7 @@ export default function WorkoutEditScreen() {
     }));
 
     setExercises(enriched);
+    loadedExerciseIds.current = enriched.map((e) => e.exercise_id);
     setLoading(false);
   }
 

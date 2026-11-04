@@ -5,6 +5,7 @@ import { showAlert } from "@/utils/alert";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { db } from "@/backend/db";
+import { logError } from "@/utils/log";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits, formatVolume } from "@/utils/units";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
@@ -30,6 +31,12 @@ type WorkoutHistoryCardProps = {
   totalCardioDurationSeconds?: number;
   distanceUnit?: 'km' | 'mi';
 };
+
+function rebuildRecordsFor(exerciseIds: string[]) {
+  db.getUser()
+    .then(({ data }) => data?.user?.id && db.rebuildStrengthRecords(data.user.id, exerciseIds))
+    .catch((e: unknown) => logError("WorkoutHistoryCard.rebuildRecords", e));
+}
 
 // Parse "YYYY-MM-DD" as local midnight, not UTC midnight
 function parseLocalDate(dateStr: string): Date {
@@ -189,9 +196,12 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
           style: "destructive",
           onPress: async () => {
             setDeleting(true);
-            await db.deleteWorkoutSession(session_id);
+            const { data: exs } = await db.getSessionExercises(session_id);
+            const { error } = await db.deleteWorkoutSession(session_id);
             setDeleting(false);
             onDelete?.(session_id);
+            // A PR set in this workout shouldn't outlive it.
+            if (!error) rebuildRecordsFor((exs ?? []).map((e: any) => e.exercise_id));
           },
         },
       ]

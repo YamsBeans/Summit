@@ -639,18 +639,18 @@ const rawLocalDb = {
       .filter((s) => s.user_id === userId && s.end_time !== null)
       .sort((a, b) => new Date(a.session_date).getTime() - new Date(b.session_date).getTime());
 
-    const history = completedSessions
-      .map((s) => {
-        const se = localSessionExercises.find(
-          (e) => e.session_id === s.session_id && e.exercise_id === exerciseId
-        );
-        if (!se) return null;
-        const sets = localSessionExerciseSets.filter(
-          (set) => set.session_exercise_id === se.session_exercise_id && set.completed
-        );
-        return { session_date: s.session_date, sets };
-      })
-      .filter(Boolean);
+    // One entry per time the exercise was done (twice in a workout = two),
+    // like the Supabase query.
+    const history = completedSessions.flatMap((s) =>
+      localSessionExercises
+        .filter((e) => e.session_id === s.session_id && e.exercise_id === exerciseId)
+        .map((se) => ({
+          session_id: s.session_id,
+          session_date: s.session_date,
+          sets: localSessionExerciseSets.filter(
+            (set) => set.session_exercise_id === se.session_exercise_id && set.completed
+          ),
+        })));
 
     return { data: history, error: null };
   },

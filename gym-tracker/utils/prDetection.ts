@@ -172,3 +172,28 @@ export function bestOfRecords<T extends StoredRecord>(incoming: T, existing: Sto
     best_pace_sec_per_km: lower(incoming.best_pace_sec_per_km, existing.best_pace_sec_per_km),
   };
 }
+
+/**
+ * Rebuild a strength record from history (finished workouts, completed sets
+ * only): the heaviest weight and the biggest single-workout volume. Used
+ * after a past workout is edited or deleted, so a typo like 2250 lb that was
+ * saved as a PR can come back down.
+ */
+export function strengthRecordFromHistory(
+  history: { session_id?: number | null; session_date?: string; sets: CurrentSet[] }[],
+): { max_weight: number | null; max_volume: number | null } {
+  let maxW = 0;
+  const volumeBySession = new Map<string, number>();
+  history.forEach((entry, i) => {
+    const key = entry.session_id != null ? `s${entry.session_id}` : `i${i}`;
+    for (const s of entry.sets) {
+      if (s.completed === false) continue;
+      if (s.weight != null && s.weight > maxW) maxW = s.weight;
+      if (s.weight != null && s.reps != null) {
+        volumeBySession.set(key, (volumeBySession.get(key) ?? 0) + s.weight * s.reps);
+      }
+    }
+  });
+  const maxVol = Math.max(0, ...volumeBySession.values());
+  return { max_weight: maxW || null, max_volume: maxVol || null };
+}

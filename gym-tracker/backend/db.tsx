@@ -19,7 +19,7 @@ import {
   forgetSyncedLocalSessions,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
-import { bestOfRecords } from "@/utils/prDetection";
+import { bestOfRecords, strengthRecordFromHistory } from "@/utils/prDetection";
 import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache, writeCacheMany } from "./readCache";
 import {
   OutboxOp,
@@ -1394,6 +1394,48 @@ export const db = {
     return localDb.upsertPersonalRecord(record);
   },
 
+  /**
+   * Recompute strength records for these exercises from history, allowing
+   * them to go down. Call after a finished workout is edited or deleted.
+   * Lowering a record needs an up-to-date server, so this does nothing when
+   * offline or while changes are still waiting to upload (normal PR saves
+   * only ever raise a record).
+   */
+  rebuildStrengthRecords: async (userId: string, exerciseIds: string[]): Promise<void> => {
+    const ids = [...new Set(exerciseIds)].filter(Boolean);
+    if (ids.length === 0) return;
+    if (isOnline) {
+      if (!shouldUseSupabase()) return;
+      if (await hasPendingOps()) await flushNow();
+      // Workouts logged offline that haven't uploaded yet count too.
+      if (!networkStatus.isConnected || (await hasPendingOps()) || (await getPendingCount()) > 0) return;
+    }
+    const { data: records } = await db.getPersonalRecords(userId);
+    for (const exerciseId of ids) {
+      const current = (records ?? []).find((r: any) => r.exercise_id === exerciseId && (r.pr_type ?? "strength") === "strength");
+      const { data: history, error } = await db.getExerciseHistory(exerciseId, userId);
+      if (error || !Array.isArray(history)) continue;
+      const rebuilt = strengthRecordFromHistory(history);
+      if (!current && rebuilt.max_weight == null && rebuilt.max_volume == null) continue;
+      if (current && current.max_weight === rebuilt.max_weight && current.max_volume === rebuilt.max_volume) continue;
+      const values = { user_id: userId, exercise_id: exerciseId, pr_type: "strength" as const, ...rebuilt };
+      if (!isOnline) {
+        await localDb.upsertPersonalRecord(values);
+        continue;
+      }
+      const { error: upErr } = await supabase.from("personal_records")
+        .upsert(values, { onConflict: "user_id,exercise_id,pr_type" });
+      if (upErr) { logError("rebuildStrengthRecords", upErr); continue; }
+      await patchCachedList(`personalRecords:${userId}`, (rows) => {
+        const i = rows.findIndex((r) => r.exercise_id === exerciseId && (r.pr_type ?? "strength") === "strength");
+        if (i < 0) return [...rows, values];
+        const next = [...rows];
+        next[i] = { ...next[i], ...rebuilt };
+        return next;
+      });
+    }
+  },
+
   // Custom Exercises
   getCustomExercises: async (userId: string) => {
     return cachedRead(
@@ -1534,6 +1576,7 @@ export const db = {
           setsByExercise.set(set.session_exercise_id, list);
         }
         const history = sessionExercises.map((se: any) => ({
+          session_id: se.workout_sessions.session_id,
           session_date: se.workout_sessions.session_date,
           sets: setsByExercise.get(se.session_exercise_id) ?? [],
         }));

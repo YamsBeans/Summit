@@ -232,3 +232,21 @@ describe("same exercise twice in one workout", () => {
     expect(mergeStrengthRecord(benchSets, { max_weight: 200, max_volume: 2000 }).max_weight).toBe(225);
   });
 });
+
+describe("strengthRecordFromHistory", () => {
+  const { strengthRecordFromHistory } = require("@/utils/prDetection");
+  it("takes the heaviest set and the biggest single-workout volume", () => {
+    expect(strengthRecordFromHistory([
+      { session_id: 1, sets: [{ weight: 200, reps: 5, completed: true }] },
+      { session_id: 2, sets: [{ weight: 150, reps: 5, completed: true }] },
+      // Same workout, exercise done twice: volumes add up.
+      { session_id: 2, sets: [{ weight: 150, reps: 5, completed: true }] },
+    ])).toEqual({ max_weight: 200, max_volume: 1500 });
+  });
+  it("ignores unticked sets and returns nulls with no history", () => {
+    expect(strengthRecordFromHistory([
+      { session_id: 1, sets: [{ weight: 2250, reps: 5, completed: false }, { weight: 225, reps: 5, completed: true }] },
+    ])).toEqual({ max_weight: 225, max_volume: 1125 });
+    expect(strengthRecordFromHistory([])).toEqual({ max_weight: null, max_volume: null });
+  });
+});
