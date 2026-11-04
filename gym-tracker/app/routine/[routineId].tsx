@@ -13,6 +13,8 @@ import ExercisePicker from "@/components/ExercisePicker";
 import ConfirmModal from "@/components/ConfirmModal";
 import { useUnits, useDistanceUnit } from "@/utils/units";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
+import { nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
+import { logError } from "@/utils/log";
 import { digitsToSeconds, formatDigits, formatDistance, formatDuration, kmToMeters, metersToDisplay, milesToMeters, secondsToDigits } from "@/utils/cardioUtils";
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -47,6 +49,8 @@ export default function RoutineScreen() {
   // ── Data ──
   const [exercises, setExercises] = useState<any[]>([]);
   const [exerciseSets, setExerciseSets] = useState<Record<number, any[]>>({});
+  const exerciseSetsRef = useRef(exerciseSets);
+  exerciseSetsRef.current = exerciseSets;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -199,7 +203,7 @@ export default function RoutineScreen() {
     const isCardio = ex?.exercise_type === 'cardio';
     const { error: err } = await db.insertRoutineExerciseSet({
       routine_exercise_id: routineExerciseId,
-      set_number: currentSets.length + 1,
+      set_number: nextSetNumber(currentSets),
       target_weight: null,
       target_reps: null,
       is_warmup: isCardio ? false : false,
@@ -211,14 +215,22 @@ export default function RoutineScreen() {
   }, 300);
 
   const handleDeleteSet = useCallback(async (routineSetId: number, routineExerciseId: number) => {
+    const remaining = (exerciseSetsRef.current[routineExerciseId] ?? []).filter((s) => s.routine_set_id !== routineSetId);
+    // Keep numbers 1..n so new sets don't reuse one and workouts copy back
+    // to the right template set.
+    const changes = renumberChanges(remaining);
+    const renumbered = new Map(changes.map((c) => [c.set.routine_set_id, c.set_number]));
     setExerciseSets((prev) => ({
       ...prev,
-      [routineExerciseId]: (prev[routineExerciseId] ?? []).filter(
-        (s) => s.routine_set_id !== routineSetId
-      ),
+      [routineExerciseId]: remaining.map((s) =>
+        renumbered.has(s.routine_set_id) ? { ...s, set_number: renumbered.get(s.routine_set_id)! } : s),
     }));
     const { error: err } = await db.deleteRoutineExerciseSet(routineSetId);
-    if (err) { setError(err.message); reloadSetsForExercise(routineExerciseId); }
+    if (err) { setError(err.message); reloadSetsForExercise(routineExerciseId); return; }
+    for (const c of changes) {
+      const { error: numErr } = await db.updateRoutineExerciseSet(c.set.routine_set_id, { set_number: c.set_number });
+      if (numErr) logError("routine.deleteSet.renumber", numErr);
+    }
   }, [reloadSetsForExercise]);
 
   const handleUpdateSet = useCallback(async (
@@ -422,12 +434,14 @@ export default function RoutineScreen() {
               </View>
 
               {/* Set rows */}
-              {sets.map((set) =>
-                isEditing ? (
+              {sets.map((set, idx) => {
+                const number = isCardio ? idx + 1 : workingSetNumber(sets, idx) ?? idx + 1;
+                return isEditing ? (
                   isCardio ? (
                     <CardioTemplateSetRow
                       key={set.routine_set_id}
                       set={set}
+                      number={number}
                       routineExerciseId={ex.routine_exercise_id}
                       onUpdate={handleUpdateSet}
                       onDelete={handleDeleteSet}
@@ -437,6 +451,7 @@ export default function RoutineScreen() {
                     <TemplateSetRow
                       key={set.routine_set_id}
                       set={set}
+                      number={number}
                       routineExerciseId={ex.routine_exercise_id}
                       onUpdate={handleUpdateSet}
                       onDelete={handleDeleteSet}
@@ -445,12 +460,12 @@ export default function RoutineScreen() {
                   )
                 ) : (
                   isCardio ? (
-                    <CardioViewSetRow key={set.routine_set_id} set={set} colors={colors} />
+                    <CardioViewSetRow key={set.routine_set_id} set={set} number={number} colors={colors} />
                   ) : (
-                    <ViewSetRow key={set.routine_set_id} set={set} colors={colors} />
+                    <ViewSetRow key={set.routine_set_id} set={set} number={number} colors={colors} />
                   )
-                )
-              )}
+                );
+              })}
 
               {/* Add Set (edit only) */}
               {isEditing && (
@@ -602,14 +617,14 @@ export default function RoutineScreen() {
 
 // ─── ViewSetRow (read-only) ───────────────────────────────────────────────────
 
-const ViewSetRow = memo(function ViewSetRow({ set, colors }: { set: any; colors: any }) {
+const ViewSetRow = memo(function ViewSetRow({ set, number, colors }: { set: any; number: number; colors: any }) {
   const { toDisplay } = useUnits();
   const isWarmup = set.is_warmup === true;
   return (
     <View style={[rowStyles.row, { backgroundColor: isWarmup ? colors.warningLight + "55" : "transparent", borderBottomColor: colors.border }]}>
       <View style={[rowStyles.setNumWrap, isWarmup && { backgroundColor: colors.warningLight }]}>
         <Text style={[rowStyles.setNum, { color: isWarmup ? colors.warning : colors.textTertiary }]}>
-          {isWarmup ? "W" : set.set_number}
+          {isWarmup ? "W" : number}
         </Text>
       </View>
       <Text style={[viewRowStyles.cell, { color: colors.text }]}>
@@ -624,14 +639,14 @@ const ViewSetRow = memo(function ViewSetRow({ set, colors }: { set: any; colors:
 
 // ─── CardioViewSetRow (read-only) ────────────────────────────────────────────
 
-const CardioViewSetRow = memo(function CardioViewSetRow({ set, colors }: { set: any; colors: any }) {
+const CardioViewSetRow = memo(function CardioViewSetRow({ set, number, colors }: { set: any; number: number; colors: any }) {
   const { distanceUnit } = useDistanceUnit();
   const distLabel = set.target_distance_meters != null ? formatDistance(set.target_distance_meters, distanceUnit) : "—";
   const durLabel = set.target_duration_seconds != null ? formatDuration(set.target_duration_seconds) : "—";
   return (
     <View style={[rowStyles.row, { backgroundColor: "transparent", borderBottomColor: colors.border }]}>
       <View style={rowStyles.setNumWrap}>
-        <Text style={[rowStyles.setNum, { color: colors.textTertiary }]}>{set.set_number}</Text>
+        <Text style={[rowStyles.setNum, { color: colors.textTertiary }]}>{number}</Text>
       </View>
       <Text style={[viewRowStyles.cell, { color: colors.text }]}>{distLabel}</Text>
       <Text style={[viewRowStyles.cell, { color: colors.text }]}>{durLabel}</Text>
@@ -643,12 +658,14 @@ const CardioViewSetRow = memo(function CardioViewSetRow({ set, colors }: { set: 
 
 const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
   set,
+  number,
   routineExerciseId,
   onUpdate,
   onDelete,
   colors,
 }: {
   set: any;
+  number: number;
   routineExerciseId: number;
   onUpdate: (id: number, exId: number, updates: any) => void;
   onDelete: (id: number, exId: number) => void;
@@ -698,7 +715,7 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
   return (
     <View style={[rowStyles.row, { backgroundColor: "transparent", borderBottomColor: colors.border }]}>
       <View style={rowStyles.setNumWrap}>
-        <Text style={[rowStyles.setNum, { color: colors.textTertiary }]}>{set.set_number}</Text>
+        <Text style={[rowStyles.setNum, { color: colors.textTertiary }]}>{number}</Text>
       </View>
       <TextInput
         style={[rowStyles.input, rowStyles.weightCol, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground }]}
@@ -735,12 +752,14 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
 
 const TemplateSetRow = memo(function TemplateSetRow({
   set,
+  number,
   routineExerciseId,
   onUpdate,
   onDelete,
   colors,
 }: {
   set: any;
+  number: number;
   routineExerciseId: number;
   onUpdate: (id: number, exId: number, updates: any) => void;
   onDelete: (id: number, exId: number) => void;
@@ -776,7 +795,7 @@ const TemplateSetRow = memo(function TemplateSetRow({
     <View style={[rowStyles.row, { backgroundColor: rowBg, borderBottomColor: colors.border }]}>
       <View style={[rowStyles.setNumWrap, isWarmup && { backgroundColor: colors.warningLight }]}>
         <Text style={[rowStyles.setNum, { color: isWarmup ? colors.warning : colors.textTertiary }]}>
-          {isWarmup ? "W" : set.set_number}
+          {isWarmup ? "W" : number}
         </Text>
       </View>
       <TextInput

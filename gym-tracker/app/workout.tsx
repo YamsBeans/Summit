@@ -25,6 +25,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
+import { nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 import { notifySuccess, tapLight } from "@/utils/haptics";
 import CardioSetRow from "@/components/CardioSetRow";
@@ -301,7 +302,7 @@ export default function WorkoutScreen() {
 
     const { error } = await db.insertSessionExerciseSet({
       session_exercise_id: sessionExerciseId,
-      set_number: currentSets.length + 1,
+      set_number: nextSetNumber(currentSets),
       weight: prefillWeight,
       reps: prefillReps,
       is_warmup: false,
@@ -311,17 +312,26 @@ export default function WorkoutScreen() {
   }, 300);
 
   const deleteSet = async (sessionSetId: number, sessionExerciseId: number) => {
+    const remaining = (exerciseSets[sessionExerciseId] ?? []).filter((s) => s.session_set_id !== sessionSetId);
+    // Close the gap so the next added set doesn't reuse a number and the
+    // routine sync lines sets up by position.
+    const changes = renumberChanges(remaining);
+    const renumbered = new Map(changes.map((c) => [c.set.session_set_id, c.set_number]));
     setExerciseSets((prev) => ({
       ...prev,
-      [sessionExerciseId]: (prev[sessionExerciseId] ?? []).filter(
-        (s) => s.session_set_id !== sessionSetId
-      ),
+      [sessionExerciseId]: remaining.map((s) =>
+        renumbered.has(s.session_set_id) ? { ...s, set_number: renumbered.get(s.session_set_id)! } : s),
     }));
 
     const { error } = await db.deleteSessionExerciseSet(sessionSetId);
     if (error) {
       setError(error.message);
       reloadSetsForExercise(sessionExerciseId);
+      return;
+    }
+    for (const c of changes) {
+      const { error: numErr } = await db.updateSessionExerciseSet(c.set.session_set_id, { set_number: c.set_number });
+      if (numErr) logError("deleteSet.renumber", numErr);
     }
   };
 
@@ -336,6 +346,14 @@ export default function WorkoutScreen() {
     setSelectedSet(null);
     setSelectedExerciseId(null);
   }, []);
+
+  const selectedSetLabel = useMemo(() => {
+    if (!selectedSet || selectedExerciseId == null) return "Set";
+    if (selectedSet.is_warmup) return "Warm-up Set";
+    const sets = exerciseSets[selectedExerciseId] ?? [];
+    const idx = sets.findIndex((s) => s.session_set_id === selectedSet.session_set_id);
+    return `Set ${idx >= 0 ? workingSetNumber(sets, idx) : selectedSet.set_number}`;
+  }, [selectedSet, selectedExerciseId, exerciseSets]);
 
   const handleToggleWarmup = useGuardedPress(async () => {
     if (!selectedSet || !selectedExerciseId) return;
@@ -820,7 +838,7 @@ export default function WorkoutScreen() {
                     key={set.session_set_id}
                     set={set}
                     // Working sets count 1, 2, 3 after any warm-ups (W), like Strong.
-                    workingNumber={sets.slice(0, idx + 1).filter((x: any) => !x.is_warmup).length}
+                    workingNumber={workingSetNumber(sets, idx) ?? undefined}
                     sessionExerciseId={ex.session_exercise_id}
                     onUpdate={updateSet}
                     onSetNumberPress={openSetOptions}
@@ -900,7 +918,7 @@ export default function WorkoutScreen() {
           <View style={[modalStyles.sheet, { backgroundColor: colors.surface }]}>
             <View style={[modalStyles.handle, { backgroundColor: colors.border }]} />
             <Text style={[modalStyles.sheetTitle, { color: colors.textSecondary }]}>
-              Set {selectedSet?.set_number}
+              {selectedSetLabel}
             </Text>
 
             <Pressable style={[modalStyles.option, { borderBottomColor: colors.border }]} onPress={handleToggleWarmup}>

@@ -833,7 +833,7 @@ export const db = {
 
   updateRoutineExerciseSet: async (
     routineSetId: number,
-    updates: { target_reps?: number | null; target_weight?: number | null; is_warmup?: boolean; target_duration_seconds?: number | null; target_distance_meters?: number | null; target_effort_level?: number | null }
+    updates: { set_number?: number; target_reps?: number | null; target_weight?: number | null; is_warmup?: boolean; target_duration_seconds?: number | null; target_distance_meters?: number | null; target_effort_level?: number | null }
   ) => {
     if (shouldUseSupabase()) {
       return supabase
@@ -1155,7 +1155,7 @@ export const db = {
     return localDb.insertSessionExerciseSet(set);
   },
 
-  updateSessionExerciseSet: async (sessionSetId: number, updates: { reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean; duration_seconds?: number | null; distance_meters?: number | null; pace_sec_per_km?: number | null; calories?: number | null; effort_level?: number | null }) => {
+  updateSessionExerciseSet: async (sessionSetId: number, updates: { set_number?: number; reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean; duration_seconds?: number | null; distance_meters?: number | null; pace_sec_per_km?: number | null; calories?: number | null; effort_level?: number | null }) => {
     if (!onDevice(sessionSetId)) {
       return writeServerRow({ kind: "update", table: "session_exercise_sets", id: sessionSetId, values: updates }, async () => {
         const exId = setParent.get(sessionSetId);
