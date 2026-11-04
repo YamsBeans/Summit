@@ -111,7 +111,7 @@ The Monday run pushed its commits but didn't write a log entry or update the PR 
 
 ## 2026-11-04 (Wed)
 
-Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 272 tests in 33 suites (up from 243), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode. Two read-only audit subagents looked for bugs, and a third reviewed my diff. I fixed what they found.
+Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 272 tests in 32 suites (up from 243), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode. Two read-only audit subagents looked for bugs, and a third reviewed my diff. I fixed what they found.
 
 ### Bugs fixed
 - **Set numbers collided after deleting a set.** Removing a middle set and then adding one gave 1, 3, 3. Sets could then swap order on reload, and finishing a routine workout copied two sets into one template set. Adds now use the next free number, deletes renumber the rest, and add/delete run one at a time per exercise. This covers the workout logger, the routine editor and Edit Workout.
