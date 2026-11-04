@@ -55,7 +55,8 @@ export default function RecordsScreen() {
       return parts.join(" · ") || "—";
     }
     const parts = [
-      r.maxWeight ? `${formatVolume(toDisplay(r.maxWeight))} ${unitLabel}` : null,
+      // Weights keep their decimal (102.5 lbs, 62.5 kg); only volume rounds.
+      r.maxWeight ? `${toDisplay(r.maxWeight)} ${unitLabel}` : null,
       r.maxVolume ? `${formatVolume(toDisplay(r.maxVolume))} ${unitLabel} vol` : null,
     ].filter(Boolean);
     return parts.join(" · ") || "—";

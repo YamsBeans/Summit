@@ -280,8 +280,9 @@ const rawLocalDb = {
 
   // Get all completed sessions for the user (history)
   getWorkoutSessions: async (userId: string) => {
+    // Finished only, like the Supabase query: the one in progress isn't history.
     const data = localWorkoutSessions
-      .filter((s) => s.user_id === userId)
+      .filter((s) => s.user_id === userId && s.end_time !== null)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     return { data, error: null };
   },

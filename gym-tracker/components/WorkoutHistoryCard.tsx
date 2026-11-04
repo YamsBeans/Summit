@@ -111,7 +111,12 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
     const lines = [
       `💪 ${sessionName}`,
       `📅 ${fullDate(sessionDate)}`,
-      `⏱ ${duration}  •  ${exerciseCount} exercise${exerciseCount !== 1 ? "s" : ""}  •  ${volumeDisplay} ${unitLabel}`,
+      [
+        `⏱ ${duration}`,
+        `${exerciseCount} exercise${exerciseCount !== 1 ? "s" : ""}`,
+        totalVolume > 0 ? `${volumeDisplay} ${unitLabel}` : null,
+        totalCardioDistanceMeters ? formatDistance(totalCardioDistanceMeters, distanceUnit) : null,
+      ].filter(Boolean).join("  •  "),
     ];
     if (exerciseNames.length > 0) {
       lines.push("", ...exerciseNames.map((n) => `• ${n}`));
@@ -199,6 +204,10 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
             const { data: exs } = await db.getSessionExercises(session_id);
             const { error } = await db.deleteWorkoutSession(session_id);
             setDeleting(false);
+            if (error) {
+              showAlert("Couldn't Delete Workout", error.message ?? "Please try again.");
+              return;
+            }
             onDelete?.(session_id);
             // A PR set in this workout shouldn't outlive it.
             if (!error) rebuildRecordsFor((exs ?? []).map((e: any) => e.exercise_id));

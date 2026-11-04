@@ -8,6 +8,7 @@ import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import { db } from "@/backend/db";
 import { cancelRestDoneNotification } from "@/utils/notifications";
 import { clearActiveRestTimer } from "@/utils/useRestTimer";
+import { showAlert } from "@/utils/alert";
 import ConfirmModal from "./ConfirmModal";
 
 export const TAB_BAR_HEIGHT = 64;
@@ -66,7 +67,13 @@ export default function MinimizedWorkoutBar() {
     setShowDiscard(false);
     cancelRestDoneNotification();
     clearActiveRestTimer();
-    await db.deleteWorkoutSession(activeWorkout.sessionId);
+    const { error } = await db.deleteWorkoutSession(activeWorkout.sessionId);
+    if (error) {
+      // Keep the bar: the session is still there and would come back as
+      // "Resume" on the next launch anyway.
+      showAlert("Couldn't Discard Workout", error.message ?? "Please try again.");
+      return;
+    }
     clearActiveWorkout();
   }, [activeWorkout, clearActiveWorkout]);
 

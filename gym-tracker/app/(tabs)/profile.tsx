@@ -283,7 +283,11 @@ export default function ProfileScreen() {
 
   const handleDeleteSession = useCallback((sessionId: number) => {
     setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
-  }, []);
+    // Totals (workouts, volume, cardio) come from the full load; redo it
+    // quietly so they don't keep counting the deleted workout.
+    lastFetchedRef.current = 0;
+    loadProfile();
+  }, [loadProfile]);
 
   const handleEditWorkout = useCallback((sessionId: number) => {
     hasDataRef.current = false;

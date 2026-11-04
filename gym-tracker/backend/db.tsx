@@ -943,6 +943,12 @@ export const db = {
         async () => {
           await patchCachedRow(`workoutSession:${sessionId}`, values);
           await forgetCachedActiveSession(sessionId);
+          // Show it in history right away, even before an offline finish uploads.
+          const row = await readCache<any>(`workoutSession:${sessionId}`);
+          if (row?.user_id) {
+            await patchCachedList(`workoutSessions:${row.user_id}`, (rows) =>
+              [{ ...row, ...values }, ...rows.filter((r) => r.session_id !== sessionId)]);
+          }
         },
       );
       await clearSessionOrigin();
@@ -1136,7 +1142,15 @@ export const db = {
     if (!onDevice(sessionId)) {
       return writeServerRow(
         { kind: "delete", table: "workout_sessions", id: sessionId },
-        () => forgetCachedActiveSession(sessionId),
+        async () => {
+          await forgetCachedActiveSession(sessionId);
+          // Otherwise an offline delete comes back on the next history load.
+          const row = await readCache<any>(`workoutSession:${sessionId}`);
+          const userId = row?.user_id ?? (await sessionUser().catch(() => null))?.id;
+          if (userId) {
+            await patchCachedList(`workoutSessions:${userId}`, (rows) => rows.filter((r) => r.session_id !== sessionId));
+          }
+        },
       );
     }
     return localDb.deleteWorkoutSession(sessionId);

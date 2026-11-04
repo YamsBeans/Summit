@@ -7,6 +7,8 @@ import { ThemeProvider, useTheme } from "@/theme/ThemeContext";
 import { useSyncManager } from "@/utils/useSyncManager";
 import { ActiveWorkoutProvider, useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import MinimizedWorkoutBar from "@/components/MinimizedWorkoutBar";
+import { clearActiveRestTimer } from "@/utils/useRestTimer";
+import { cancelRestDoneNotification } from "@/utils/notifications";
 
 function RootNav() {
   const [session, setSession] = useState<any>(null);
@@ -16,7 +18,17 @@ function RootNav() {
   const { colors } = useTheme();
   const userId = session?.user?.id ?? null;
   const { isSyncing, lastSyncedCount } = useSyncManager(userId);
-  const { activeWorkout, minimizeWorkout } = useActiveWorkout();
+  const { activeWorkout, minimizeWorkout, clearActiveWorkout } = useActiveWorkout();
+
+  // Signing out must not hand the next user the previous one's workout bar,
+  // rest timer or "rest over" notification.
+  useEffect(() => {
+    if (userId) return;
+    clearActiveWorkout();
+    clearActiveRestTimer();
+    cancelRestDoneNotification().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
   // The sync banners sit above every screen, so they need the notch inset.
   const { top: safeTop } = useSafeAreaInsets();
 
