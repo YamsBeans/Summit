@@ -25,7 +25,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
-import { nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
+import { createSerialQueue, nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 import { notifySuccess, tapLight } from "@/utils/haptics";
 import CardioSetRow from "@/components/CardioSetRow";
@@ -45,6 +45,10 @@ export default function WorkoutScreen() {
   const [session, setSession] = useState<any>(null);
   const [exercises, setExercises] = useState<any[]>([]);
   const [exerciseSets, setExerciseSets] = useState<Record<number, any[]>>({});
+  // Latest sets for queued add/delete jobs, which run after their render.
+  const exerciseSetsRef = useRef(exerciseSets);
+  exerciseSetsRef.current = exerciseSets;
+  const setJobs = useRef(createSerialQueue()).current;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
@@ -259,6 +263,7 @@ export default function WorkoutScreen() {
 
   const reloadSetsForExercise = async (sessionExerciseId: number) => {
     const { data } = await db.getSessionExerciseSets(sessionExerciseId);
+    exerciseSetsRef.current = { ...exerciseSetsRef.current, [sessionExerciseId]: data ?? [] };
     setExerciseSets((prev) => ({ ...prev, [sessionExerciseId]: data ?? [] }));
   };
 
@@ -284,8 +289,8 @@ export default function WorkoutScreen() {
     }
   }, []);
 
-  const addSet = useGuardedPress(async (sessionExerciseId: number) => {
-    const currentSets = exerciseSets[sessionExerciseId] ?? [];
+  const addSet = useGuardedPress((sessionExerciseId: number) => setJobs(sessionExerciseId, async () => {
+    const currentSets = exerciseSetsRef.current[sessionExerciseId] ?? [];
     setError(null);
 
     let prefillWeight: number | null = null;
@@ -308,20 +313,21 @@ export default function WorkoutScreen() {
       is_warmup: false,
     });
     if (error) setError(error.message);
-    else reloadSetsForExercise(sessionExerciseId);
-  }, 300);
+    else await reloadSetsForExercise(sessionExerciseId);
+  }), 300);
 
-  const deleteSet = async (sessionSetId: number, sessionExerciseId: number) => {
-    const remaining = (exerciseSets[sessionExerciseId] ?? []).filter((s) => s.session_set_id !== sessionSetId);
+  const deleteSet = (sessionSetId: number, sessionExerciseId: number) => setJobs(sessionExerciseId, async () => {
+    const remaining = (exerciseSetsRef.current[sessionExerciseId] ?? []).filter((s) => s.session_set_id !== sessionSetId);
     // Close the gap so the next added set doesn't reuse a number and the
     // routine sync lines sets up by position.
     const changes = renumberChanges(remaining);
     const renumbered = new Map(changes.map((c) => [c.set.session_set_id, c.set_number]));
-    setExerciseSets((prev) => ({
-      ...prev,
-      [sessionExerciseId]: remaining.map((s) =>
-        renumbered.has(s.session_set_id) ? { ...s, set_number: renumbered.get(s.session_set_id)! } : s),
-    }));
+    const apply = (list: any[]) => list
+      .filter((s) => s.session_set_id !== sessionSetId)
+      .map((s) => (renumbered.has(s.session_set_id) ? { ...s, set_number: renumbered.get(s.session_set_id)! } : s));
+    exerciseSetsRef.current = { ...exerciseSetsRef.current, [sessionExerciseId]: remaining.map((s) =>
+      renumbered.has(s.session_set_id) ? { ...s, set_number: renumbered.get(s.session_set_id)! } : s) };
+    setExerciseSets((prev) => ({ ...prev, [sessionExerciseId]: apply(prev[sessionExerciseId] ?? []) }));
 
     const { error } = await db.deleteSessionExerciseSet(sessionSetId);
     if (error) {
@@ -333,7 +339,7 @@ export default function WorkoutScreen() {
       const { error: numErr } = await db.updateSessionExerciseSet(c.set.session_set_id, { set_number: c.set_number });
       if (numErr) logError("deleteSet.renumber", numErr);
     }
-  };
+  });
 
   const openSetOptions = useCallback((set: any, sessionExerciseId: number) => {
     setSelectedSet(set);

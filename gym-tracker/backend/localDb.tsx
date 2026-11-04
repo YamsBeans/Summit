@@ -648,7 +648,7 @@ const rawLocalDb = {
           session_id: s.session_id,
           session_date: s.session_date,
           sets: localSessionExerciseSets.filter(
-            (set) => set.session_exercise_id === se.session_exercise_id && set.completed
+            (set) => set.session_exercise_id === se.session_exercise_id && set.completed !== false
           ),
         })));
 

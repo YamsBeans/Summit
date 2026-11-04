@@ -1,5 +1,5 @@
 import type { ExerciseType } from "@/backend/types";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -25,7 +25,7 @@ import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 import { useUnits, useDistanceUnit, type DistanceUnit } from "@/utils/units";
 import { computePace, digitsToSeconds, formatDigits, metersToDisplay, parseDistanceToMeters, secondsToDigits } from "@/utils/cardioUtils";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
-import { nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
+import { createSerialQueue, nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
 import { logError } from "@/utils/log";
 
 type EditSet = {
@@ -74,13 +74,38 @@ export default function WorkoutEditScreen() {
   exercisesRef.current = exercises;
   // Set edits are saved as you go and may have raised or lowered a PR (a
   // 2250 lb typo fixed to 225), so recompute on the way out, however the
-  // screen is left.
+  // screen is left, but only if something changed. Wait for saves still in
+  // flight (a blur fired as the screen closed) so the rebuild sees them.
+  const dirty = useRef(false);
+  const setJobs = useRef(createSerialQueue()).current;
+  const inFlight = useRef(new Set<Promise<unknown>>());
+  const edits = useMemo(() => {
+    const track = <A extends any[], R>(fn: (...args: A) => Promise<R>) => (...args: A): Promise<R> => {
+      dirty.current = true;
+      const p = fn(...args);
+      inFlight.current.add(p);
+      p.finally(() => inFlight.current.delete(p)).catch(() => {});
+      return p;
+    };
+    return {
+      updateSessionExerciseSet: track(db.updateSessionExerciseSet),
+      insertSessionExerciseSet: track(db.insertSessionExerciseSet),
+      deleteSessionExerciseSet: track(db.deleteSessionExerciseSet),
+      deleteSessionExercise: track(db.deleteSessionExercise),
+      insertSessionExercise: track(db.insertSessionExercise),
+      updateSessionExercise: track(db.updateSessionExercise),
+    };
+  }, []);
   useEffect(() => () => {
     const touched = [...loadedExerciseIds.current, ...exercisesRef.current.map((e) => e.exercise_id)];
-    if (touched.length === 0) return;
-    db.getUser()
-      .then(({ data }) => data?.user?.id && db.rebuildStrengthRecords(data.user.id, touched))
-      .catch((e: unknown) => logError("workoutEdit.rebuildRecords", e));
+    setTimeout(async () => {
+      if (!dirty.current || touched.length === 0) return;
+      try {
+        await Promise.allSettled([...inFlight.current]);
+        const { data } = await db.getUser();
+        if (data?.user?.id) await db.rebuildStrengthRecords(data.user.id, touched);
+      } catch (e) { logError("workoutEdit.rebuildRecords", e); }
+    }, 300);
   }, []);
 
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -241,14 +266,14 @@ export default function WorkoutEditScreen() {
     }
     const lbs = toStorage(val);
     patchSet(set.session_set_id, { weight_lbs: lbs, weight: null });
-    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { weight: lbs });
+    const { error: err } = await edits.updateSessionExerciseSet(set.session_set_id, { weight: lbs });
     if (err) setError((err as any)?.message ?? "Failed to save set");
   }
 
   async function handleRepsBlur(set: EditSet) {
     const reps = parseIntInput(set.reps);
     patchSet(set.session_set_id, { reps: formatNumberInput(reps) });
-    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { reps });
+    const { error: err } = await edits.updateSessionExerciseSet(set.session_set_id, { reps });
     if (err) setError((err as any)?.message ?? "Failed to save set");
   }
 
@@ -256,13 +281,18 @@ export default function WorkoutEditScreen() {
     if (distance_meters === set.distance_meters && duration_seconds === set.duration_seconds) return;
     patchSet(set.session_set_id, { distance_meters, duration_seconds });
     const pace_sec_per_km = distance_meters && duration_seconds ? computePace(distance_meters, duration_seconds) : null;
-    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { distance_meters, duration_seconds, pace_sec_per_km });
+    const { error: err } = await edits.updateSessionExerciseSet(set.session_set_id, { distance_meters, duration_seconds, pace_sec_per_km });
     if (err) setError((err as any)?.message ?? "Failed to save set");
   }
 
-  async function handleAddSet(exercise: EditExercise) {
-    const nextSetNum = nextSetNumber(exercise.sets);
-    const { data: newSet, error: err } = await db.insertSessionExerciseSet({
+  // Adds and removes run one at a time per exercise, each from the latest
+  // sets, so a renumber can't race the next add.
+  const currentSets = (exerciseId: number) =>
+    exercisesRef.current.find((e) => e.session_exercise_id === exerciseId)?.sets ?? [];
+
+  const handleAddSet = (exercise: EditExercise) => setJobs(exercise.session_exercise_id, async () => {
+    const nextSetNum = nextSetNumber(currentSets(exercise.session_exercise_id));
+    const { data: newSet, error: err } = await edits.insertSessionExerciseSet({
       session_exercise_id: exercise.session_exercise_id,
       set_number: nextSetNum,
       weight: null,
@@ -292,15 +322,15 @@ export default function WorkoutEditScreen() {
           : ex
       )
     );
-  }
+  });
 
-  async function handleRemoveSet(exercise: EditExercise, set: EditSet) {
-    const { error: err } = await db.deleteSessionExerciseSet(set.session_set_id);
+  const handleRemoveSet = (exercise: EditExercise, set: EditSet) => setJobs(exercise.session_exercise_id, async () => {
+    const { error: err } = await edits.deleteSessionExerciseSet(set.session_set_id);
     if (err) {
       setError((err as any).message ?? "Failed to remove set");
       return;
     }
-    const remaining = exercise.sets.filter((s) => s.session_set_id !== set.session_set_id);
+    const remaining = currentSets(exercise.session_exercise_id).filter((s) => s.session_set_id !== set.session_set_id);
     const changes = renumberChanges(remaining);
     const renumbered = new Map(changes.map((c) => [c.set.session_set_id, c.set_number]));
     setExercises((prev) =>
@@ -316,15 +346,15 @@ export default function WorkoutEditScreen() {
       )
     );
     for (const c of changes) {
-      const { error: numErr } = await db.updateSessionExerciseSet(c.set.session_set_id, { set_number: c.set_number });
+      const { error: numErr } = await edits.updateSessionExerciseSet(c.set.session_set_id, { set_number: c.set_number });
       if (numErr) logError("workoutEdit.renumber", numErr);
     }
-  }
+  });
 
   async function handleToggleCompleted(set: EditSet) {
     const completed = !set.completed;
     patchSet(set.session_set_id, { completed });
-    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { completed });
+    const { error: err } = await edits.updateSessionExerciseSet(set.session_set_id, { completed });
     if (err) {
       patchSet(set.session_set_id, { completed: !completed });
       setError((err as any)?.message ?? "Failed to save set");
@@ -339,7 +369,7 @@ export default function WorkoutEditScreen() {
 
   async function handleRemoveExercise(exercise: EditExercise) {
     closeExerciseOptions();
-    const { error: err } = await db.deleteSessionExercise(exercise.session_exercise_id);
+    const { error: err } = await edits.deleteSessionExercise(exercise.session_exercise_id);
     if (err) {
       setError((err as any).message ?? "Failed to remove exercise");
       return;
@@ -355,7 +385,7 @@ export default function WorkoutEditScreen() {
     // Same type inference as the live workout screen, so a run added here
     // gets distance/time fields instead of weight/reps.
     const exType = (exercise.exercise_type ?? (exercise.category === "cardio" ? "cardio" : exercise.category === "stretching" ? "stretching" : "strength")) as "strength" | "cardio" | "stretching";
-    const { data: newEx, error: err } = await db.insertSessionExercise({
+    const { data: newEx, error: err } = await edits.insertSessionExercise({
       session_id: sid,
       exercise_id: exercise.id,
       exercise_name: exercise.name,
@@ -386,7 +416,7 @@ export default function WorkoutEditScreen() {
     if (!target) return;
     setShowPicker(false);
     const exType = (exercise.exercise_type ?? target.exercise_type ?? "strength") as ExerciseType;
-    const { error: err } = await db.updateSessionExercise(target.session_exercise_id, {
+    const { error: err } = await edits.updateSessionExercise(target.session_exercise_id, {
       exercise_id: exercise.id,
       exercise_name: exercise.name,
       exercise_type: exType,

@@ -29,3 +29,20 @@ export function workingSetNumber(sets: readonly { is_warmup?: boolean | null }[]
   for (let i = 0; i <= index && i < sets.length; i++) if (!sets[i].is_warmup) n++;
   return n;
 }
+
+/**
+ * Runs async jobs one after another per key (e.g. per exercise), so adding a
+ * set waits for a delete's renumbering to land instead of reading the old
+ * numbers back mid-way.
+ */
+export function createSerialQueue() {
+  const tails = new Map<string | number, Promise<unknown>>();
+  return function run<T>(key: string | number, job: () => Promise<T>): Promise<T> {
+    const prev = tails.get(key) ?? Promise.resolve();
+    const next = prev.then(job, job);
+    const tail = next.catch(() => {});
+    tails.set(key, tail);
+    tail.then(() => { if (tails.get(key) === tail) tails.delete(key); });
+    return next;
+  };
+}

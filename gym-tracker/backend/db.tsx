@@ -420,6 +420,55 @@ async function mirrorPerParent(rows: any, parentIds: number[], parentKey: string
   await writeCacheMany([...byParent].map(([id, list]) => [`${prefix}:${id}`, list]));
 }
 
+// Every finished workout's completed sets for one exercise, oldest first.
+// Errors are returned, never turned into an empty history.
+async function fetchExerciseHistory(exerciseId: string, userId: string): Promise<{ data: any; error: any }> {
+  const { data: sessionExercises, error: exError } = await supabase
+    .from("session_exercises")
+    .select("session_exercise_id, workout_sessions!inner(session_id, session_date, end_time, user_id)")
+    .eq("exercise_id", exerciseId)
+    .eq("workout_sessions.user_id", userId)
+    .not("workout_sessions.end_time", "is", null)
+    .order("workout_sessions(session_date)", { ascending: true });
+
+  if (exError) return { data: null, error: exError };
+  if (!sessionExercises || sessionExercises.length === 0) return { data: [], error: null };
+
+  // One query for every session's sets instead of one request per past
+  // workout (an exercise logged 100 times used to fire 100 requests).
+  // Chunked so each request stays well under PostgREST's default
+  // 1000-row cap and URL length limits on long histories.
+  const ids = sessionExercises.map((se: any) => se.session_exercise_id);
+  const CHUNK = 40;
+  const chunks: number[][] = [];
+  for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+  const results = await Promise.all(chunks.map((chunk) =>
+    supabase
+      .from("session_exercise_sets")
+      .select("*")
+      .in("session_exercise_id", chunk)
+      // Unticked sets weren't done; rows from before the flag existed are null.
+      .or("completed.is.null,completed.eq.true")
+      .order("set_number", { ascending: true })
+  ));
+  const setsError = results.find((r) => r.error)?.error;
+  if (setsError) return { data: null, error: setsError };
+  const allSets = results.flatMap((r) => r.data ?? []);
+
+  const setsByExercise = new Map<number, any[]>();
+  for (const set of allSets ?? []) {
+    const list = setsByExercise.get(set.session_exercise_id) ?? [];
+    list.push(set);
+    setsByExercise.set(set.session_exercise_id, list);
+  }
+  const history = sessionExercises.map((se: any) => ({
+    session_id: se.workout_sessions.session_id,
+    session_date: se.workout_sessions.session_date,
+    sets: setsByExercise.get(se.session_exercise_id) ?? [],
+  }));
+  return { data: history, error: null };
+}
+
 const ACTIVE_SESSION_KEY = "activeSession";
 
 // While offline changes are waiting to upload, the cached copy (which has
@@ -1404,36 +1453,51 @@ export const db = {
   rebuildStrengthRecords: async (userId: string, exerciseIds: string[]): Promise<void> => {
     const ids = [...new Set(exerciseIds)].filter(Boolean);
     if (ids.length === 0) return;
-    if (isOnline) {
-      if (!shouldUseSupabase()) return;
-      if (await hasPendingOps()) await flushNow();
-      // Workouts logged offline that haven't uploaded yet count too.
-      if (!networkStatus.isConnected || (await hasPendingOps()) || (await getPendingCount()) > 0) return;
-    }
-    const { data: records } = await db.getPersonalRecords(userId);
-    for (const exerciseId of ids) {
-      const current = (records ?? []).find((r: any) => r.exercise_id === exerciseId && (r.pr_type ?? "strength") === "strength");
-      const { data: history, error } = await db.getExerciseHistory(exerciseId, userId);
-      if (error || !Array.isArray(history)) continue;
-      const rebuilt = strengthRecordFromHistory(history);
-      if (!current && rebuilt.max_weight == null && rebuilt.max_volume == null) continue;
-      if (current && current.max_weight === rebuilt.max_weight && current.max_volume === rebuilt.max_volume) continue;
-      const values = { user_id: userId, exercise_id: exerciseId, pr_type: "strength" as const, ...rebuilt };
-      if (!isOnline) {
-        await localDb.upsertPersonalRecord(values);
-        continue;
+
+    if (!isOnline) {
+      // Local-only: the device store is the whole truth.
+      for (const exerciseId of ids) {
+        const { data: history } = await localDb.getExerciseHistory(exerciseId, userId);
+        const rebuilt = strengthRecordFromHistory((history ?? []) as any[]);
+        const { data: records } = await localDb.getPersonalRecords(userId);
+        const current = (records ?? []).find((r: any) => r.exercise_id === exerciseId && (r.pr_type ?? "strength") === "strength");
+        if (!current && rebuilt.max_weight == null && rebuilt.max_volume == null) continue;
+        if (current && current.max_weight === rebuilt.max_weight && current.max_volume === rebuilt.max_volume) continue;
+        await localDb.upsertPersonalRecord({ user_id: userId, exercise_id: exerciseId, pr_type: "strength", ...rebuilt });
       }
-      const { error: upErr } = await supabase.from("personal_records")
-        .upsert(values, { onConflict: "user_id,exercise_id,pr_type" });
-      if (upErr) { logError("rebuildStrengthRecords", upErr); continue; }
-      await patchCachedList(`personalRecords:${userId}`, (rows) => {
-        const i = rows.findIndex((r) => r.exercise_id === exerciseId && (r.pr_type ?? "strength") === "strength");
-        if (i < 0) return [...rows, values];
-        const next = [...rows];
-        next[i] = { ...next[i], ...rebuilt };
-        return next;
-      });
+      return;
     }
+
+    if (!shouldUseSupabase()) return;
+    if (await hasPendingOps()) await flushNow();
+    // Inside the outbox lock so no other write lands between reading the
+    // history and writing the record; straight from Supabase (never the read
+    // cache) and abandoned on any error, since this may lower a record.
+    await inOutboxOrder(async () => {
+      if (!networkStatus.isConnected || (await hasPendingOps()) || (await getPendingCount()) > 0) return;
+      const { data: records, error: recErr } = await supabase
+        .from("personal_records").select("*").eq("user_id", userId).eq("pr_type", "strength");
+      if (recErr) { logError("rebuildStrengthRecords.read", recErr); return; }
+      for (const exerciseId of ids) {
+        const { data: history, error } = await fetchExerciseHistory(exerciseId, userId);
+        if (error || !Array.isArray(history)) { logError("rebuildStrengthRecords.history", error); return; }
+        const rebuilt = strengthRecordFromHistory(history);
+        const current = (records ?? []).find((r: any) => r.exercise_id === exerciseId);
+        if (!current && rebuilt.max_weight == null && rebuilt.max_volume == null) continue;
+        if (current && current.max_weight === rebuilt.max_weight && current.max_volume === rebuilt.max_volume) continue;
+        const values = { user_id: userId, exercise_id: exerciseId, pr_type: "strength" as const, ...rebuilt };
+        const { error: upErr } = await supabase.from("personal_records")
+          .upsert(values, { onConflict: "user_id,exercise_id,pr_type" });
+        if (upErr) { logError("rebuildStrengthRecords.write", upErr); return; }
+        await patchCachedList(`personalRecords:${userId}`, (rows) => {
+          const i = rows.findIndex((r) => r.exercise_id === exerciseId && (r.pr_type ?? "strength") === "strength");
+          if (i < 0) return [...rows, values];
+          const next = [...rows];
+          next[i] = { ...next[i], ...rebuilt };
+          return next;
+        });
+      }
+    });
   },
 
   // Custom Exercises
@@ -1538,50 +1602,7 @@ export const db = {
     return cachedRead(
       shouldUseSupabase(),
       `exerciseHistory:${exerciseId}:${userId}`,
-      async () => {
-        const { data: sessionExercises } = await supabase
-          .from("session_exercises")
-          .select("session_exercise_id, workout_sessions!inner(session_id, session_date, end_time, user_id)")
-          .eq("exercise_id", exerciseId)
-          .eq("workout_sessions.user_id", userId)
-          .not("workout_sessions.end_time", "is", null)
-          .order("workout_sessions(session_date)", { ascending: true });
-
-        if (!sessionExercises || sessionExercises.length === 0) return { data: [], error: null };
-
-        // One query for every session's sets instead of one request per past
-        // workout (an exercise logged 100 times used to fire 100 requests).
-        // Chunked so each request stays well under PostgREST's default
-        // 1000-row cap and URL length limits on long histories.
-        const ids = sessionExercises.map((se: any) => se.session_exercise_id);
-        const CHUNK = 40;
-        const chunks: number[][] = [];
-        for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
-        const results = await Promise.all(chunks.map((chunk) =>
-          supabase
-            .from("session_exercise_sets")
-            .select("*")
-            .in("session_exercise_id", chunk)
-            .eq("completed", true)
-            .order("set_number", { ascending: true })
-        ));
-        const setsError = results.find((r) => r.error)?.error;
-        if (setsError) return { data: null, error: setsError };
-        const allSets = results.flatMap((r) => r.data ?? []);
-
-        const setsByExercise = new Map<number, any[]>();
-        for (const set of allSets ?? []) {
-          const list = setsByExercise.get(set.session_exercise_id) ?? [];
-          list.push(set);
-          setsByExercise.set(set.session_exercise_id, list);
-        }
-        const history = sessionExercises.map((se: any) => ({
-          session_id: se.workout_sessions.session_id,
-          session_date: se.workout_sessions.session_date,
-          sets: setsByExercise.get(se.session_exercise_id) ?? [],
-        }));
-        return { data: history, error: null };
-      },
+      () => fetchExerciseHistory(exerciseId, userId),
       () => localDb.getExerciseHistory(exerciseId, userId),
     );
   },

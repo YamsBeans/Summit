@@ -14,7 +14,7 @@ import ConfirmModal from "@/components/ConfirmModal";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import { useUnits, useDistanceUnit } from "@/utils/units";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
-import { nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
+import { createSerialQueue, nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
 import { logError } from "@/utils/log";
 import { digitsToSeconds, formatDigits, formatDistance, formatDuration, kmToMeters, metersToDisplay, milesToMeters, secondsToDigits } from "@/utils/cardioUtils";
 
@@ -54,6 +54,7 @@ export default function RoutineScreen() {
   const [showInProgress, setShowInProgress] = useState(false);
   const exerciseSetsRef = useRef(exerciseSets);
   exerciseSetsRef.current = exerciseSets;
+  const setJobs = useRef(createSerialQueue()).current;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,6 +93,7 @@ export default function RoutineScreen() {
   // on every render.
   const reloadSetsForExercise = useCallback(async (routineExerciseId: number) => {
     const { data } = await db.getRoutineExerciseSets(routineExerciseId);
+    exerciseSetsRef.current = { ...exerciseSetsRef.current, [routineExerciseId]: data ?? [] };
     setExerciseSets((prev) => ({ ...prev, [routineExerciseId]: data ?? [] }));
   }, []);
 
@@ -203,8 +205,8 @@ export default function RoutineScreen() {
     replaceTargetRef.current = null;
   });
 
-  const handleAddSet = useGuardedPress(async (routineExerciseId: number) => {
-    const currentSets = exerciseSets[routineExerciseId] ?? [];
+  const handleAddSet = useGuardedPress((routineExerciseId: number) => setJobs(routineExerciseId, async () => {
+    const currentSets = exerciseSetsRef.current[routineExerciseId] ?? [];
     const ex = exercises.find((e) => e.routine_exercise_id === routineExerciseId);
     const isCardio = ex?.exercise_type === 'cardio';
     const { error: err } = await db.insertRoutineExerciseSet({
@@ -218,26 +220,26 @@ export default function RoutineScreen() {
     });
     if (err) { setError(err.message); return; }
     await reloadSetsForExercise(routineExerciseId);
-  }, 300);
+  }), 300);
 
-  const handleDeleteSet = useCallback(async (routineSetId: number, routineExerciseId: number) => {
+  const handleDeleteSet = useCallback((routineSetId: number, routineExerciseId: number) => setJobs(routineExerciseId, async () => {
     const remaining = (exerciseSetsRef.current[routineExerciseId] ?? []).filter((s) => s.routine_set_id !== routineSetId);
     // Keep numbers 1..n so new sets don't reuse one and workouts copy back
     // to the right template set.
     const changes = renumberChanges(remaining);
     const renumbered = new Map(changes.map((c) => [c.set.routine_set_id, c.set_number]));
-    setExerciseSets((prev) => ({
-      ...prev,
-      [routineExerciseId]: remaining.map((s) =>
-        renumbered.has(s.routine_set_id) ? { ...s, set_number: renumbered.get(s.routine_set_id)! } : s),
-    }));
+    const apply = (list: any[]) => list
+      .filter((s) => s.routine_set_id !== routineSetId)
+      .map((s) => (renumbered.has(s.routine_set_id) ? { ...s, set_number: renumbered.get(s.routine_set_id)! } : s));
+    exerciseSetsRef.current = { ...exerciseSetsRef.current, [routineExerciseId]: apply(remaining) };
+    setExerciseSets((prev) => ({ ...prev, [routineExerciseId]: apply(prev[routineExerciseId] ?? []) }));
     const { error: err } = await db.deleteRoutineExerciseSet(routineSetId);
     if (err) { setError(err.message); reloadSetsForExercise(routineExerciseId); return; }
     for (const c of changes) {
       const { error: numErr } = await db.updateRoutineExerciseSet(c.set.routine_set_id, { set_number: c.set_number });
       if (numErr) logError("routine.deleteSet.renumber", numErr);
     }
-  }, [reloadSetsForExercise]);
+  }), [reloadSetsForExercise, setJobs]);
 
   const handleUpdateSet = useCallback(async (
     routineSetId: number,

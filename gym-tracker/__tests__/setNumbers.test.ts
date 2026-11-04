@@ -17,3 +17,16 @@ describe("set numbers", () => {
     expect(sets.map((_, i) => workingSetNumber(sets, i))).toEqual([null, 1, null, 2]);
   });
 });
+
+describe("createSerialQueue", () => {
+  it("runs jobs for the same key in order, even when one fails", async () => {
+    const { createSerialQueue } = require("@/utils/setNumbers");
+    const run = createSerialQueue();
+    const log: string[] = [];
+    const slow = run(1, async () => { await new Promise((r) => setTimeout(r, 20)); log.push("a"); throw new Error("x"); });
+    const fast = run(1, async () => { log.push("b"); });
+    await expect(slow).rejects.toThrow("x");
+    await fast;
+    expect(log).toEqual(["a", "b"]);
+  });
+});
