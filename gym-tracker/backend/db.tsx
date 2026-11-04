@@ -787,7 +787,7 @@ export const db = {
     return localDb.deleteRoutineExercise(routineExerciseId);
   },
 
-  updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string }) => {
+  updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string; exercise_type?: 'strength' | 'cardio' | 'stretching' }) => {
     if (shouldUseSupabase()) {
       return supabase.from("routine_exercises").update(updates).eq("routine_exercise_id", routineExerciseId);
     }

@@ -189,7 +189,7 @@ const rawLocalDb = {
     return { error: null };
   },
 
-  updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string }) => {
+  updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string; exercise_type?: 'strength' | 'cardio' | 'stretching' }) => {
     localRoutineExercises = localRoutineExercises.map((e) =>
       e.routine_exercise_id === routineExerciseId ? { ...e, ...updates } : e
     );

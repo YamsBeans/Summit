@@ -11,6 +11,7 @@ import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import ConfirmModal from "@/components/ConfirmModal";
+import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import { useUnits, useDistanceUnit } from "@/utils/units";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 import { nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
@@ -49,6 +50,8 @@ export default function RoutineScreen() {
   // ── Data ──
   const [exercises, setExercises] = useState<any[]>([]);
   const [exerciseSets, setExerciseSets] = useState<Record<number, any[]>>({});
+  const { activeWorkout } = useActiveWorkout();
+  const [showInProgress, setShowInProgress] = useState(false);
   const exerciseSetsRef = useRef(exerciseSets);
   exerciseSetsRef.current = exerciseSets;
   const [loading, setLoading] = useState(true);
@@ -184,14 +187,17 @@ export default function RoutineScreen() {
     const target = replaceTargetRef.current;
     if (!target) return;
     setShowExercisePicker(false);
+    // Swapping squats for a run has to switch the template to distance/time.
+    const exType = exercise.exercise_type ?? exercise.category ?? target.exercise_type ?? "strength";
     const { error: err } = await db.updateRoutineExercise(target.routine_exercise_id, {
       exercise_id: exercise.id,
       exercise_name: exercise.name,
+      exercise_type: exType,
     });
     if (err) { setError(err.message); replaceTargetRef.current = null; return; }
     setExercises((prev) => prev.map((e) =>
       e.routine_exercise_id === target.routine_exercise_id
-        ? { ...e, exercise_id: exercise.id, exercise_name: exercise.name }
+        ? { ...e, exercise_id: exercise.id, exercise_name: exercise.name, exercise_type: exType }
         : e
     ));
     replaceTargetRef.current = null;
@@ -249,6 +255,8 @@ export default function RoutineScreen() {
   }, [reloadSetsForExercise]);
 
   const handleStartWorkout = useGuardedPress(async () => {
+    // Only one workout at a time; a second one would strand the first.
+    if (activeWorkout) { setShowInProgress(true); return; }
     setStartingWorkout(true);
     const { data: { user } } = await db.getUser();
     if (!user) { setError("Not authenticated"); setStartingWorkout(false); return; }
@@ -600,6 +608,21 @@ export default function RoutineScreen() {
       </Modal>
 
       {/* ── Delete confirm ── */}
+      <ConfirmModal
+        visible={showInProgress}
+        title="Workout in Progress"
+        message={`"${activeWorkout?.sessionName ?? "Your workout"}" is still running. Finish or discard it before starting another.`}
+        confirmText="Resume"
+        cancelText="Cancel"
+        confirmStyle="primary"
+        icon="barbell-outline"
+        onConfirm={() => {
+          setShowInProgress(false);
+          if (activeWorkout) router.push({ pathname: "/workout", params: { sessionId: String(activeWorkout.sessionId) } });
+        }}
+        onCancel={() => setShowInProgress(false)}
+      />
+
       <ConfirmModal
         visible={showDeleteRoutine}
         title="Delete Routine"
