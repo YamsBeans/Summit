@@ -22,7 +22,7 @@ import RestTimerBanner from "@/components/RestTimerBanner";
 import { useRestTimer } from "@/utils/useRestTimer";
 import { detectPRs, detectCardioPRs, mergeStrengthRecord, groupSetsByExercise } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
+import { beginRestNotification, scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import { createSerialQueue, nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
@@ -123,8 +123,9 @@ export default function WorkoutScreen() {
     const secs = resolveRest(restOverridesRef.current, ex?.exercise_id, restDuration);
     if (secs <= 0) return; // rest timer turned off for this exercise
     startRest(secs);
+    const token = beginRestNotification();
     AsyncStorage.getItem("@gym_tracker_notifications").then((val) => {
-      if (val === "true") scheduleRestDoneNotification(secs);
+      if (val === "true") scheduleRestDoneNotification(secs, token);
     });
   }, [startRest, restDuration]);
 
@@ -139,8 +140,9 @@ export default function WorkoutScreen() {
     const next = restRemainingRef.current + secs;
     addRestTime(secs);
     if (next <= 0) { cancelRestDoneNotification(); return; }
+    const token = beginRestNotification();
     AsyncStorage.getItem("@gym_tracker_notifications").then((val) => {
-      if (val === "true") scheduleRestDoneNotification(next);
+      if (val === "true") scheduleRestDoneNotification(next, token);
     });
   }, [addRestTime]);
 
