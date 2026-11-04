@@ -1,4 +1,5 @@
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
+import { logError } from "@/utils/log";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
@@ -53,9 +54,41 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
     return "—";
   };
 
+  // Plain-text recap for the share sheet (Messages, a group chat, notes).
+  const handleShare = async () => {
+    const lines = [
+      `💪 ${workoutName}`,
+      [
+        `⏱ ${formatWorkoutDuration(summary.durationSeconds)}`,
+        summary.totalVolumeLbs > 0 ? `${formatVolume(toDisplay(summary.totalVolumeLbs))} ${unitLabel}` : null,
+        summary.totalDistanceMeters > 0 ? formatDistance(summary.totalDistanceMeters, distanceUnit) : null,
+        `${summary.completedSets} set${summary.completedSets === 1 ? "" : "s"}`,
+      ].filter(Boolean).join("  •  "),
+      "",
+      ...summary.exercises.map((ex) =>
+        `• ${ex.completedSets} × ${ex.name}: ${bestSetText(ex)}${ex.pr ? " 🏆" : ""}`),
+    ];
+    if (hasPRs) lines.push("", `🏆 ${summary.prCount} new PR${summary.prCount === 1 ? "" : "s"}`);
+    try {
+      await Share.share({ message: lines.join("\n") });
+    } catch (e) {
+      // Browsers without the Web Share API reject; nothing to do but log.
+      logError("WorkoutSummary.share", e);
+    }
+  };
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onDone}>
       <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: insets.top }]}>
+        <Pressable
+          onPress={handleShare}
+          hitSlop={10}
+          style={({ pressed }) => [styles.shareBtn, { top: insets.top + 12, backgroundColor: colors.surface, borderColor: colors.border }, pressed && { opacity: 0.6 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Share workout"
+        >
+          <Ionicons name="share-outline" size={18} color={colors.primary} />
+        </Pressable>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={[styles.badge, { backgroundColor: hasPRs ? colors.warningLight : colors.successLight }]}>
             <Ionicons name={hasPRs ? "trophy" : "checkmark-circle"} size={40} color={hasPRs ? colors.warning : colors.success} />
@@ -137,6 +170,11 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  shareBtn: {
+    position: "absolute", right: 16, zIndex: 2,
+    width: 38, height: 38, borderRadius: 19, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
+  },
   content: { padding: 16, paddingTop: 32, alignItems: "center", width: "100%", maxWidth: 560, alignSelf: "center" },
   badge: { width: 80, height: 80, borderRadius: 40, alignItems: "center", justifyContent: "center", marginBottom: 14 },
   kicker: { fontSize: 14, fontWeight: "600", marginBottom: 4 },
