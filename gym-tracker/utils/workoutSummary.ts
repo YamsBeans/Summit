@@ -49,7 +49,10 @@ export type WorkoutSummary = {
 function setScore(s: SummarySet): [number, number, number] {
   const w = s.weight ?? 0;
   const r = s.reps ?? 0;
-  return [estimateOneRepMax(w, r) ?? 0, w, r];
+  // Rank with the uncapped Epley formula: the charted estimate ignores sets
+  // over 12 reps, which made 100×15 lose to 60×5 here.
+  const est = estimateOneRepMax(w, r) ?? (w > 0 && r > 0 ? w * (1 + r / 30) : 0);
+  return [est, w, r];
 }
 
 function better(a: [number, number, number], b: [number, number, number]) {

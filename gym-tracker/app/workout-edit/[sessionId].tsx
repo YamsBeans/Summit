@@ -25,6 +25,8 @@ import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 import { useUnits, useDistanceUnit, type DistanceUnit } from "@/utils/units";
 import { computePace, digitsToSeconds, formatDigits, metersToDisplay, parseDistanceToMeters, secondsToDigits } from "@/utils/cardioUtils";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
+import { nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
+import { logError } from "@/utils/log";
 
 type EditSet = {
   session_set_id: number;
@@ -35,6 +37,8 @@ type EditSet = {
   weight: string | null;
   reps: string;
   is_warmup: boolean;
+  /** Ticked off. Only completed sets count toward stats and PRs. */
+  completed: boolean;
   distance_meters: number | null;
   duration_seconds: number | null;
 };
@@ -122,6 +126,7 @@ export default function WorkoutEditScreen() {
           weight: null,
           reps: s.reps != null ? String(s.reps) : "",
           is_warmup: s.is_warmup,
+          completed: s.completed !== false,
           distance_meters: s.distance_meters ?? null,
           duration_seconds: s.duration_seconds ?? null,
         })),
@@ -242,8 +247,7 @@ export default function WorkoutEditScreen() {
   }
 
   async function handleAddSet(exercise: EditExercise) {
-    const lastSetNum = exercise.sets.at(-1)?.set_number ?? 0;
-    const nextSetNum = lastSetNum + 1;
+    const nextSetNum = nextSetNumber(exercise.sets);
     const { data: newSet, error: err } = await db.insertSessionExerciseSet({
       session_exercise_id: exercise.session_exercise_id,
       set_number: nextSetNum,
@@ -263,6 +267,7 @@ export default function WorkoutEditScreen() {
       weight: null,
       reps: "",
       is_warmup: false,
+      completed: true,
       distance_meters: null,
       duration_seconds: null,
     };
@@ -281,13 +286,35 @@ export default function WorkoutEditScreen() {
       setError((err as any).message ?? "Failed to remove set");
       return;
     }
+    const remaining = exercise.sets.filter((s) => s.session_set_id !== set.session_set_id);
+    const changes = renumberChanges(remaining);
+    const renumbered = new Map(changes.map((c) => [c.set.session_set_id, c.set_number]));
     setExercises((prev) =>
       prev.map((ex) =>
         ex.session_exercise_id === exercise.session_exercise_id
-          ? { ...ex, sets: ex.sets.filter((s) => s.session_set_id !== set.session_set_id) }
+          ? {
+            ...ex,
+            sets: ex.sets
+              .filter((s) => s.session_set_id !== set.session_set_id)
+              .map((s) => (renumbered.has(s.session_set_id) ? { ...s, set_number: renumbered.get(s.session_set_id)! } : s)),
+          }
           : ex
       )
     );
+    for (const c of changes) {
+      const { error: numErr } = await db.updateSessionExerciseSet(c.set.session_set_id, { set_number: c.set_number });
+      if (numErr) logError("workoutEdit.renumber", numErr);
+    }
+  }
+
+  async function handleToggleCompleted(set: EditSet) {
+    const completed = !set.completed;
+    patchSet(set.session_set_id, { completed });
+    const { error: err } = await db.updateSessionExerciseSet(set.session_set_id, { completed });
+    if (err) {
+      patchSet(set.session_set_id, { completed: !completed });
+      setError((err as any)?.message ?? "Failed to save set");
+    }
   }
 
   // ── Exercise editing ──────────────────────────────────
@@ -492,16 +519,17 @@ export default function WorkoutEditScreen() {
                 <Text style={[styles.setColLabel, { color: colors.textTertiary, flex: 1 }]}>
                   {ex.exercise_type === "cardio" ? "TIME" : "REPS"}
                 </Text>
+                <Text style={[styles.setColLabel, { color: colors.textTertiary, width: 32 }]}>DONE</Text>
                 <View style={{ width: 28 }} />
               </View>
             )}
 
             {/* Sets */}
             {ex.sets.map((set, idx) => (
-              <View key={set.session_set_id} style={styles.setRow}>
+              <View key={set.session_set_id} style={[styles.setRow, !set.completed && { opacity: 0.55 }]}>
                 <View style={[styles.setNumBadge, { backgroundColor: set.is_warmup ? colors.warningLight : colors.surfaceSecondary }]}>
                   <Text style={[styles.setNumText, { color: set.is_warmup ? colors.warning : colors.textSecondary }]}>
-                    {set.is_warmup ? "W" : idx + 1}
+                    {set.is_warmup ? "W" : workingSetNumber(ex.sets, idx)}
                   </Text>
                 </View>
                 {ex.exercise_type === "cardio" ? (
@@ -535,6 +563,22 @@ export default function WorkoutEditScreen() {
                   />
                   </>
                 )}
+                <Pressable
+                  hitSlop={6}
+                  onPress={() => handleToggleCompleted(set)}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: set.completed }}
+                  accessibilityLabel={set.completed ? "Set done. Tap to mark not done" : "Set not done. Tap to mark done"}
+                  style={({ pressed }) => [
+                    styles.doneBox,
+                    set.completed
+                      ? { backgroundColor: colors.success, borderColor: colors.success }
+                      : { borderColor: colors.border, backgroundColor: colors.inputBackground },
+                    pressed && { opacity: 0.6 },
+                  ]}
+                >
+                  {set.completed && <Ionicons name="checkmark" size={16} color="#fff" />}
+                </Pressable>
                 <Pressable
                   hitSlop={8}
                   onPress={() => handleRemoveSet(ex, set)}
@@ -655,6 +699,14 @@ export default function WorkoutEditScreen() {
 }
 
 const styles = StyleSheet.create({
+  doneBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
   header: {

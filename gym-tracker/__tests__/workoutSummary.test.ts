@@ -70,3 +70,19 @@ describe("formatWorkoutDuration", () => {
     expect(formatWorkoutDuration(3600 + 5 * 60)).toBe("1h 05m");
   });
 });
+
+describe("best set with high reps", () => {
+  it("prefers 100x15 over 60x5", () => {
+    const { buildWorkoutSummary } = require("@/utils/workoutSummary");
+    const summary = buildWorkoutSummary(
+      [{ session_exercise_id: 1, exercise_id: "curl", exercise_name: "Curl", exercise_type: "strength" }],
+      { 1: [
+        { weight: 60, reps: 5, completed: true, is_warmup: false },
+        { weight: 100, reps: 15, completed: true, is_warmup: false },
+      ] },
+      [],
+      600,
+    );
+    expect(summary.exercises[0].bestSet).toEqual({ weight: 100, reps: 15 });
+  });
+});
