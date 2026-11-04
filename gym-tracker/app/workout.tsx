@@ -1419,7 +1419,7 @@ const SetRow = memo(function SetRow({
       {/* Weight input */}
       <TextInput
         style={[rowStyles.input, {
-          backgroundColor: isCompleted ? colors.successLight : colors.inputBackground,
+          backgroundColor: isCompleted ? colors.successLight : colors.surfaceSecondary,
           color: isCompleted ? colors.success : colors.text,
         }]}
         value={weight}
@@ -1441,7 +1441,7 @@ const SetRow = memo(function SetRow({
       {/* Reps input */}
       <TextInput
         style={[rowStyles.input, {
-          backgroundColor: isCompleted ? colors.successLight : colors.inputBackground,
+          backgroundColor: isCompleted ? colors.successLight : colors.surfaceSecondary,
           color: isCompleted ? colors.success : colors.text,
         }]}
         ref={repsRef}

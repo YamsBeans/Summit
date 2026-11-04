@@ -106,7 +106,7 @@ const CardioSetRow = memo(function CardioSetRow({
   const prevHint = [prevDist, prevDur].filter(Boolean).join(" / ") || "—";
 
   const completedBg = isCompleted ? colors.successLight + "80" : "transparent";
-  const inputBg = isCompleted ? colors.successLight : colors.inputBackground;
+  const inputBg = isCompleted ? colors.successLight : colors.surfaceSecondary;
   const inputColor = isCompleted ? colors.success : colors.text;
 
   return (
