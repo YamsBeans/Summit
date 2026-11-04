@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
@@ -23,6 +23,15 @@ export default function WorkoutCalendarModal({ visible, onClose, sessions }: {
     return { year: d.getFullYear(), month: d.getMonth() };
   });
   const [selected, setSelected] = useState<string | null>(null);
+
+  // The modal stays mounted, so open on the current month each time
+  // (it used to stay on the month the app was launched in).
+  useEffect(() => {
+    if (!visible) return;
+    const d = new Date();
+    setYM({ year: d.getFullYear(), month: d.getMonth() });
+    setSelected(null);
+  }, [visible]);
 
   const byDate = useMemo(() => {
     const map = new Map<string, SessionWithMeta[]>();
