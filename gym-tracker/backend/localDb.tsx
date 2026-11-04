@@ -493,16 +493,22 @@ const rawLocalDb = {
 
   // Previous performance hints
   getPreviousSessionSets: async (exerciseId: string, userId: string, excludeSessionId: number) => {
-    const prevSession = localWorkoutSessions
+    // The newest finished session that has this exercise (not just the newest
+    // session: Mon legs, Wed push, Fri legs should show Monday's squats).
+    const sessions = localWorkoutSessions
       .filter((s) => s.user_id === userId && s.end_time !== null && s.session_id !== excludeSessionId)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-    if (!prevSession) return { data: [], error: null };
-    const prevEx = localSessionExercises.find(
-      (e) => e.session_id === prevSession.session_id && e.exercise_id === exerciseId
-    );
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    let prevEx: any;
+    for (const session of sessions) {
+      prevEx = localSessionExercises.find(
+        (e) => e.session_id === session.session_id && e.exercise_id === exerciseId
+      );
+      if (prevEx) break;
+    }
     if (!prevEx) return { data: [], error: null };
+    // Sets left unticked were never done; don't offer them as last time's numbers.
     const data = localSessionExerciseSets
-      .filter((s) => s.session_exercise_id === prevEx.session_exercise_id)
+      .filter((s) => s.session_exercise_id === prevEx.session_exercise_id && s.completed !== false)
       .sort((a, b) => a.set_number - b.set_number);
     return { data, error: null };
   },

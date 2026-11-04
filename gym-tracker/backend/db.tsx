@@ -1338,6 +1338,8 @@ export const db = {
         .from("session_exercise_sets")
         .select("*")
         .eq("session_exercise_id", prevEx.session_exercise_id)
+        // Sets left unticked were never done; don't offer them as last time's numbers.
+        .or("completed.is.null,completed.eq.true")
         .order("set_number");
     }
     return localDb.getPreviousSessionSets(exerciseId, userId, excludeSessionId);
