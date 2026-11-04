@@ -1221,7 +1221,12 @@ export const db = {
       }));
       const { data: sessionExercises, error: exErr } = await supabase
         .from("session_exercises").insert(exerciseInserts).select();
-      if (exErr) return { data: null, error: exErr };
+      if (exErr) {
+        // Don't leave an empty open session behind; it would come back as
+        // "Resume <routine>" on the next launch.
+        await db.deleteWorkoutSession(session.session_id).catch((e: unknown) => logError("startWorkoutFromRoutine.cleanup", e));
+        return { data: null, error: exErr };
+      }
 
       // Round 4: batch insert all sets at once. Match each new row to its
       // template by order and exercise, not by position: PostgREST doesn't
@@ -1250,7 +1255,13 @@ export const db = {
       });
       if (setInserts.length > 0) {
         const { error: setErr } = await supabase.from("session_exercise_sets").insert(setInserts);
-        if (setErr) logError("startWorkoutFromRoutine.sets", setErr);
+        if (setErr) {
+          // A workout with exercises but no sets isn't what the routine says;
+          // undo it and let the user try again.
+          logError("startWorkoutFromRoutine.sets", setErr);
+          await db.deleteWorkoutSession(session.session_id).catch((e: unknown) => logError("startWorkoutFromRoutine.cleanup", e));
+          return { data: null, error: setErr };
+        }
       }
 
       // Keep the offline copy of this routine fresh so it can be started
