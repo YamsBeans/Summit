@@ -764,6 +764,8 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
       />
       <Pressable
         onPress={() => onDelete(set.routine_set_id, routineExerciseId)}
+        accessibilityRole="button"
+        accessibilityLabel="Remove set"
         hitSlop={6}
         style={rowStyles.deleteBtn}
       >
@@ -852,6 +854,8 @@ const TemplateSetRow = memo(function TemplateSetRow({
       </Pressable>
       <Pressable
         onPress={() => onDelete(set.routine_set_id, routineExerciseId)}
+        accessibilityRole="button"
+        accessibilityLabel="Remove set"
         hitSlop={6}
         style={rowStyles.deleteBtn}
       >
@@ -998,6 +1002,8 @@ const rowStyles = StyleSheet.create({
   },
   setNum: { fontSize: 13, fontWeight: "700" },
   input: {
+    // minWidth 0 lets flex shrink web inputs below their intrinsic width.
+    minWidth: 0,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 8,
     paddingVertical: 6,
