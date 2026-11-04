@@ -11,6 +11,7 @@ import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import { repeatWorkout, saveWorkoutAsRoutine } from "@/utils/repeatWorkout";
+import { sessionDurationMins } from "@/utils/duration";
 
 type WorkoutHistoryCardProps = {
   session_id: number;
@@ -54,14 +55,8 @@ function relativeDate(dateStr: string): string {
 
 function parseDuration(sessionDate: string, startTime: string, endTime: string | null): string {
   if (!endTime) return "In progress";
-  const toDate = (t: string) =>
-    t.includes("T") || t.length > 10 ? new Date(t) : new Date(`${sessionDate}T${t}`);
-  const start = toDate(startTime);
-  const end = toDate(endTime);
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) return "—";
-  const ms = end.getTime() - start.getTime();
-  if (ms < 0) return "—";
-  const mins = Math.floor(ms / 60000);
+  const mins = sessionDurationMins(sessionDate, startTime, endTime);
+  if (mins === null) return "—";
   const hrs = Math.floor(mins / 60);
   if (mins === 0) return "<1m";
   if (hrs === 0) return `${mins}m`;

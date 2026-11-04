@@ -13,6 +13,7 @@ import WorkoutCalendarModal from "@/components/WorkoutCalendarModal";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
 import WorkoutChart from "@/components/WorkoutChart";
 import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardioUtils";
+import { sessionDurationMins } from "@/utils/duration";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 
@@ -76,17 +77,6 @@ function calcStreaks(sessions: SessionWithMeta[]) {
   return { current, longest };
 }
 
-function getDurationMins(sessionDate: string, startTime: string, endTime: string | null): number | null {
-  if (!endTime) return null;
-  const toDate = (t: string) =>
-    t.includes("T") || t.length > 10 ? new Date(t) : new Date(`${sessionDate}T${t}`);
-  const start = toDate(startTime);
-  const end = toDate(endTime);
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
-  const ms = end.getTime() - start.getTime();
-  if (ms < 0) return null;
-  return Math.floor(ms / 60000);
-}
 
 function formatMinutes(mins: number): string {
   if (mins === 0) return "—";
@@ -259,7 +249,7 @@ export default function ProfileScreen() {
       let totalDurationMins = 0;
       let durationCount = 0;
       for (const s of sessionsData) {
-        const mins = getDurationMins(s.session_date, s.start_time, s.end_time);
+        const mins = sessionDurationMins(s.session_date, s.start_time, s.end_time);
         if (mins !== null) {
           longestSession = Math.max(longestSession, mins);
           totalDurationMins += mins;

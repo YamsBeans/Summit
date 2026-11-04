@@ -4,6 +4,7 @@ import { BarChart } from "react-native-gifted-charts";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits } from "@/utils/units";
 import { SessionWithMeta } from "./WorkoutHistoryList";
+import { sessionDurationMins } from "@/utils/duration";
 import { niceAxisMax } from "@/utils/chartScale";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -38,15 +39,7 @@ function shortLabel(d: Date): string {
 }
 
 function durationMinutes(session: SessionWithMeta): number {
-  if (!session.end_time) return 0;
-  const toSec = (t: string) => {
-    const [h, m, s] = t.split(":").map(Number);
-    return h * 3600 + m * 60 + (s ?? 0);
-  };
-  let secs = toSec(session.end_time) - toSec(session.start_time);
-  // A workout that ran past midnight ends "before" it started.
-  if (secs < 0) secs += 24 * 3600;
-  return Math.max(0, secs / 60);
+  return sessionDurationMins(session.session_date, session.start_time, session.end_time) ?? 0;
 }
 
 
