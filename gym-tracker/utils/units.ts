@@ -19,12 +19,20 @@ function broadcast(u: UnitSystem) {
 /** Pure conversion helpers (weights are always stored in lbs). */
 export function lbsToUnit(lbs: number | null | undefined, unit: UnitSystem): number | null {
   if (lbs == null) return null;
-  return unit === "kg" ? Math.round((lbs * KG_FACTOR) * 10) / 10 : lbs;
+  if (unit !== "kg") return lbs;
+  const kg = lbs * KG_FACTOR;
+  // One decimal, unless this is a kg entry on a 0.05 step (61.25 kg with
+  // 1.25 kg plates), which stays exact instead of turning into 61.3.
+  const step = Math.round(kg * 20) / 20;
+  if (Math.abs(kg - step) < 0.002) return Math.round(step * 100) / 100;
+  return Math.round(kg * 10) / 10;
 }
 
 export function unitToLbs(val: number | null | undefined, unit: UnitSystem): number | null {
   if (val == null) return null;
-  return unit === "kg" ? Math.round((val / KG_FACTOR) * 10) / 10 : val;
+  // Three decimals so a kg entry survives the round trip (61.25 kg used to
+  // come back as 61.2).
+  return unit === "kg" ? Math.round((val / KG_FACTOR) * 1000) / 1000 : val;
 }
 
 /**

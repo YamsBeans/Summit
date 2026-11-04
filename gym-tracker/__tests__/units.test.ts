@@ -147,3 +147,16 @@ describe("useUnits", () => {
     expect(result.current.toDisplay(100)).toBe(100);
   });
 });
+
+describe("kg round trip", () => {
+  const { lbsToUnit, unitToLbs } = require("@/utils/units");
+  it("keeps 0.05 kg steps exact", () => {
+    for (const kg of [61.25, 102.5, 20, 100, 142.75, 0.5]) {
+      expect(lbsToUnit(unitToLbs(kg, "kg"), "kg")).toBe(kg);
+    }
+  });
+  it("still shows lbs-logged weights to one decimal in kg", () => {
+    expect(lbsToUnit(100, "kg")).toBe(45.4);
+    expect(lbsToUnit(45, "kg")).toBe(20.4);
+  });
+});
