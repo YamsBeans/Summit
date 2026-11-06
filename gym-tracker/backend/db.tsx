@@ -375,6 +375,7 @@ const ROW_DEFAULTS: Record<string, Record<string, any>> = {
   session_exercises: { notes: null, exercise_type: "strength" },
   workout_sessions: {},
   personal_records: {},
+  routine_exercise_sets: {},
 };
 
 /**
@@ -1060,7 +1061,40 @@ export const db = {
       return;
     }
 
-    // Local fallback — delegate row-by-row via existing updateRoutineExerciseSet
+    if (isOnline) {
+      // Signed in, but offline: the routine lives on the server. Read it from
+      // the offline cache and queue the target updates in the outbox. Before,
+      // this read the (empty) device store, so the routine silently kept last
+      // time's numbers.
+      const [{ data: sessionExercises }, { data: routineExercises }] = await Promise.all([
+        db.getSessionExercises(sessionId),
+        db.getRoutineExercises(routineId),
+      ]);
+      if (!sessionExercises?.length || !routineExercises?.length) return;
+      for (const [sessionEx, routineEx] of matchRoutineExercises<any, any>(sessionExercises, routineExercises)) {
+        const [{ data: sessionSets }, { data: routineSets }] = await Promise.all([
+          db.getSessionExerciseSets(sessionEx.session_exercise_id),
+          db.getRoutineExerciseSets(routineEx.routine_exercise_id),
+        ]);
+        const routineSetMap = new Map<number, number>(
+          (routineSets ?? []).map((rs: any) => [rs.set_number, rs.routine_set_id])
+        );
+        for (const ss of (sessionSets ?? []).filter((s: any) => s.completed)) {
+          const routineSetId = routineSetMap.get(ss.set_number);
+          if (routineSetId == null) continue;
+          const values =
+            sessionEx.exercise_type === "cardio"
+              ? { target_distance_meters: ss.distance_meters ?? null, target_duration_seconds: ss.duration_seconds ?? null }
+              : { target_weight: ss.weight ?? null, target_reps: ss.reps ?? null };
+          await writeServerRow({ kind: "update", table: "routine_exercise_sets", id: routineSetId, values }, () =>
+            patchCachedList(`routineExerciseSets:${routineEx.routine_exercise_id}`, (rows) =>
+              rows.map((r) => (r.routine_set_id === routineSetId ? { ...r, ...values } : r))));
+        }
+      }
+      return;
+    }
+
+    // Local-only mode — delegate row-by-row via existing updateRoutineExerciseSet
     const [{ data: sessionExercises }, { data: routineExercises }] = await Promise.all([
       localDb.getSessionExercises(sessionId),
       localDb.getRoutineExercises(routineId),

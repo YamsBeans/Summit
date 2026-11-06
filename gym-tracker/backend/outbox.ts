@@ -9,7 +9,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // (Workouts *started* offline are different: they live in localDb with local
 // IDs and are uploaded whole by the sync queue in offlineQueue.ts.)
 
-export type OutboxTable = "workout_sessions" | "session_exercises" | "session_exercise_sets" | "personal_records";
+// routine_exercise_sets: only updates, for routine targets refreshed by a
+// workout finished offline (see syncSessionSetsToRoutine).
+export type OutboxTable = "workout_sessions" | "session_exercises" | "session_exercise_sets" | "personal_records" | "routine_exercise_sets";
 
 export type OutboxOp = {
   kind: "insert" | "update" | "delete" | "upsert";
@@ -32,6 +34,7 @@ export const PRIMARY_KEY: Record<OutboxTable, string> = {
   session_exercises: "session_exercise_id",
   session_exercise_sets: "session_set_id",
   personal_records: "pr_id",
+  routine_exercise_sets: "routine_set_id",
 };
 
 // Foreign keys inside `values` that may point at a row created offline.
