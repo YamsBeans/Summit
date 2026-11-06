@@ -63,17 +63,23 @@ export default function ExploreScreen() {
         return;
       }
 
+      // All or nothing: if any part fails, remove the routines already created
+      // so a retry doesn't leave duplicates or half-filled routines behind.
+      const created: number[] = [];
+      const fail = async (message: string) => {
+        await Promise.all(created.map((id) => db.deleteRoutine(id).then(() => {}, () => {})));
+        setImporting(false);
+        showAlert("Couldn't add program", message);
+      };
+
       for (const routine of program.routines) {
         const { data: newRoutine, error: routineErr } = await db.insertRoutine({
           routine_name: routine.name,
           description: `Part of ${program.name}`,
           user_id: userId,
         });
-        if (routineErr || !newRoutine) {
-          showAlert("Error", routineErr?.message ?? "Failed to create routine.");
-          setImporting(false);
-          return;
-        }
+        if (routineErr || !newRoutine) return fail(routineErr?.message ?? "Failed to create routine.");
+        created.push(newRoutine.routine_id);
 
         for (let exIdx = 0; exIdx < routine.exercises.length; exIdx++) {
           const ex = routine.exercises[exIdx];
@@ -84,16 +90,17 @@ export default function ExploreScreen() {
             exercise_order: exIdx + 1,
             exercise_type: 'strength',
           });
-          if (exErr || !newEx) continue;
+          if (exErr || !newEx) return fail(exErr?.message ?? `Failed to add ${ex.exercise_name}.`);
 
           for (let setIdx = 0; setIdx < ex.sets; setIdx++) {
-            await db.insertRoutineExerciseSet({
+            const { error: setErr } = await db.insertRoutineExerciseSet({
               routine_exercise_id: newEx.routine_exercise_id,
               set_number: setIdx + 1,
               target_weight: null,
               target_reps: ex.reps,
               is_warmup: false,
             });
+            if (setErr) return fail(setErr.message ?? "Failed to add sets.");
           }
         }
       }

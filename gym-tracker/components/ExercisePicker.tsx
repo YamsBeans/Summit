@@ -1,5 +1,6 @@
 import { FlatList, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { showAlert } from "@/utils/alert";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
@@ -185,14 +186,28 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
     onSelect({ ...exercise, exercise_type: getExerciseType(exercise) });
   };
 
+  // A double tap used to create two custom exercises with different ids.
+  const creatingRef = useRef(false);
+  const [creating, setCreating] = useState(false);
   const handleCreate = async () => {
-    if (!newName.trim()) return;
+    if (!newName.trim() || creatingRef.current) return;
+    creatingRef.current = true;
+    setCreating(true);
+    try {
+      await createAndSelect();
+    } finally {
+      creatingRef.current = false;
+      setCreating(false);
+    }
+  };
+
+  const createAndSelect = async () => {
     const { data: userData } = await db.getUser();
     const userId = userData?.user?.id;
-    if (!userId) return;
+    if (!userId) { showAlert("Not signed in", "Sign in to create custom exercises."); return; }
     const slug = newName.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
     const exerciseId = `custom-${slug}-${Date.now()}`;
-    await db.insertCustomExercise({
+    const { error } = await db.insertCustomExercise({
       exercise_id: exerciseId,
       user_id: userId,
       name: newName.trim(),
@@ -200,6 +215,8 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
       equipment: newEquip.trim() || null,
       exercise_type: newType,
     });
+    // Selecting it anyway would log sets under an id with no exercise row.
+    if (error) { showAlert("Couldn't create exercise", error.message ?? "Please try again."); return; }
     handleSelect({
       id: exerciseId,
       name: newName.trim(),
@@ -416,8 +433,9 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
                     <Pressable
                       style={{ flex: 2, paddingVertical: 12, borderRadius: 8, backgroundColor: colors.primary, alignItems: "center" }}
                       onPress={handleCreate}
+                      disabled={creating}
                     >
-                      <Text style={{ fontWeight: "700", color: "#fff" }}>Create & Add</Text>
+                      <Text style={{ fontWeight: "700", color: "#fff" }}>{creating ? "Creating…" : "Create & Add"}</Text>
                     </Pressable>
                   </View>
                 </View>
