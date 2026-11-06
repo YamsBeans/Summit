@@ -42,6 +42,17 @@ describe("useRestTimer", () => {
     expect(result.current.duration).toBe(120);
   });
 
+  it("shares a saved duration with other mounted instances", async () => {
+    const settings = renderHook(() => useRestTimer());
+    const workout = renderHook(() => useRestTimer());
+    await act(async () => {});
+    await act(async () => { await settings.result.current.saveDuration(150); });
+    expect(workout.result.current.duration).toBe(150);
+    // A later instance starts from the shared value without waiting on storage.
+    const late = renderHook(() => useRestTimer());
+    expect(late.result.current.duration).toBe(150);
+  });
+
   // ─── start() ─────────────────────────────────────────────────────────────
 
   it("start(n) sets remaining to n and isRunning to true", async () => {

@@ -11,6 +11,7 @@ import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits, useDistanceUnit, UnitSystem } from "@/utils/units";
 import { useRestTimer } from "@/utils/useRestTimer";
+import { formatRest } from "@/utils/exerciseRest";
 import { requestNotificationPermissions } from "@/utils/notifications";
 import { ModalShell, SettingItem, SettingSection } from "@/components/SettingsUI";
 
@@ -99,7 +100,14 @@ function RestTimerModal({ visible, onClose }: { visible: boolean; onClose: () =>
   const { colors } = useTheme();
   const { duration, saveDuration } = useRestTimer();
   const [inputVal, setInputVal] = useState(String(duration));
+  // The stored duration loads after the first render; keep the field in step.
+  useEffect(() => { setInputVal(String(duration)); }, [duration, visible]);
   const presets = [60, 90, 120, 180, 300];
+  // Done commits too: on native the input may not blur before the modal closes.
+  const commitCustom = () => {
+    const n = parseInt(inputVal, 10);
+    if (n > 0 && n !== duration) saveDuration(Math.min(n, 3600));
+  };
   return (
     <ModalShell visible={visible} onClose={onClose} title="Rest Timer">
       <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 12, textAlign: "center" }}>Auto-starts after each completed set</Text>
@@ -110,7 +118,7 @@ function RestTimerModal({ visible, onClose }: { visible: boolean; onClose: () =>
             style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 2, borderColor: duration === s ? colors.primary : colors.border, backgroundColor: duration === s ? colors.primaryLight : "transparent" }}
             onPress={() => { setInputVal(String(s)); saveDuration(s); }}
           >
-            <Text style={{ fontWeight: "700", color: duration === s ? colors.primary : colors.textSecondary }}>{s < 60 ? `${s}s` : `${s / 60}m`}</Text>
+            <Text style={{ fontWeight: "700", color: duration === s ? colors.primary : colors.textSecondary }}>{formatRest(s)}</Text>
           </Pressable>
         ))}
       </View>
@@ -121,16 +129,17 @@ function RestTimerModal({ visible, onClose }: { visible: boolean; onClose: () =>
         keyboardType="numeric"
         placeholder="Seconds"
         placeholderTextColor={colors.textTertiary}
-        onBlur={() => { const n = parseInt(inputVal, 10); if (n > 0) saveDuration(n); }}
+        onBlur={commitCustom}
       />
-      <Pressable style={{ paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center" }} onPress={onClose}>
+      <Pressable style={{ paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center" }} onPress={() => { commitCustom(); onClose(); }}>
         <Text style={{ fontSize: 16, fontWeight: "600", color: "#fff" }}>Done</Text>
       </Pressable>
     </ModalShell>
   );
 }
 
-const AVATAR_LOCAL_KEY = "@gym_tracker_avatar_uri";
+// Per user, so a second account on the device never sees the first one's photo.
+const avatarKey = (userId: string) => `@gym_tracker_avatar_uri:${userId}`;
 
 function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { colors } = useTheme();
@@ -138,6 +147,8 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
   const [username, setUsername] = useState("");
   const [bio, setBio] = useState("");
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  // A photo picked in this sheet; only uploaded when Save is tapped.
+  const [pickedUri, setPickedUri] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,19 +156,19 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
   useEffect(() => {
     if (!visible) return;
     setError(null);
+    setPickedUri(null);
     db.getUser().then(({ data }) => {
       const uid = data?.user?.id;
       if (!uid) return;
       setUserId(uid);
       Promise.all([
         db.getUserProfile(uid),
-        // Load last-known local avatar URI as a quick display while we check profile
-        AsyncStorage.getItem(AVATAR_LOCAL_KEY),
-      ]).then(([{ data: profile }, localUri]) => {
+        // Last uploaded avatar URL for this user, in case the profile read is stale
+        AsyncStorage.getItem(avatarKey(uid)).catch(() => null),
+      ]).then(([{ data: profile }, cachedUrl]) => {
         if (profile?.username) setUsername(profile.username);
         if (profile?.bio) setBio(profile.bio);
-        // Prefer remote avatar_url, fall back to cached local URI
-        setAvatarUri(profile?.avatar_url ?? localUri ?? null);
+        setAvatarUri(profile?.avatar_url ?? cachedUrl ?? null);
       });
     });
   }, [visible]);
@@ -177,8 +188,7 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     if (result.canceled || !result.assets[0]) return;
     const uri = result.assets[0].uri;
     setAvatarUri(uri);
-    // Cache locally so it shows even before Save is tapped
-    await AsyncStorage.setItem(AVATAR_LOCAL_KEY, uri);
+    setPickedUri(uri);
   };
 
   const handleSave = async () => {
@@ -187,18 +197,20 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     setLoading(true); setError(null);
 
     let avatarUrl: string | null | undefined = undefined; // undefined = don't update
+    // Tracked locally: `error` state would still hold the previous render's value here.
+    let warning: string | null = null;
 
-    // Upload avatar if the current URI looks like a local file (not already a remote URL)
-    if (avatarUri && !avatarUri.startsWith("http")) {
+    if (pickedUri) {
       setUploading(true);
-      const { url, error: uploadErr } = await db.uploadAvatar(userId, avatarUri);
+      const { url, error: uploadErr } = await db.uploadAvatar(userId, pickedUri);
       setUploading(false);
       if (uploadErr) {
         // Non-fatal: warn but still save the rest
-        setError(`Avatar upload failed: ${uploadErr}. Other changes will still be saved.`);
+        warning = `Avatar upload failed: ${uploadErr}. Your other changes were saved.`;
       } else {
         avatarUrl = url;
-        if (url) await AsyncStorage.setItem(AVATAR_LOCAL_KEY, url);
+        setPickedUri(null);
+        if (url) await AsyncStorage.setItem(avatarKey(userId), url).catch(() => {});
       }
     }
 
@@ -211,7 +223,8 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     const { error: err } = await db.updateUserProfile(userId, updates);
     setLoading(false);
     if (err) { setError(err.message); return; }
-    if (!error) onClose(); // only close if no avatar warning
+    if (warning) { setError(warning); return; } // stay open so the warning is seen
+    onClose();
   };
 
   const initials = username ? username.slice(0, 2).toUpperCase() : "?";
@@ -487,7 +500,7 @@ export default function SettingsScreen() {
 
         {/* Preferences */}
         <SettingSection title="Preferences">
-          <SettingItem icon="timer-outline" label="Rest Timer" onPress={() => setShowRestTimer(true)} value={duration < 60 ? `${duration}s` : `${duration / 60}m`} />
+          <SettingItem icon="timer-outline" label="Rest Timer" onPress={() => setShowRestTimer(true)} value={formatRest(duration)} />
           <SettingItem icon="scale-outline" label="Units" onPress={() => setShowUnits(true)} value={unit} />
           <SettingItem icon="moon-outline" label="Appearance" onPress={() => setShowAppearance(true)} value={appearanceLabel} />
         </SettingSection>

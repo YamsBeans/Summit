@@ -29,9 +29,20 @@ export function clearActiveRestTimer() {
   activeTotal = 0;
 }
 
+// The default rest duration is shared by every hook instance, so changing it
+// in Settings updates the Settings row and an open workout straight away.
+let sharedDuration: number | null = null;
+const durationListeners = new Set<(secs: number) => void>();
+function broadcastDuration(secs: number) {
+  sharedDuration = secs;
+  durationListeners.forEach((fn) => fn(secs));
+}
+
 function resetAllForTests() {
   clearActiveRestTimer();
   activeOnComplete = null;
+  sharedDuration = null;
+  durationListeners.clear();
 }
 
 /** Test helper: forget any timer carried over between hook instances. */
@@ -40,14 +51,21 @@ export const __resetRestTimerForTests = resetAllForTests;
 export function useRestTimer() {
   const [remaining, setRemaining] = useState(() => secondsLeft(activeEndAt));
   const [total, setTotal] = useState(activeTotal);
-  const [duration, setDuration] = useState(DEFAULT_DURATION);
+  const [duration, setDuration] = useState(() => sharedDuration ?? DEFAULT_DURATION);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((val) => {
-      const n = val ? parseInt(val, 10) : NaN;
-      if (Number.isFinite(n) && n > 0) setDuration(n);
-    }).catch(() => {});
+    durationListeners.add(setDuration);
+    if (sharedDuration == null) {
+      AsyncStorage.getItem(STORAGE_KEY).then((val) => {
+        const n = val ? parseInt(val, 10) : NaN;
+        // Don't clobber a value saved while the read was in flight.
+        if (sharedDuration == null) broadcastDuration(Number.isFinite(n) && n > 0 ? n : DEFAULT_DURATION);
+      }).catch(() => {});
+    } else {
+      setDuration(sharedDuration);
+    }
+    return () => { durationListeners.delete(setDuration); };
   }, []);
 
   const clear = useCallback(() => {
@@ -102,7 +120,7 @@ export function useRestTimer() {
   }, []);
 
   const saveDuration = useCallback(async (secs: number) => {
-    setDuration(secs);
+    broadcastDuration(secs);
     await AsyncStorage.setItem(STORAGE_KEY, String(secs));
   }, []);
 
