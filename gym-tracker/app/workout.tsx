@@ -744,7 +744,8 @@ export default function WorkoutScreen() {
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Duration</Text>
         </View>
         <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-        {totalVolume > 0 && (
+        {/* Always shown for strength workouts so the bar doesn't jump on the first set (like Hevy). */}
+        {(totalVolume > 0 || !exercises.length || exercises.some((e: any) => e.exercise_type !== "cardio")) && (
           <>
             <View style={styles.statItem}>
               <Text style={[styles.statValue, { color: colors.text }]}>{volumeDisplay} {unitLabel}</Text>
