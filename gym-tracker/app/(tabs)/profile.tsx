@@ -3,7 +3,8 @@ import { ActivityIndicator, FlatList, Image, Modal, Pressable, RefreshControl, S
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db, isOnline } from "@/backend/db";
+import { db } from "@/backend/db";
+import { useConnectionMode } from "@/utils/useConnectionMode";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
@@ -103,6 +104,7 @@ export default function ProfileScreen() {
   const headerTop = useHeaderTop();
   const router = useRouter();
   const { colors } = useTheme();
+  const connection = useConnectionMode();
   const { toDisplay, label: unitLabel } = useUnits();
 
   const [loading, setLoading] = useState(true);
@@ -372,9 +374,9 @@ export default function ProfileScreen() {
         </Pressable>
       </View>
 
-      {!isOnline && (
+      {connection === "offline" && (
         <View style={[styles.offlineBanner, { backgroundColor: colors.warningLight }]}>
-          <Text style={[styles.offlineText, { color: colors.warning }]}>⚡ Offline Mode</Text>
+          <Text style={[styles.offlineText, { color: colors.warning }]}>Offline. Showing saved data; workouts sync when you reconnect.</Text>
         </View>
       )}
       {error && (

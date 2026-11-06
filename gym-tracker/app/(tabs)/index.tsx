@@ -5,7 +5,8 @@ import {
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { db, isOnline } from "@/backend/db";
+import { db } from "@/backend/db";
+import { useConnectionMode } from "@/utils/useConnectionMode";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
@@ -69,6 +70,7 @@ export default function WorkoutsScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const hasLoadedRef = useRef(false);
   const { colors } = useTheme();
+  const connection = useConnectionMode();
   const { activeWorkout } = useActiveWorkout();
   const [showInProgress, setShowInProgress] = useState(false);
   const [startingEmpty, setStartingEmpty] = useState(false);
@@ -254,9 +256,16 @@ export default function WorkoutsScreen() {
         <View style={[styles.pageHeader, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
           <Text style={[styles.pageTitle, { color: colors.text }]}>Workout</Text>
           <View style={styles.headerRight}>
-            {!isOnline && (
-              <View style={[styles.offlineBadge, { backgroundColor: colors.warningLight }]}>
+            {connection === "offline" && (
+              <View style={[styles.offlineBadge, { backgroundColor: colors.warningLight }]} accessibilityLabel="Offline. Workouts sync when you reconnect.">
+                <Ionicons name="cloud-offline-outline" size={13} color={colors.warning} />
                 <Text style={[styles.offlineText, { color: colors.warning }]}>Offline</Text>
+              </View>
+            )}
+            {connection === "local" && (
+              <View style={[styles.offlineBadge, { backgroundColor: colors.surfaceSecondary }]} accessibilityLabel="Local mode. Data is saved on this device only.">
+                <Ionicons name="phone-portrait-outline" size={13} color={colors.textSecondary} />
+                <Text style={[styles.offlineText, { color: colors.textSecondary }]}>Local</Text>
               </View>
             )}
           </View>
@@ -554,7 +563,7 @@ const styles = StyleSheet.create({
   },
   pageTitle: { flex: 1, fontSize: 28, fontWeight: "800", letterSpacing: -0.5 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 8 },
-  offlineBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  offlineBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   offlineText: { fontSize: 12, fontWeight: "700" },
   createBtn: {
     width: 36, height: 36, borderRadius: 10,

@@ -2,13 +2,15 @@ import { useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { db, isOnline } from "@/backend/db";
+import { db } from "@/backend/db";
+import { useConnectionMode } from "@/utils/useConnectionMode";
 import { useTheme } from "@/theme/ThemeContext";
 
 type AuthMode = "signin" | "signup" | "forgot-password";
 
 export default function Auth() {
   const { colors } = useTheme();
+  const connection = useConnectionMode();
   const [mode, setMode] = useState<AuthMode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -89,7 +91,12 @@ export default function Auth() {
 
         <Text style={[styles.title, { color: colors.text }]}>{titles[mode]}</Text>
 
-        {!isOnline && <Text style={[styles.offlineText, { color: colors.warning }]}>⚡ Offline Mode</Text>}
+        {connection === "local" && (
+          <Text style={[styles.offlineText, { color: colors.textSecondary }]}>Local mode: your data stays on this device.</Text>
+        )}
+        {connection === "offline" && (
+          <Text style={[styles.offlineText, { color: colors.warning }]}>{"You're offline. Connect to sign in."}</Text>
+        )}
 
         {mode === "signup" && (
           <TextInput
