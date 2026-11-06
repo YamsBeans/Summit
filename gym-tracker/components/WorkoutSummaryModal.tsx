@@ -128,7 +128,7 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
                   style={[styles.row, i < summary.exercises.length - 1 && { borderBottomColor: colors.borderLight, borderBottomWidth: StyleSheet.hairlineWidth }]}
                 >
                   <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={[styles.exName, { color: colors.text }]} numberOfLines={1}>
+                    <Text style={[styles.exName, { color: colors.text }]} numberOfLines={2}>
                       {ex.completedSets} × {ex.name}
                     </Text>
                     {ex.pr && (
