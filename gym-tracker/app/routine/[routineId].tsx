@@ -737,6 +737,8 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
     }
   }, [digitBuffer, set.target_duration_seconds, set.routine_set_id, routineExerciseId, onUpdate]);
 
+  useCommitOnUnmount(() => { commitDistance(); handleDurationBlur(); });
+
   return (
     <View style={[rowStyles.row, { backgroundColor: "transparent", borderBottomColor: colors.border }]}>
       <View style={rowStyles.setNumWrap}>
@@ -774,6 +776,18 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
     </View>
   );
 });
+
+/**
+ * Save a value still being typed when the row goes away. Tapping Done
+ * dismisses the keyboard and leaves edit mode in the same tick, and on
+ * native the rows unmounted before the blur arrived, so the last value
+ * typed was dropped. The commit functions only write when the value changed.
+ */
+function useCommitOnUnmount(commit: () => void) {
+  const ref = useRef(commit);
+  ref.current = commit;
+  useEffect(() => () => ref.current(), []);
+}
 
 // ─── TemplateSetRow (editable) ────────────────────────────────────────────────
 
@@ -814,6 +828,8 @@ const TemplateSetRow = memo(function TemplateSetRow({
     setReps(formatNumberInput(val));
     if (val !== set.target_reps) onUpdate(set.routine_set_id, routineExerciseId, { target_reps: val });
   }, [reps, set.target_reps, set.routine_set_id, routineExerciseId, onUpdate]);
+
+  useCommitOnUnmount(() => { commitWeight(); commitReps(); });
 
   const isWarmup = set.is_warmup === true;
   const rowBg = isWarmup ? colors.warningLight + "55" : "transparent";
