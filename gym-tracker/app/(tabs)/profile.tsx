@@ -5,6 +5,9 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db } from "@/backend/db";
 import { useConnectionMode } from "@/utils/useConnectionMode";
+import MuscleSplitCard from "@/components/MuscleSplitCard";
+import type { SplitEntry } from "@/utils/muscleSplit";
+import exercisesData from "@/assets/data/exercises.json";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
@@ -100,6 +103,11 @@ type AllStats = {
   avgDuration: number;
 };
 
+// exercise id → primary muscles, for the muscle split card.
+const LIBRARY_MUSCLES = new Map<string, string[]>(
+  (exercisesData as { id: string; primaryMuscles?: string[] }[]).map((e) => [e.id, e.primaryMuscles ?? []]),
+);
+
 export default function ProfileScreen() {
   const headerTop = useHeaderTop();
   const router = useRouter();
@@ -113,6 +121,12 @@ export default function ProfileScreen() {
   const [profile, setProfile] = useState<any>(null);
   const [sessions, setSessions] = useState<SessionWithMeta[]>([]);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [splitEntries, setSplitEntries] = useState<SplitEntry[]>([]);
+  const [customMuscles, setCustomMuscles] = useState<Record<string, string[]>>({});
+  const musclesOf = useCallback(
+    (id: string) => customMuscles[id] ?? LIBRARY_MUSCLES.get(id),
+    [customMuscles],
+  );
   const [stats, setStats] = useState<AllStats>({
     totalWorkouts: 0, totalVolume: 0, totalExercises: 0, totalSets: 0,
     totalReps: 0, heaviestWeight: 0, longestSession: 0, avgDuration: 0,
@@ -159,12 +173,19 @@ export default function ProfileScreen() {
       const { data: { user } } = await db.getUser();
       if (!user) { setError("Not authenticated"); return; }
 
-      const [profileResult, sessionsResult, savedStatIds, cardioStatsResult] = await Promise.all([
+      const [profileResult, sessionsResult, savedStatIds, cardioStatsResult, customResult] = await Promise.all([
         db.getUserProfile(user.id),
         db.getWorkoutSessions(user.id),
         savedStatsPromise,
         db.getCardioStats(user.id),
+        db.getCustomExercises(user.id),
       ]);
+
+      const custom: Record<string, string[]> = {};
+      for (const c of customResult?.data ?? []) {
+        if (c.primary_muscle) custom[c.exercise_id] = [c.primary_muscle];
+      }
+      setCustomMuscles(custom);
 
       if (cardioStatsResult.data) setCardioStats(cardioStatsResult.data);
 
@@ -209,7 +230,7 @@ export default function ProfileScreen() {
           const isCardio = ex.exercise_type === 'cardio';
           if (isCardio) sessionHasCardio = true;
           for (const set of setsByExercise[ex.session_exercise_id] ?? []) {
-            if (set.completed) {
+            if (set.completed !== false) { // null on older rows counts as done, as in history
               overallSets++;
               if (!isCardio) {
                 if (set.weight != null && set.reps != null) {
@@ -260,6 +281,13 @@ export default function ProfileScreen() {
       }
       const avgDuration = durationCount > 0 ? Math.round(totalDurationMins / durationCount) : 0;
 
+      setSplitEntries(sessionsData.flatMap((s: any) =>
+        (exercisesBySession[s.session_id] ?? []).map((ex: any) => ({
+          date: s.session_date,
+          exerciseId: ex.exercise_id,
+          exerciseType: ex.exercise_type,
+          sets: setsByExercise[ex.session_exercise_id] ?? [],
+        }))));
       setSessions(enriched);
       setStats({
         totalWorkouts: enriched.length,
@@ -496,6 +524,9 @@ export default function ProfileScreen() {
         <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>Personal Records</Text>
         <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
       </Pressable>
+
+      {/* ── Muscle split ── */}
+      {sessions.length > 0 && <MuscleSplitCard entries={splitEntries} musclesOf={musclesOf} />}
 
       <WorkoutCalendarModal visible={calendarOpen} onClose={() => setCalendarOpen(false)} sessions={sessions} />
 
