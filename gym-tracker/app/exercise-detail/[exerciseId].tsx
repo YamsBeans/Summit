@@ -10,6 +10,7 @@ import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useUnits, formatVolume } from "@/utils/units";
 import { bestOneRepMax, estimateOneRepMax } from "@/utils/oneRepMax";
 import CardioExerciseDetail from "@/components/CardioExerciseDetail";
+import ExerciseAbout from "@/components/ExerciseAbout";
 import { buildRepRecords } from "@/utils/repRecords";
 import { workingSetNumber } from "@/utils/setNumbers";
 
@@ -356,6 +357,7 @@ export default function ExerciseDetailScreen() {
             })
           )}
           </>}
+          <ExerciseAbout exerciseId={exerciseId} />
         </ScrollView>
       )}
     </View>
