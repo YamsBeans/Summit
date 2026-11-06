@@ -20,6 +20,7 @@ import {
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
 import { bestOfRecords, strengthRecordFromHistory } from "@/utils/prDetection";
+import { matchRoutineExercises } from "@/utils/routineMatch";
 import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache, writeCacheMany } from "./readCache";
 import {
   OutboxOp,
@@ -1005,13 +1006,8 @@ export const db = {
         routineSetMap.set(`${rs.routine_exercise_id}:${rs.set_number}`, rs.routine_set_id);
       }
 
-      // Map exercise_id → routine exercise
-      const routineExByExId = new Map((routineExercises ?? []).map((e: any) => [e.exercise_id, e]));
-
       const updates: PromiseLike<any>[] = [];
-      for (const sessionEx of sessionExercises) {
-        const routineEx = routineExByExId.get(sessionEx.exercise_id);
-        if (!routineEx) continue;
+      for (const [sessionEx, routineEx] of matchRoutineExercises<any, any>(sessionExercises, routineExercises)) {
 
         const completedSets = (sessionSets ?? []).filter(
           (s: any) => s.session_exercise_id === sessionEx.session_exercise_id && s.completed
@@ -1041,11 +1037,7 @@ export const db = {
     ]);
     if (!sessionExercises?.length || !routineExercises?.length) return;
 
-    const routineExByExId = new Map((routineExercises ?? []).map((e: any) => [e.exercise_id, e]));
-
-    for (const sessionEx of sessionExercises) {
-      const routineEx = routineExByExId.get(sessionEx.exercise_id);
-      if (!routineEx) continue;
+    for (const [sessionEx, routineEx] of matchRoutineExercises<any, any>(sessionExercises, routineExercises)) {
 
       const { data: sessionSets } = await localDb.getSessionExerciseSets(sessionEx.session_exercise_id);
       const { data: routineSets } = await localDb.getRoutineExerciseSets(routineEx.routine_exercise_id);
