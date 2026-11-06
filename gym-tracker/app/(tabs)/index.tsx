@@ -7,6 +7,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useConnectionMode } from "@/utils/useConnectionMode";
+import { formatLastDone, lastDoneByRoutine } from "@/utils/lastDone";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
@@ -44,6 +45,14 @@ async function loadRoutinePreviews(list: any[]): Promise<Record<number, string[]
 }
 
 // "Bench Press · Squat · Row +2 more"
+// When each routine was last finished, from workout history (cached offline).
+async function loadLastDone(): Promise<Record<number, string>> {
+  const { data: { user } } = await db.getUser();
+  if (!user) return {};
+  const { data } = await db.getWorkoutSessions(user.id);
+  return lastDoneByRoutine(data ?? []);
+}
+
 function exercisePreview(names: string[], shown = 3): string {
   const head = names.slice(0, shown).join(" · ");
   return names.length > shown ? `${head} +${names.length - shown} more` : head;
@@ -97,6 +106,7 @@ export default function WorkoutsScreen() {
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
 
   const [routinePreviews, setRoutinePreviews] = useState<Record<number, string[]>>({});
+  const [lastDone, setLastDone] = useState<Record<number, string>>({});
   const previewRun = useRef(0);
 
   const loadRoutines = useCallback(async (showSpinner = true) => {
@@ -111,6 +121,9 @@ export default function WorkoutsScreen() {
       const run = ++previewRun.current;
       loadRoutinePreviews(sorted)
         .then((p) => { if (run === previewRun.current) setRoutinePreviews(p); })
+        .catch(() => {});
+      loadLastDone()
+        .then((l) => { if (run === previewRun.current) setLastDone(l); })
         .catch(() => {});
     }
     setLoadingRoutines(false);
@@ -405,6 +418,14 @@ export default function WorkoutsScreen() {
                         {item.description}
                       </Text>
                     ) : null}
+                    {lastDone[item.routine_id] ? (
+                      <View style={styles.lastDoneRow}>
+                        <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
+                        <Text style={[styles.lastDoneText, { color: colors.textTertiary }]}>
+                          Last done {formatLastDone(lastDone[item.routine_id])}
+                        </Text>
+                      </View>
+                    ) : null}
                     {routinePreviews[item.routine_id] ? (
                       <Text style={[styles.routineDesc, { color: colors.textTertiary }]} numberOfLines={2}>
                         {routinePreviews[item.routine_id].length > 0
@@ -642,6 +663,8 @@ const styles = StyleSheet.create({
   },
   routineText: { flex: 1 },
   routineName: { fontSize: 16, fontWeight: "700" },
+  lastDoneRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 },
+  lastDoneText: { fontSize: 12, fontWeight: "600" },
   routineDesc: { fontSize: 13, marginTop: 2 },
   ellipsisBtn: { padding: 4 },
 
