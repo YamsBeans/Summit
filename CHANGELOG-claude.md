@@ -165,3 +165,59 @@ Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jes
 - A share image for the workout summary.
 - The "Offline" badge in local-only mode could say "Local" instead.
 - `app/workout.tsx` is about 1,750 lines. Splitting the set row and the modals into components would help.
+
+## 2026-11-06 (Fri)
+
+Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 295 tests in 38 suites (up from 272 in 32), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode. A read-only subagent audited the screens past runs hadn't covered (routine editor, Explore, Settings, auth, records, exercise detail, picker). A second one reviewed my diff, and I fixed what it found.
+
+### Bugs fixed
+- **Offline edits that vanished (signed in, no signal):**
+  - Routine edits (add/remove sets, rename, delete, reorder), Add Program, Save as Routine, custom exercises and Edit Profile all wrote to the on-device store. That store never syncs, so the change looked saved and then disappeared.
+  - They now show "You're offline…" instead (`offlineAccountWrite` in `db.tsx`). Workouts keep their offline outbox, and local-only mode is unchanged.
+  - The exercise picker's Create form says it needs a connection.
+- **Finishing a routine workout offline** never updated the routine's targets. They're now queued in the outbox (new `routine_exercise_sets` updates), and the cached routine is patched so the next offline start shows them.
+- **A routine with the same exercise twice** (heavy squats, then back-off squats): on Finish, both instances' sets went into the last template. Instances are now paired in order (`utils/routineMatch.ts`).
+- **Settings → Rest Timer:**
+  - The field showed 90 until the saved value loaded, and Done could save that 90.
+  - The Settings row didn't update after a change.
+  - 100s showed as "1.6666666666666667m"; it's now 1:40. The duration is shared by every rest-timer hook.
+- **Edit Profile:**
+  - A cancelled photo pick was uploaded on the next Save.
+  - The cached avatar was shared between accounts on the same device.
+  - An avatar-upload warning closed before you could read it, and a fixed username error left the sheet stuck open.
+  - If the photo uploaded but the profile save failed, a retry dropped the photo.
+- **Routine editor:** on iOS/Android, tapping Done right after typing a target dropped that value (the rows unmounted before blur). Rows now save on unmount. Name/description save errors are shown now, too.
+- **Add Program:** a failed exercise or set was skipped and "Program Added!" still showed. Any failure now removes what was created and says so.
+- **Custom exercise:** a failed save still selected it, and a double tap created two.
+- **Bodyweight program:** it included a barbell glute bridge, "Push-Up" pointed at Incline Push-Up, and two ids were both called "Glute Bridge". A new test checks program ids, names and equipment.
+- **Offline badge:**
+  - It read the build-time "server configured" flag, so local-only builds always said "Offline", and signed-in users who lost signal saw nothing.
+  - Home now shows **Local** (neutral) or **Offline** (amber, live from NetInfo).
+- The Profile Sets total now counts `completed = null` sets, matching history.
+
+### New / UX
+- **Live PR trophy while logging (like Hevy):** tick a set heavier than your record and a small trophy appears on its set number, with a haptic. It marks one set per exercise and only when you have an earlier record.
+- **Muscle Split card on Profile:** working sets per muscle group (Chest/Back/Shoulders/Arms/Legs/Core) over 7 or 30 days. Warm-ups, cardio and stretching are left out.
+- **"Last done …" on routine cards** (today / 5 days ago / Sep 14), so you can see which day of a split is next.
+- **About card on exercise detail:** equipment, primary and secondary muscles, and collapsible step-by-step instructions from the exercise library.
+- **Workout header:** Volume is always shown for strength workouts, so the bar doesn't jump on the first set.
+- Long exercise names wrap on Workout Complete.
+
+### Code quality
+- `app/workout.tsx` went from about 1,750 to about 1,390 lines. The set row, note box and clock are now `components/StrengthSetRow.tsx`, `ExerciseNote.tsx` and `ElapsedTime.tsx`.
+
+### Needs Yams's decision or check
+- **Offline routine/profile edits are now refused, not queued.** Queuing them would need outbox support for routines (temp ids for new routines/exercises). Say if you want that.
+- **Queued routine-target updates can land after a newer online edit** if you edit the routine online before the queue flushes. This is rare, because the queue flushes on reconnect.
+- **Still open from earlier runs:**
+  - Should warm-ups count toward PRs? Strong leaves them out. The live trophy follows the current rule (they count).
+  - `completed = null` counts as done.
+  - `routines.routine_order` isn't in `supabaseSchema.md`.
+
+### Ideas for next run
+- Outbox support for routine edits, so routines can be edited offline.
+- Supersets (needs a schema column).
+- Set types (drop/failure) and RPE.
+- A share image for Workout Complete.
+- Split the remaining modals (set options, exercise options, rest picker) out of `workout.tsx`.
+- A "next up" hint for split programs.
