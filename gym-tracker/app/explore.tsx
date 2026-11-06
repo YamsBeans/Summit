@@ -54,6 +54,18 @@ export default function ExploreScreen() {
 
   const importProgram = async (program: Program) => {
     setImporting(true);
+    // All or nothing: if any part fails, remove the routines already created
+    // so a retry doesn't leave duplicates or half-filled routines behind.
+    const created: number[] = [];
+    const fail = async (message: string) => {
+      const results = await Promise.all(created.map((id) =>
+        db.deleteRoutine(id).then((r: any) => !r?.error, () => false)));
+      setImporting(false);
+      const leftovers = results.filter((ok) => !ok).length;
+      showAlert("Couldn't add program", leftovers > 0
+        ? `${message}\n\n${leftovers} partly added routine${leftovers > 1 ? "s" : ""} couldn't be removed. You may want to delete ${leftovers > 1 ? "them" : "it"} from My Routines.`
+        : message);
+    };
     try {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
@@ -62,15 +74,6 @@ export default function ExploreScreen() {
         setImporting(false);
         return;
       }
-
-      // All or nothing: if any part fails, remove the routines already created
-      // so a retry doesn't leave duplicates or half-filled routines behind.
-      const created: number[] = [];
-      const fail = async (message: string) => {
-        await Promise.all(created.map((id) => db.deleteRoutine(id).then(() => {}, () => {})));
-        setImporting(false);
-        showAlert("Couldn't add program", message);
-      };
 
       for (const routine of program.routines) {
         const { data: newRoutine, error: routineErr } = await db.insertRoutine({
@@ -112,8 +115,7 @@ export default function ExploreScreen() {
         [{ text: "Got it", onPress: () => router.back() }]
       );
     } catch (e: any) {
-      setImporting(false);
-      showAlert("Error", e?.message ?? "Something went wrong.");
+      await fail(e?.message ?? "Something went wrong.");
     }
   };
 

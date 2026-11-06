@@ -96,7 +96,7 @@ export default function WorkoutScreen() {
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [prevSets, setPrevSets] = useState<Record<string, any[]>>({});
   // Records as they stood before this workout, for live PR badges.
-  const [records, setRecords] = useState<any[]>([]);
+  const [records, setRecords] = useState<any[] | null>(null);
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
   // Exercises whose note box is open (it's always shown once a note exists).
   // Value bumps each time "Add/Edit Note" is chosen, which focuses the box.
@@ -184,17 +184,19 @@ export default function WorkoutScreen() {
 
 
   const prSetIds = useMemo(
-    () => liveWeightPRSetIds(exercises, exerciseSets, records),
+    () => liveWeightPRSetIds(exercises, exerciseSets, records ?? []),
     [exercises, exerciseSets, records],
   );
   // A buzz when a set newly becomes a PR (not on load or when one is undone).
   const seenPRs = useRef<Set<number> | null>(null);
   useEffect(() => {
-    if (loading) return;
+    // Wait for the records too: they load after the sets, and comparing
+    // against "no records" would buzz for PR sets already logged.
+    if (loading || records == null) return;
     const prev = seenPRs.current;
     seenPRs.current = prSetIds;
     if (prev && [...prSetIds].some((id) => !prev.has(id))) notifySuccess();
-  }, [prSetIds, loading]);
+  }, [prSetIds, loading, records]);
 
   const completedSetsCount = useMemo(() =>
     Object.values(exerciseSets).flat().filter((s) => s.completed).length,

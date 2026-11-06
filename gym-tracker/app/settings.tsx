@@ -4,7 +4,7 @@ import { APP_NAME, APP_VERSION, SUPPORT_EMAIL } from "@/utils/appInfo";
 import * as ImagePicker from "expo-image-picker";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db } from "@/backend/db";
@@ -149,6 +149,8 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   // A photo picked in this sheet; only uploaded when Save is tapped.
   const [pickedUri, setPickedUri] = useState<string | null>(null);
+  // An upload that worked while the profile save failed; reused on retry.
+  const uploadedRef = useRef<{ uri: string; url: string | null } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -200,7 +202,9 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     // Tracked locally: `error` state would still hold the previous render's value here.
     let warning: string | null = null;
 
-    if (pickedUri) {
+    if (pickedUri && uploadedRef.current?.uri === pickedUri) {
+      avatarUrl = uploadedRef.current.url;
+    } else if (pickedUri) {
       setUploading(true);
       const { url, error: uploadErr } = await db.uploadAvatar(userId, pickedUri);
       setUploading(false);
@@ -209,7 +213,7 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
         warning = `Avatar upload failed: ${uploadErr}. Your other changes were saved.`;
       } else {
         avatarUrl = url;
-        setPickedUri(null);
+        uploadedRef.current = { uri: pickedUri, url };
         if (url) await AsyncStorage.setItem(avatarKey(userId), url).catch(() => {});
       }
     }
@@ -223,6 +227,7 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     const { error: err } = await db.updateUserProfile(userId, updates);
     setLoading(false);
     if (err) { setError(err.message); return; }
+    if (avatarUrl !== undefined) { setPickedUri(null); uploadedRef.current = null; }
     if (warning) { setError(warning); return; } // stay open so the warning is seen
     onClose();
   };

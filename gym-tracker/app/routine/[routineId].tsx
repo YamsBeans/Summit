@@ -126,10 +126,11 @@ export default function RoutineScreen() {
     if (!trimmedName) return;
     const trimmedDesc = editableDesc.trim();
     if (trimmedName === displayName && trimmedDesc === displayDesc) return;
-    await db.updateRoutine(routineId, {
+    const { error: err } = await db.updateRoutine(routineId, {
       routine_name: trimmedName,
       description: trimmedDesc || null,
     });
+    if (err) { setError(err.message); return; }
     setDisplayName(trimmedName);
     setDisplayDesc(trimmedDesc);
   };

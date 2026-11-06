@@ -205,21 +205,25 @@ export default function WorkoutsScreen() {
   // ── Reorder (move up / move down) ──
 
   const moveRoutine = useCallback(async (routineId: number, direction: "up" | "down") => {
-    setRoutines((prev) => {
-      const idx = prev.findIndex((r) => r.routine_id === routineId);
-      if (idx === -1) return prev;
-      const swapIdx = direction === "up" ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= prev.length) return prev;
-      const next = [...prev];
-      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
-      // Persist new order in background
-      next.forEach((r, i) => {
-        db.updateRoutine(r.routine_id, { routine_order: i + 1 });
-      });
-      return next;
-    });
     closeRoutineOptions();
-  }, [closeRoutineOptions]);
+    const prev = routines;
+    const idx = prev.findIndex((r) => r.routine_id === routineId);
+    if (idx === -1) return;
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= prev.length) return;
+    const next = [...prev];
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+    setRoutines(next);
+    // Persist in the background; if it didn't stick (e.g. offline), say so
+    // and show the saved order again instead of one that reverts later.
+    const results = await Promise.all(next.map((r, i) =>
+      db.updateRoutine(r.routine_id, { routine_order: i + 1 }).catch((e: any) => ({ error: e }))));
+    const failed = results.find((r: any) => r?.error);
+    if (failed) {
+      setError((failed as any).error?.message ?? "Couldn't save the new order.");
+      loadRoutines(false);
+    }
+  }, [closeRoutineOptions, routines, loadRoutines]);
 
   useFocusEffect(useCallback(() => {
     loadRoutines(!hasLoadedRef.current);

@@ -1,6 +1,7 @@
 import { FlatList, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { showAlert } from "@/utils/alert";
+import { useConnectionMode } from "@/utils/useConnectionMode";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
@@ -77,6 +78,7 @@ type Props = {
 export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
   const headerTop = useHeaderTop();
   const { colors } = useTheme();
+  const connection = useConnectionMode();
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
   const [customExercises, setCustomExercises] = useState<Exercise[]>([]);
@@ -377,6 +379,11 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
               {showCreateForm && (
                 <View style={{ padding: 20, gap: 12 }}>
                   <Text style={{ fontSize: 16, fontWeight: "700", color: colors.text }}>New Exercise</Text>
+                  {connection === "offline" && (
+                    <Text style={{ fontSize: 13, color: colors.warning }}>
+                      You&apos;re offline. Creating an exercise needs a connection.
+                    </Text>
+                  )}
                   <TextInput
                     style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, fontSize: 15, backgroundColor: colors.inputBackground, color: colors.text }}
                     placeholder="Exercise name *"
