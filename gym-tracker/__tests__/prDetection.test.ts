@@ -156,3 +156,128 @@ describe("detectPRs", () => {
     expect(result).toEqual([]);
   });
 });
+
+import { mergeStrengthRecord } from "../utils/prDetection";
+
+describe("mergeStrengthRecord", () => {
+  it("keeps the all-time heaviest weight on a volume-only PR", () => {
+    const sets = [makeSet(185, 10), makeSet(185, 10), makeSet(185, 10)];
+    expect(mergeStrengthRecord(sets, { max_weight: 225, max_volume: 4000 })).toEqual({
+      max_weight: 225,
+      max_volume: 5550,
+    });
+  });
+
+  it("keeps the best volume on a weight-only PR", () => {
+    const sets = [makeSet(250, 1)];
+    expect(mergeStrengthRecord(sets, { max_weight: 225, max_volume: 4000 })).toEqual({
+      max_weight: 250,
+      max_volume: 4000,
+    });
+  });
+
+  it("uses this session when there is no previous record", () => {
+    expect(mergeStrengthRecord([makeSet(100, 5), makeSet(100, 5, false)], null)).toEqual({
+      max_weight: 100,
+      max_volume: 500,
+    });
+  });
+});
+
+describe("detectPRs with cardio records", () => {
+  it("ignores cardio records for the same exercise id", () => {
+    const exercises = [makeExercise(1, "x", "X")];
+    const sets = { 1: [makeSet(100, 5)] };
+    const prs = detectPRs(exercises, sets, [
+      { exercise_id: "x", max_weight: 500, max_volume: 9999, pr_type: "strength" },
+      { exercise_id: "x", max_weight: null, max_volume: null, pr_type: "cardio" },
+    ]);
+    expect(prs).toEqual([]);
+  });
+});
+
+import { bestOfRecords } from "../utils/prDetection";
+
+describe("bestOfRecords", () => {
+  it("keeps the better value per field (lower pace is better)", () => {
+    expect(bestOfRecords(
+      { max_weight: 200, max_volume: 2000, best_pace_sec_per_km: 300, best_distance_meters: 5000 },
+      { max_weight: 250, max_volume: 1000, best_pace_sec_per_km: 280, best_distance_meters: null },
+    )).toMatchObject({ max_weight: 250, max_volume: 2000, best_pace_sec_per_km: 280, best_distance_meters: 5000 });
+    expect(bestOfRecords({ max_weight: 1 }, null)).toEqual({ max_weight: 1 });
+  });
+});
+
+describe("same exercise twice in one workout", () => {
+  const exercises = [
+    { session_exercise_id: 1, exercise_id: "bench", exercise_name: "Bench" },
+    { session_exercise_id: 2, exercise_id: "squat", exercise_name: "Squat" },
+    { session_exercise_id: 3, exercise_id: "bench", exercise_name: "Bench" },
+  ];
+  const sets = {
+    1: [{ weight: 135, reps: 5, completed: true }],
+    2: [{ weight: 100, reps: 5, completed: true }],
+    3: [{ weight: 225, reps: 3, completed: true }],
+  };
+
+  it("reports one PR per exercise using all its sets", () => {
+    const { detectPRs, mergeStrengthRecord, groupSetsByExercise } = require("@/utils/prDetection");
+    const prs = detectPRs(exercises, sets, [{ exercise_id: "bench", max_weight: 200, max_volume: 2000 }]);
+    const bench = prs.filter((p: any) => p.exerciseId === "bench");
+    expect(bench).toHaveLength(1);
+    expect(bench[0].type).toBe("weight");
+    const groups = groupSetsByExercise(exercises, sets);
+    expect(groups).toHaveLength(2);
+    const benchSets = groups.find((g: any) => g.exercise.exercise_id === "bench").sets;
+    expect(mergeStrengthRecord(benchSets, { max_weight: 200, max_volume: 2000 }).max_weight).toBe(225);
+  });
+});
+
+describe("strengthRecordFromHistory", () => {
+  const { strengthRecordFromHistory } = require("@/utils/prDetection");
+  it("takes the heaviest set and the biggest single-workout volume", () => {
+    expect(strengthRecordFromHistory([
+      { session_id: 1, sets: [{ weight: 200, reps: 5, completed: true }] },
+      { session_id: 2, sets: [{ weight: 150, reps: 5, completed: true }] },
+      // Same workout, exercise done twice: volumes add up.
+      { session_id: 2, sets: [{ weight: 150, reps: 5, completed: true }] },
+    ])).toEqual({ max_weight: 200, max_volume: 1500 });
+  });
+  it("ignores unticked sets and returns nulls with no history", () => {
+    expect(strengthRecordFromHistory([
+      { session_id: 1, sets: [{ weight: 2250, reps: 5, completed: false }, { weight: 225, reps: 5, completed: true }] },
+    ])).toEqual({ max_weight: 225, max_volume: 1125 });
+    expect(strengthRecordFromHistory([])).toEqual({ max_weight: null, max_volume: null });
+  });
+});
+
+describe("liveWeightPRSetIds", () => {
+  const { liveWeightPRSetIds } = require("../utils/prDetection");
+  const exercises = [
+    { session_exercise_id: 1, exercise_id: "bench" },
+    { session_exercise_id: 2, exercise_id: "squat" },
+    { session_exercise_id: 3, exercise_id: "bench" },
+    { session_exercise_id: 4, exercise_id: "run", exercise_type: "cardio" },
+  ];
+  const set = (id: number, weight: number | null, completed = true) => ({ session_set_id: id, weight, reps: 5, completed });
+  const records = [
+    { exercise_id: "bench", max_weight: 200, max_volume: 3000, pr_type: "strength" },
+    { exercise_id: "run", max_weight: null, max_volume: null, pr_type: "cardio" },
+  ];
+
+  it("marks only the heaviest completed set above the record, across repeated instances", () => {
+    const ids = liveWeightPRSetIds(exercises, {
+      1: [set(10, 205), set(11, 210, false)],
+      3: [set(30, 215), set(31, 215)],
+    }, records);
+    expect([...ids]).toEqual([30]);
+  });
+
+  it("ignores ties, unticked sets and exercises with no record", () => {
+    const ids = liveWeightPRSetIds(exercises, {
+      1: [set(10, 200), set(11, 300, false)],
+      2: [set(20, 500)],
+    }, records);
+    expect(ids.size).toBe(0);
+  });
+});

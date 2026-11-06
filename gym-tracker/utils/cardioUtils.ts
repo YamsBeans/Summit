@@ -153,6 +153,16 @@ export function formatPace(secPerKm: number): string {
 }
 
 /**
+ * Format a pace (stored as seconds per km) in the user's unit:
+ * "5:00 /km" or "8:03 /mi".
+ */
+export function formatPaceIn(secPerKm: number, unit: 'km' | 'mi'): string {
+  if (unit === 'km') return formatPace(secPerKm);
+  const perMi = Math.round(secPerKm * 1.609344);
+  return `${Math.floor(perMi / 60)}:${String(perMi % 60).padStart(2, '0')} /mi`;
+}
+
+/**
  * Compute speed in km/h.
  */
 export function computeSpeed(distanceMeters: number, durationSeconds: number): number {

@@ -1,4 +1,5 @@
 import {
+  formatPaceIn,
   secondsToDigits,
   formatDigits,
   digitsToSeconds,
@@ -228,5 +229,12 @@ describe("computeCardioSummary", () => {
     expect(summary.totalDurationSeconds).toBe(1200);
     expect(summary.totalDistanceMeters).toBe(0);
     expect(summary.bestPaceSecPerKm).toBeNull(); // no distance → no pace
+  });
+});
+
+describe("formatPaceIn", () => {
+  it("formats per km and per mile", () => {
+    expect(formatPaceIn(300, "km")).toBe("5:00 /km");
+    expect(formatPaceIn(300, "mi")).toBe("8:03 /mi");
   });
 });

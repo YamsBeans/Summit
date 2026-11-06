@@ -1,13 +1,18 @@
 import { memo, useState } from "react";
-import { Image, Modal, Pressable, Share, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Modal, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from "react-native";
+import { ModalShell } from "@/components/SettingsUI";
 import { showAlert } from "@/utils/alert";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { db } from "@/backend/db";
+import { logError } from "@/utils/log";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits } from "@/utils/units";
+import { useUnits, formatVolume } from "@/utils/units";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
+import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
+import { repeatWorkout, saveWorkoutAsRoutine } from "@/utils/repeatWorkout";
+import { sessionDurationMins } from "@/utils/duration";
 
 type WorkoutHistoryCardProps = {
   session_id: number;
@@ -26,6 +31,12 @@ type WorkoutHistoryCardProps = {
   totalCardioDurationSeconds?: number;
   distanceUnit?: 'km' | 'mi';
 };
+
+function rebuildRecordsFor(exerciseIds: string[]) {
+  db.getUser()
+    .then(({ data }) => data?.user?.id && db.rebuildStrengthRecords(data.user.id, exerciseIds))
+    .catch((e: unknown) => logError("WorkoutHistoryCard.rebuildRecords", e));
+}
 
 // Parse "YYYY-MM-DD" as local midnight, not UTC midnight
 function parseLocalDate(dateStr: string): Date {
@@ -51,14 +62,8 @@ function relativeDate(dateStr: string): string {
 
 function parseDuration(sessionDate: string, startTime: string, endTime: string | null): string {
   if (!endTime) return "In progress";
-  const toDate = (t: string) =>
-    t.includes("T") || t.length > 10 ? new Date(t) : new Date(`${sessionDate}T${t}`);
-  const start = toDate(startTime);
-  const end = toDate(endTime);
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) return "—";
-  const ms = end.getTime() - start.getTime();
-  if (ms < 0) return "—";
-  const mins = Math.floor(ms / 60000);
+  const mins = sessionDurationMins(sessionDate, startTime, endTime);
+  if (mins === null) return "—";
   const hrs = Math.floor(mins / 60);
   if (mins === 0) return "<1m";
   if (hrs === 0) return `${mins}m`;
@@ -90,9 +95,14 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [photoOpen, setPhotoOpen] = useState(false);
+  const [repeating, setRepeating] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [routineName, setRoutineName] = useState("");
+  const [savingRoutine, setSavingRoutine] = useState(false);
+  const { activeWorkout } = useActiveWorkout();
 
   const duration = parseDuration(sessionDate, startTime, endTime);
-  const volumeDisplay = (toDisplay(totalVolume) ?? totalVolume).toLocaleString();
+  const volumeDisplay = formatVolume(toDisplay(totalVolume));
   const shown = exerciseNames.slice(0, 3);
   const extra = exerciseNames.length - shown.length;
 
@@ -101,7 +111,12 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
     const lines = [
       `💪 ${sessionName}`,
       `📅 ${fullDate(sessionDate)}`,
-      `⏱ ${duration}  •  ${exerciseCount} exercise${exerciseCount !== 1 ? "s" : ""}  •  ${volumeDisplay} ${unitLabel}`,
+      [
+        `⏱ ${duration}`,
+        `${exerciseCount} exercise${exerciseCount !== 1 ? "s" : ""}`,
+        totalVolume > 0 ? `${volumeDisplay} ${unitLabel}` : null,
+        totalCardioDistanceMeters ? formatDistance(totalCardioDistanceMeters, distanceUnit) : null,
+      ].filter(Boolean).join("  •  "),
     ];
     if (exerciseNames.length > 0) {
       lines.push("", ...exerciseNames.map((n) => `• ${n}`));
@@ -119,6 +134,61 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
     }
   };
 
+  // iOS won't present a modal or alert while the action sheet is still
+  // sliding away, so the next one waits for it.
+  const afterSheetCloses = (fn: () => void) => {
+    setMenuOpen(false);
+    setTimeout(fn, Platform.OS === "ios" ? 450 : 0);
+  };
+
+  const handleRepeat = () => afterSheetCloses(repeatNow);
+
+  const repeatNow = async () => {
+    if (activeWorkout) {
+      showAlert("Workout in progress", `Finish or discard "${activeWorkout.sessionName}" before starting another.`);
+      return;
+    }
+    if (repeating) return;
+    setRepeating(true);
+    try {
+      const { data: userData } = await db.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return;
+      const res = await repeatWorkout(db, session_id, userId);
+      if ("error" in res) {
+        showAlert("Couldn't repeat workout", res.error);
+        return;
+      }
+      router.push({ pathname: "/workout", params: { sessionId: String(res.sessionId) } });
+    } finally {
+      setRepeating(false);
+    }
+  };
+
+  const openSaveAsRoutine = () => afterSheetCloses(() => {
+    setRoutineName(sessionName);
+    setSaveOpen(true);
+  });
+
+  const handleSaveAsRoutine = async () => {
+    if (savingRoutine) return;
+    setSavingRoutine(true);
+    try {
+      const { data: userData } = await db.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return;
+      const res = await saveWorkoutAsRoutine(db, session_id, userId, routineName);
+      setSaveOpen(false);
+      const name = routineName.trim() || sessionName;
+      setTimeout(() => {
+        if ("error" in res) showAlert("Couldn't save routine", res.error);
+        else showAlert("Routine saved", `"${name}" is in your routines on the Workout tab.`);
+      }, Platform.OS === "ios" ? 450 : 0);
+    } finally {
+      setSavingRoutine(false);
+    }
+  };
+
   const handleDelete = () => {
     setMenuOpen(false);
     showAlert(
@@ -131,9 +201,16 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
           style: "destructive",
           onPress: async () => {
             setDeleting(true);
-            await db.deleteWorkoutSession(session_id);
+            const { data: exs } = await db.getSessionExercises(session_id);
+            const { error } = await db.deleteWorkoutSession(session_id);
             setDeleting(false);
+            if (error) {
+              showAlert("Couldn't Delete Workout", error.message ?? "Please try again.");
+              return;
+            }
             onDelete?.(session_id);
+            // A PR set in this workout shouldn't outlive it.
+            if (!error) rebuildRecordsFor((exs ?? []).map((e: any) => e.exercise_id));
           },
         },
       ]
@@ -141,7 +218,7 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   };
 
   return (
-    <View style={[styles.card, { borderBottomColor: colors.border, opacity: deleting ? 0.4 : 1 }]}>
+    <View style={[styles.card, { borderBottomColor: colors.border, opacity: deleting || repeating ? 0.4 : 1 }]}>
       {/* Date header row */}
       <View style={styles.dateRow}>
         <View style={[styles.dateIcon, { backgroundColor: colors.surfaceSecondary }]}>
@@ -161,6 +238,8 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
           style={({ pressed }) => [styles.menuBtn, pressed && { opacity: 0.4 }]}
           onPress={() => setMenuOpen(true)}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Workout options"
         >
           <Ionicons name="ellipsis-vertical" size={18} color={colors.textSecondary} />
         </Pressable>
@@ -229,6 +308,41 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
         </Pressable>
       </Modal>
 
+      {/* ── Save as routine ── */}
+      <ModalShell visible={saveOpen} onClose={() => setSaveOpen(false)} title="Save as Routine">
+        <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 8 }}>
+          {"Exercises and the sets you completed become the routine’s targets."}
+        </Text>
+        <TextInput
+          value={routineName}
+          onChangeText={setRoutineName}
+          placeholder="Routine name"
+          placeholderTextColor={colors.textTertiary}
+          maxLength={60}
+          autoFocus
+          returnKeyType="done"
+          onSubmitEditing={handleSaveAsRoutine}
+          style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12, fontSize: 16, color: colors.text, backgroundColor: colors.inputBackground }}
+        />
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+          <Pressable
+            onPress={() => setSaveOpen(false)}
+            style={{ flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center", backgroundColor: colors.surfaceSecondary }}
+          >
+            <Text style={{ fontWeight: "600", color: colors.textSecondary }}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            onPress={handleSaveAsRoutine}
+            disabled={savingRoutine}
+            style={{ flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center", backgroundColor: colors.primary }}
+          >
+            {savingRoutine
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={{ fontWeight: "700", color: "#fff" }}>Save</Text>}
+          </Pressable>
+        </View>
+      </ModalShell>
+
       {/* ── Action sheet ── */}
       <Modal visible={menuOpen} transparent animationType="slide" onRequestClose={() => setMenuOpen(false)}>
         <Pressable style={styles.overlay} onPress={() => setMenuOpen(false)}>
@@ -237,6 +351,31 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
             <Text style={[styles.sheetTitle, { color: colors.textSecondary }]} numberOfLines={1}>
               {sessionName}
             </Text>
+
+            <Pressable
+              style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: colors.surfaceSecondary }]}
+              onPress={handleRepeat}
+              accessibilityRole="button"
+            >
+              <View style={[styles.sheetIcon, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="repeat" size={18} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.sheetLabel, { color: colors.text }]}>Repeat Workout</Text>
+                <Text style={{ fontSize: 12, color: colors.textTertiary, marginTop: 1 }}>Same exercises and sets, last numbers as a guide</Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: colors.surfaceSecondary }]}
+              onPress={openSaveAsRoutine}
+              accessibilityRole="button"
+            >
+              <View style={[styles.sheetIcon, { backgroundColor: colors.surfaceSecondary }]}>
+                <Ionicons name="bookmark-outline" size={18} color={colors.textSecondary} />
+              </View>
+              <Text style={[styles.sheetLabel, { color: colors.text }]}>Save as Routine</Text>
+            </Pressable>
 
             <Pressable
               style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: colors.surfaceSecondary }]}

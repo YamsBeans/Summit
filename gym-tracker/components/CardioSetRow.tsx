@@ -17,9 +17,14 @@ type Props = {
   onUpdate: (id: number, exId: number, updates: any) => void;
   onSetNumberPress: (set: any, sessionExerciseId: number) => void;
   prevSet?: any;
-  onComplete?: () => void;
+  onComplete?: (sessionExerciseId: number) => void;
   distanceUnit: "km" | "mi";
 };
+
+// Stored meters → the text shown in the distance box, in the user's unit.
+function toDistStr(meters: number | null | undefined, unit: "km" | "mi"): string {
+  return meters != null ? String(parseFloat(metersToDisplay(meters, unit).toFixed(2))) : "";
+}
 
 const CardioSetRow = memo(function CardioSetRow({
   set,
@@ -32,16 +37,11 @@ const CardioSetRow = memo(function CardioSetRow({
 }: Props) {
   const { colors } = useTheme();
 
-  const toDistStr = (meters: number | null | undefined) =>
-    meters != null
-      ? String(parseFloat(metersToDisplay(meters, distanceUnit).toFixed(2)))
-      : "";
-
-  const [distanceInput, setDistanceInput] = useState(toDistStr(set.distance_meters));
+  const [distanceInput, setDistanceInput] = useState(toDistStr(set.distance_meters, distanceUnit));
   const [digitBuffer, setDigitBuffer] = useState(() => secondsToDigits(set.duration_seconds));
 
   useEffect(() => {
-    setDistanceInput(toDistStr(set.distance_meters));
+    setDistanceInput(toDistStr(set.distance_meters, distanceUnit));
   }, [set.distance_meters, distanceUnit]);
 
   useEffect(() => {
@@ -91,7 +91,7 @@ const CardioSetRow = memo(function CardioSetRow({
       ...buildUpdates(distanceInput, digitsToSeconds(digitBuffer)),
     };
     onUpdate(set.session_set_id, sessionExerciseId, updates);
-    if (completing) onComplete?.();
+    if (completing) onComplete?.(sessionExerciseId);
   }, [set, sessionExerciseId, onUpdate, onComplete, distanceInput, digitBuffer, buildUpdates]);
 
   const isCompleted = set.completed === true;
@@ -106,7 +106,7 @@ const CardioSetRow = memo(function CardioSetRow({
   const prevHint = [prevDist, prevDur].filter(Boolean).join(" / ") || "—";
 
   const completedBg = isCompleted ? colors.successLight + "80" : "transparent";
-  const inputBg = isCompleted ? colors.successLight : colors.inputBackground;
+  const inputBg = isCompleted ? colors.successLight : colors.surfaceSecondary;
   const inputColor = isCompleted ? colors.success : colors.text;
 
   return (

@@ -7,6 +7,7 @@ import { showAlert } from "@/utils/alert";
 import { useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { db } from "@/backend/db";
 import { PROGRAMS, Program, ProgramRoutine } from "@/utils/programsData";
 
@@ -34,6 +35,7 @@ const EQUIP_LABELS: Record<EquipFilter, string> = {
 };
 
 export default function ExploreScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const { colors } = useTheme();
 
@@ -52,6 +54,18 @@ export default function ExploreScreen() {
 
   const importProgram = async (program: Program) => {
     setImporting(true);
+    // All or nothing: if any part fails, remove the routines already created
+    // so a retry doesn't leave duplicates or half-filled routines behind.
+    const created: number[] = [];
+    const fail = async (message: string) => {
+      const results = await Promise.all(created.map((id) =>
+        db.deleteRoutine(id).then((r: any) => !r?.error, () => false)));
+      setImporting(false);
+      const leftovers = results.filter((ok) => !ok).length;
+      showAlert("Couldn't add program", leftovers > 0
+        ? `${message}\n\n${leftovers} partly added routine${leftovers > 1 ? "s" : ""} couldn't be removed. You may want to delete ${leftovers > 1 ? "them" : "it"} from My Routines.`
+        : message);
+    };
     try {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
@@ -67,11 +81,8 @@ export default function ExploreScreen() {
           description: `Part of ${program.name}`,
           user_id: userId,
         });
-        if (routineErr || !newRoutine) {
-          showAlert("Error", routineErr?.message ?? "Failed to create routine.");
-          setImporting(false);
-          return;
-        }
+        if (routineErr || !newRoutine) return fail(routineErr?.message ?? "Failed to create routine.");
+        created.push(newRoutine.routine_id);
 
         for (let exIdx = 0; exIdx < routine.exercises.length; exIdx++) {
           const ex = routine.exercises[exIdx];
@@ -82,16 +93,17 @@ export default function ExploreScreen() {
             exercise_order: exIdx + 1,
             exercise_type: 'strength',
           });
-          if (exErr || !newEx) continue;
+          if (exErr || !newEx) return fail(exErr?.message ?? `Failed to add ${ex.exercise_name}.`);
 
           for (let setIdx = 0; setIdx < ex.sets; setIdx++) {
-            await db.insertRoutineExerciseSet({
+            const { error: setErr } = await db.insertRoutineExerciseSet({
               routine_exercise_id: newEx.routine_exercise_id,
               set_number: setIdx + 1,
               target_weight: null,
               target_reps: ex.reps,
               is_warmup: false,
             });
+            if (setErr) return fail(setErr.message ?? "Failed to add sets.");
           }
         }
       }
@@ -103,8 +115,7 @@ export default function ExploreScreen() {
         [{ text: "Got it", onPress: () => router.back() }]
       );
     } catch (e: any) {
-      setImporting(false);
-      showAlert("Error", e?.message ?? "Something went wrong.");
+      await fail(e?.message ?? "Something went wrong.");
     }
   };
 
@@ -123,7 +134,7 @@ export default function ExploreScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Pressable onPress={() => router.back()} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </Pressable>
@@ -229,11 +240,12 @@ function ProgramDetail({
   const levelLabel = program.level === 'beginner' ? 'Beginner' : 'Intermediate';
   const goalLabel = program.goal === 'hypertrophy' ? 'Muscle' : program.goal === 'strength' ? 'Strength' : 'Weight Loss';
   const equipLabel = program.equipment === 'gym' ? 'Gym Equipment' : 'Equipment-Free';
+  const headerTop = useHeaderTop();
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Pressable onPress={onBack} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </Pressable>

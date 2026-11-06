@@ -3,14 +3,21 @@ import { ActivityIndicator, FlatList, Image, Modal, Pressable, RefreshControl, S
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db, isOnline } from "@/backend/db";
+import { db } from "@/backend/db";
+import { useConnectionMode } from "@/utils/useConnectionMode";
+import MuscleSplitCard from "@/components/MuscleSplitCard";
+import type { SplitEntry } from "@/utils/muscleSplit";
+import exercisesData from "@/assets/data/exercises.json";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits } from "@/utils/units";
+import { useHeaderTop } from "@/utils/useHeaderTop";
+import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
+import WorkoutCalendarModal from "@/components/WorkoutCalendarModal";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
 import WorkoutChart from "@/components/WorkoutChart";
-import { formatDistance, formatDurationShort, formatPace } from "@/utils/cardioUtils";
+import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardioUtils";
+import { sessionDurationMins } from "@/utils/duration";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 
@@ -74,17 +81,6 @@ function calcStreaks(sessions: SessionWithMeta[]) {
   return { current, longest };
 }
 
-function getDurationMins(sessionDate: string, startTime: string, endTime: string | null): number | null {
-  if (!endTime) return null;
-  const toDate = (t: string) =>
-    t.includes("T") || t.length > 10 ? new Date(t) : new Date(`${sessionDate}T${t}`);
-  const start = toDate(startTime);
-  const end = toDate(endTime);
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
-  const ms = end.getTime() - start.getTime();
-  if (ms < 0) return null;
-  return Math.floor(ms / 60000);
-}
 
 function formatMinutes(mins: number): string {
   if (mins === 0) return "—";
@@ -107,9 +103,16 @@ type AllStats = {
   avgDuration: number;
 };
 
+// exercise id → primary muscles, for the muscle split card.
+const LIBRARY_MUSCLES = new Map<string, string[]>(
+  (exercisesData as { id: string; primaryMuscles?: string[] }[]).map((e) => [e.id, e.primaryMuscles ?? []]),
+);
+
 export default function ProfileScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const { colors } = useTheme();
+  const connection = useConnectionMode();
   const { toDisplay, label: unitLabel } = useUnits();
 
   const [loading, setLoading] = useState(true);
@@ -117,6 +120,13 @@ export default function ProfileScreen() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<any>(null);
   const [sessions, setSessions] = useState<SessionWithMeta[]>([]);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [splitEntries, setSplitEntries] = useState<SplitEntry[]>([]);
+  const [customMuscles, setCustomMuscles] = useState<Record<string, string[]>>({});
+  const musclesOf = useCallback(
+    (id: string) => customMuscles[id] ?? LIBRARY_MUSCLES.get(id),
+    [customMuscles],
+  );
   const [stats, setStats] = useState<AllStats>({
     totalWorkouts: 0, totalVolume: 0, totalExercises: 0, totalSets: 0,
     totalReps: 0, heaviestWeight: 0, longestSession: 0, avgDuration: 0,
@@ -124,7 +134,7 @@ export default function ProfileScreen() {
   const [selectedStats, setSelectedStats] = useState<StatId[]>(DEFAULT_STATS);
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'strength' | 'cardio'>('all');
-  const [distanceUnit, setDistanceUnit] = useState<'km' | 'mi'>('km');
+  const { distanceUnit } = useDistanceUnit();
   const [cardioStats, setCardioStats] = useState<{
     totalDistanceMeters: number;
     totalDurationSeconds: number;
@@ -149,11 +159,6 @@ export default function ProfileScreen() {
     }
     setError(null);
 
-    // Load distance unit preference
-    AsyncStorage.getItem('@gym_tracker_distance_unit').then((val) => {
-      if (val === 'mi') setDistanceUnit('mi');
-    });
-
     // Load saved stat selection in parallel with the DB fetch
     const savedStatsPromise = AsyncStorage.getItem(STATS_STORAGE_KEY).then((val) => {
       if (!val) return DEFAULT_STATS;
@@ -168,12 +173,19 @@ export default function ProfileScreen() {
       const { data: { user } } = await db.getUser();
       if (!user) { setError("Not authenticated"); return; }
 
-      const [profileResult, sessionsResult, savedStatIds, cardioStatsResult] = await Promise.all([
+      const [profileResult, sessionsResult, savedStatIds, cardioStatsResult, customResult] = await Promise.all([
         db.getUserProfile(user.id),
         db.getWorkoutSessions(user.id),
         savedStatsPromise,
         db.getCardioStats(user.id),
+        db.getCustomExercises(user.id),
       ]);
+
+      const custom: Record<string, string[]> = {};
+      for (const c of customResult?.data ?? []) {
+        if (c.primary_muscle) custom[c.exercise_id] = [c.primary_muscle];
+      }
+      setCustomMuscles(custom);
 
       if (cardioStatsResult.data) setCardioStats(cardioStatsResult.data);
 
@@ -218,7 +230,7 @@ export default function ProfileScreen() {
           const isCardio = ex.exercise_type === 'cardio';
           if (isCardio) sessionHasCardio = true;
           for (const set of setsByExercise[ex.session_exercise_id] ?? []) {
-            if (set.completed) {
+            if (set.completed !== false) { // null on older rows counts as done, as in history
               overallSets++;
               if (!isCardio) {
                 if (set.weight != null && set.reps != null) {
@@ -260,7 +272,7 @@ export default function ProfileScreen() {
       let totalDurationMins = 0;
       let durationCount = 0;
       for (const s of sessionsData) {
-        const mins = getDurationMins(s.session_date, s.start_time, s.end_time);
+        const mins = sessionDurationMins(s.session_date, s.start_time, s.end_time);
         if (mins !== null) {
           longestSession = Math.max(longestSession, mins);
           totalDurationMins += mins;
@@ -269,6 +281,13 @@ export default function ProfileScreen() {
       }
       const avgDuration = durationCount > 0 ? Math.round(totalDurationMins / durationCount) : 0;
 
+      setSplitEntries(sessionsData.flatMap((s: any) =>
+        (exercisesBySession[s.session_id] ?? []).map((ex: any) => ({
+          date: s.session_date,
+          exerciseId: ex.exercise_id,
+          exerciseType: ex.exercise_type,
+          sets: setsByExercise[ex.session_exercise_id] ?? [],
+        }))));
       setSessions(enriched);
       setStats({
         totalWorkouts: enriched.length,
@@ -294,7 +313,11 @@ export default function ProfileScreen() {
 
   const handleDeleteSession = useCallback((sessionId: number) => {
     setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
-  }, []);
+    // Totals (workouts, volume, cardio) come from the full load; redo it
+    // quietly so they don't keep counting the deleted workout.
+    lastFetchedRef.current = 0;
+    loadProfile();
+  }, [loadProfile]);
 
   const handleEditWorkout = useCallback((sessionId: number) => {
     hasDataRef.current = false;
@@ -327,7 +350,7 @@ export default function ProfileScreen() {
     switch (id) {
       case "totalWorkouts":   return { value: String(stats.totalWorkouts), label: "Workouts" };
       case "totalSets":       return { value: String(stats.totalSets), label: "Sets" };
-      case "totalVolume":     return { value: (toDisplay(stats.totalVolume) ?? stats.totalVolume).toLocaleString(), label: `Vol (${unitLabel})` };
+      case "totalVolume":     return { value: formatVolume(toDisplay(stats.totalVolume)), label: `Vol (${unitLabel})` };
       case "totalReps":       return { value: stats.totalReps.toLocaleString(), label: "Reps" };
       case "uniqueExercises": return { value: String(stats.totalExercises), label: "Exercises" };
       case "heaviestWeight":  return { value: (toDisplay(stats.heaviestWeight) ?? stats.heaviestWeight).toLocaleString(), label: `Best (${unitLabel})` };
@@ -363,7 +386,7 @@ export default function ProfileScreen() {
   const listHeader = (
     <>
       {/* ── Top bar ── */}
-      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
+      <View style={[styles.topBar, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Text style={[styles.username, { color: colors.text }]}>
           {profile?.username ?? "Profile"}
         </Text>
@@ -379,9 +402,9 @@ export default function ProfileScreen() {
         </Pressable>
       </View>
 
-      {!isOnline && (
+      {connection === "offline" && (
         <View style={[styles.offlineBanner, { backgroundColor: colors.warningLight }]}>
-          <Text style={[styles.offlineText, { color: colors.warning }]}>⚡ Offline Mode</Text>
+          <Text style={[styles.offlineText, { color: colors.warning }]}>Offline. Showing saved data; workouts sync when you reconnect.</Text>
         </View>
       )}
       {error && (
@@ -447,12 +470,24 @@ export default function ProfileScreen() {
       <View style={[styles.card, { backgroundColor: colors.surface, marginHorizontal: 16, marginBottom: 12 }]}>
         <View style={styles.cardHeader}>
           <Text style={[styles.cardTitle, { color: colors.textSecondary }]}>THIS WEEK</Text>
-          {longestStreak > 0 && (
-            <View style={styles.bestStreakRow}>
-              <Ionicons name="trophy-outline" size={14} color={colors.primary} />
-              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} days</Text>
-            </View>
-          )}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            {longestStreak > 0 && (
+              <View style={styles.bestStreakRow}>
+                <Ionicons name="trophy-outline" size={14} color={colors.primary} />
+                <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} {longestStreak === 1 ? "day" : "days"}</Text>
+              </View>
+            )}
+            <Pressable
+              onPress={() => setCalendarOpen(true)}
+              hitSlop={8}
+              style={styles.bestStreakRow}
+              accessibilityRole="button"
+              accessibilityLabel="Open workout calendar"
+            >
+              <Ionicons name="calendar-outline" size={14} color={colors.primary} />
+              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Calendar</Text>
+            </Pressable>
+          </View>
         </View>
         <View style={styles.dotsRow}>
           {last7.map(({ dateStr, label }, i) => {
@@ -473,6 +508,27 @@ export default function ProfileScreen() {
           })}
         </View>
       </View>
+
+      {/* ── Personal records ── */}
+      <Pressable
+        onPress={() => router.push("/records" as any)}
+        style={({ pressed }) => [styles.card, {
+          backgroundColor: pressed ? colors.surfaceSecondary : colors.surface,
+          marginHorizontal: 16, marginBottom: 12, flexDirection: "row", alignItems: "center", gap: 12,
+        }]}
+        accessibilityRole="button"
+      >
+        <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: colors.warningLight }}>
+          <Ionicons name="trophy-outline" size={17} color={colors.warning} />
+        </View>
+        <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>Personal Records</Text>
+        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+      </Pressable>
+
+      {/* ── Muscle split ── */}
+      {sessions.length > 0 && <MuscleSplitCard entries={splitEntries} musclesOf={musclesOf} />}
+
+      <WorkoutCalendarModal visible={calendarOpen} onClose={() => setCalendarOpen(false)} sessions={sessions} />
 
       {/* ── Progress chart ── */}
       {sessions.length > 0 && <WorkoutChart sessions={sessions} />}
@@ -513,7 +569,7 @@ export default function ProfileScreen() {
             {cardioStats.fastestPaceSecPerKm != null && (
               <View>
                 <Text style={[styles.statNum, { color: colors.text, fontSize: 17 }]}>
-                  {formatPace(cardioStats.fastestPaceSecPerKm)}
+                  {formatPaceIn(cardioStats.fastestPaceSecPerKm, distanceUnit)}
                 </Text>
                 <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Best Pace</Text>
               </View>

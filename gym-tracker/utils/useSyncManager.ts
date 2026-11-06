@@ -18,9 +18,12 @@ export function useSyncManager(userId: string | null) {
         const state = await NetInfo.fetch();
         if (state.isConnected && state.isInternetReachable !== false) {
           setIsSyncing(true);
-          const { synced } = await db.syncPendingSessions(userId);
-          if (synced > 0) setLastSyncedCount(synced);
-          setIsSyncing(false);
+          try {
+            const { synced } = await db.syncPendingSessions(userId);
+            if (synced > 0) setLastSyncedCount(synced);
+          } finally {
+            setIsSyncing(false);
+          }
         }
       } catch {
         // NetInfo unavailable — skip startup sync
@@ -34,9 +37,15 @@ export function useSyncManager(userId: string | null) {
         const connected = !!(state.isConnected && state.isInternetReachable !== false);
         if (connected && wasConnected.current === false) {
           setIsSyncing(true);
-          const { synced } = await db.syncPendingSessions(userId);
-          if (synced > 0) setLastSyncedCount(synced);
-          setIsSyncing(false);
+          try {
+            const { synced } = await db.syncPendingSessions(userId);
+            if (synced > 0) setLastSyncedCount(synced);
+          } catch {
+            // Stays queued; the next reconnect tries again.
+          } finally {
+            // Without this, a failed sync left "Syncing…" up for good.
+            setIsSyncing(false);
+          }
         }
         wasConnected.current = connected;
       });
@@ -46,6 +55,14 @@ export function useSyncManager(userId: string | null) {
 
     return () => unsubscribe?.();
   }, [userId]);
+
+  // "N workouts synced!" is a confirmation, not a status: it used to stay
+  // pinned above every screen for the rest of the session.
+  useEffect(() => {
+    if (lastSyncedCount === 0) return;
+    const t = setTimeout(() => setLastSyncedCount(0), 4000);
+    return () => clearTimeout(t);
+  }, [lastSyncedCount]);
 
   return { isSyncing, lastSyncedCount };
 }

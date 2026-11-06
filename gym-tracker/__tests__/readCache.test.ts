@@ -3,6 +3,7 @@ import {
   readCache,
   clearReadCache,
   cachedRead,
+  isNetworkError,
 } from "../backend/readCache";
 
 // ─── AsyncStorage mock ────────────────────────────────────────────────────────
@@ -111,6 +112,33 @@ describe("cachedRead", () => {
     expect(await readCache("errkey")).toBeNull();
   });
 
+  it("online: serves the cache when the server can't be reached", async () => {
+    await writeCache("k", ["cached"]);
+    const onlineFn = jest.fn().mockResolvedValue({ data: null, error: { message: "TypeError: Network request failed" } });
+    const res = await cachedRead(true, "k", onlineFn, jest.fn());
+    expect(res).toEqual({ data: ["cached"], error: null });
+  });
+
+  it("online: serves the cache when the query throws a fetch error", async () => {
+    await writeCache("k", ["cached"]);
+    const onlineFn = jest.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const res = await cachedRead(true, "k", onlineFn, jest.fn());
+    expect(res).toEqual({ data: ["cached"], error: null });
+  });
+
+  it("online: still returns real server errors (not network) as errors", async () => {
+    await writeCache("k", ["cached"]);
+    const onlineFn = jest.fn().mockResolvedValue({ data: null, error: { message: "permission denied for table" } });
+    const res = await cachedRead(true, "k", onlineFn, jest.fn());
+    expect(res.error).toEqual({ message: "permission denied for table" });
+  });
+
+  it("online: returns the network error when nothing is cached", async () => {
+    const err = { message: "Failed to fetch" };
+    const res = await cachedRead(true, "nothing", jest.fn().mockResolvedValue({ data: null, error: err }), jest.fn());
+    expect(res.error).toBe(err);
+  });
+
   it("offline: serves cached data without calling the offline fallback", async () => {
     await writeCache("k", [{ cached: true }]);
     const onlineFn = jest.fn();
@@ -132,5 +160,20 @@ describe("cachedRead", () => {
     expect(res).toEqual({ data: ["local"], error: null });
     expect(offlineFn).toHaveBeenCalledTimes(1);
     expect(onlineFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("isNetworkError", () => {
+  it("recognises fetch failures", () => {
+    expect(isNetworkError(new TypeError("Network request failed"))).toBe(true);
+    expect(isNetworkError({ message: "TypeError: Failed to fetch" })).toBe(true);
+    expect(isNetworkError({ name: "AbortError", message: "aborted" })).toBe(true);
+    expect(isNetworkError({ message: "FetchError: request timed out" })).toBe(true);
+  });
+
+  it("ignores server-side errors", () => {
+    expect(isNetworkError(null)).toBe(false);
+    expect(isNetworkError({ message: "JWT expired", code: "PGRST301" })).toBe(false);
+    expect(isNetworkError({ message: "duplicate key value violates unique constraint" })).toBe(false);
   });
 });

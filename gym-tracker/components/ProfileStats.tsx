@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits } from "@/utils/units";
+import { useUnits, formatVolume } from "@/utils/units";
 
 type ProfileStatsProps = {
   totalWorkouts: number;
@@ -20,7 +20,7 @@ export default function ProfileStats({ totalWorkouts, totalVolume, totalExercise
       </View>
       <View style={[styles.divider, { backgroundColor: colors.border }]} />
       <View style={styles.stat}>
-        <Text style={[styles.statValue, { color: colors.text }]}>{(toDisplay(totalVolume) ?? totalVolume).toLocaleString()}</Text>
+        <Text style={[styles.statValue, { color: colors.text }]}>{formatVolume(toDisplay(totalVolume))}</Text>
         <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Volume ({unitLabel})</Text>
       </View>
       <View style={[styles.divider, { backgroundColor: colors.border }]} />

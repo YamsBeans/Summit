@@ -3,8 +3,21 @@ import type { ExerciseType } from "./types";
 
 const QUEUE_KEY = "@gym_tracker_offline_sessions";
 const SESSION_ORIGIN_KEY = "@gym_tracker_active_session_origin";
+const SYNCED_IDS_KEY = "@gym_tracker_synced_local_sessions";
+
+// Every read-modify-write of the queue goes through this chain, so a workout
+// finished while a sync is running can't be dropped by the sync writing back
+// its older copy of the queue (or resurrect one that was just uploaded).
+let queueLock: Promise<unknown> = Promise.resolve();
+function withQueueLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = queueLock.then(fn, fn);
+  queueLock = run.catch(() => {});
+  return run;
+}
 
 export type PendingSession = {
+  /** The workout's on-device session_id (absent on entries from older builds). */
+  local_session_id?: number;
   session: {
     routine_id: number | null;
     session_name: string;
@@ -13,6 +26,7 @@ export type PendingSession = {
     end_time: string | null;
     notes: string | null;
     user_id: string;
+    photo_url?: string | null;
   };
   exercises: Array<{
     session_exercise_id: number; // local ID used to map sets
@@ -37,10 +51,32 @@ export type PendingSession = {
   }>;
 };
 
-export async function enqueuePendingSession(pending: PendingSession): Promise<void> {
-  const existing = await getPendingQueue();
-  existing.push(pending);
-  await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(existing));
+export function enqueuePendingSession(pending: PendingSession): Promise<void> {
+  return withQueueLock(async () => {
+    const existing = await getPendingQueue();
+    // Re-queuing the same offline workout replaces it rather than doubling it.
+    const i = pending.local_session_id != null
+      ? existing.findIndex((p) => p.local_session_id === pending.local_session_id)
+      : -1;
+    if (i >= 0) existing[i] = pending;
+    else existing.push(pending);
+    await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(existing));
+  });
+}
+
+/** Change the queued copy of an offline workout (e.g. a photo or notes added after finishing). */
+export function updateQueuedSession(
+  localSessionId: number,
+  updates: Partial<PendingSession["session"]>,
+): Promise<boolean> {
+  return withQueueLock(async () => {
+    const existing = await getPendingQueue();
+    const entry = existing.find((p) => p.local_session_id === localSessionId);
+    if (!entry) return false;
+    entry.session = { ...entry.session, ...updates };
+    await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(existing));
+    return true;
+  });
 }
 
 export async function getPendingQueue(): Promise<PendingSession[]> {
@@ -52,14 +88,37 @@ export async function getPendingQueue(): Promise<PendingSession[]> {
   }
 }
 
-export async function removeFromQueue(indices: number[]): Promise<void> {
-  const existing = await getPendingQueue();
-  const remaining = existing.filter((_, i) => !indices.includes(i));
-  if (remaining.length === 0) {
-    await AsyncStorage.removeItem(QUEUE_KEY);
-  } else {
-    await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(remaining));
+export function removeFromQueue(indices: number[]): Promise<void> {
+  // Safe under the lock: new entries are only ever appended (or replace an
+  // entry in place), so indices read at the start of a sync still match.
+  return withQueueLock(async () => {
+    const existing = await getPendingQueue();
+    const remaining = existing.filter((_, i) => !indices.includes(i));
+    if (remaining.length === 0) {
+      await AsyncStorage.removeItem(QUEUE_KEY);
+    } else {
+      await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(remaining));
+    }
+  });
+}
+
+// Offline workouts that have been uploaded: local session_id → server
+// session_id. Lets a later change to the workout (photo, notes) reach the
+// server copy, and tells start-up which local copies are safe to drop.
+export async function getSyncedLocalSessions(): Promise<Record<string, number>> {
+  try {
+    const raw = await AsyncStorage.getItem(SYNCED_IDS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
   }
+}
+
+export function markLocalSessionsSynced(map: Record<number, number>): Promise<void> {
+  return withQueueLock(async () => {
+    const existing = await getSyncedLocalSessions();
+    await AsyncStorage.setItem(SYNCED_IDS_KEY, JSON.stringify({ ...existing, ...map }));
+  });
 }
 
 export async function getPendingCount(): Promise<number> {
@@ -84,4 +143,13 @@ export async function getSessionOrigin(): Promise<{ sessionId: number; isLocal: 
 
 export async function clearSessionOrigin(): Promise<void> {
   await AsyncStorage.removeItem(SESSION_ORIGIN_KEY);
+}
+
+export function forgetSyncedLocalSessions(localIds: number[]): Promise<void> {
+  if (localIds.length === 0) return Promise.resolve();
+  return withQueueLock(async () => {
+    const existing = await getSyncedLocalSessions();
+    for (const id of localIds) delete existing[String(id)];
+    await AsyncStorage.setItem(SYNCED_IDS_KEY, JSON.stringify(existing));
+  });
 }

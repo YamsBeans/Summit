@@ -1,8 +1,26 @@
 import { FlatList, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { showAlert } from "@/utils/alert";
+import { useConnectionMode } from "@/utils/useConnectionMode";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import exercisesData from "@/assets/data/exercises.json";
 import { db } from "@/backend/db";
+import {
+  MUSCLE_GROUPS,
+  MuscleGroup,
+  matchesMuscleGroup,
+  pushRecent,
+  searchExercises,
+} from "@/utils/exerciseSearch";
+
+const RECENT_KEY = "@gym_tracker_recent_exercises";
+const SEARCH_LIMIT = 100;
+
+type Row =
+  | { kind: "header"; key: string; title: string }
+  | { kind: "exercise"; key: string; ex: Exercise };
 
 type ExerciseType = 'strength' | 'cardio' | 'stretching';
 
@@ -33,6 +51,17 @@ const CATEGORY_COLORS: Record<ExerciseType, { bg: string; text: string }> = {
   strength: { bg: '', text: '' }, // uses primary from theme, set at render
 };
 
+const titleCase = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase());
+
+// "Chest · Barbell"; skips what's unknown instead of printing "Unknown • none".
+function exerciseSubtitle(ex: Exercise): string {
+  const parts = [
+    (ex.primaryMuscles ?? []).filter(Boolean).map(titleCase).join(", "),
+    ex.equipment && ex.equipment !== "other" ? titleCase(ex.equipment) : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : ex.isCustom ? "Custom exercise" : "";
+}
+
 function getExerciseType(ex: Exercise): ExerciseType {
   const cat = (ex.category ?? ex.exercise_type ?? 'strength').toLowerCase();
   if (cat === 'cardio') return 'cardio';
@@ -47,7 +76,9 @@ type Props = {
 };
 
 export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
+  const headerTop = useHeaderTop();
   const { colors } = useTheme();
+  const connection = useConnectionMode();
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<CategoryTab>('all');
   const [customExercises, setCustomExercises] = useState<Exercise[]>([]);
@@ -56,12 +87,37 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
   const [newMuscle, setNewMuscle] = useState("");
   const [newEquip, setNewEquip] = useState("");
   const [newType, setNewType] = useState<ExerciseType>('strength');
+  const [muscle, setMuscle] = useState<MuscleGroup | null>(null);
+  const [recentIds, setRecentIds] = useState<string[]>([]);
+  const [recentKey, setRecentKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!visible) return;
-    db.getUser().then(({ data }) => {
+    db.getUser().then(async ({ data }) => {
       const userId = data?.user?.id;
       if (!userId) return;
+      // Recently used exercises, like Strong/Hevy show before you search.
+      // Seeded from the last few workouts the first time.
+      try {
+        const key = `${RECENT_KEY}:${userId}`;
+        setRecentKey(key);
+        const raw = await AsyncStorage.getItem(key);
+        let ids: string[] = raw ? JSON.parse(raw) : [];
+        if (ids.length === 0) {
+          const { data: sessions } = await db.getWorkoutSessions(userId);
+          const recentSessions = (sessions ?? []).slice(0, 6).map((s: any) => s.session_id);
+          const { data: exs } = await db.getBatchSessionExercises(recentSessions);
+          const order = new Map<number, number>(recentSessions.map((id: number, i: number) => [id, i]));
+          ids = [...(exs ?? [])]
+            .sort((a: any, b: any) => (order.get(a.session_id) ?? 0) - (order.get(b.session_id) ?? 0) || a.exercise_order - b.exercise_order)
+            .map((e: any) => e.exercise_id)
+            .filter((id: string, i: number, all: string[]) => all.indexOf(id) === i)
+            .slice(0, 12);
+        }
+        setRecentIds(ids);
+      } catch {
+        // Recents are a convenience; the full list still works.
+      }
       db.getCustomExercises(userId).then(({ data: customs }) => {
         if (customs) {
           setCustomExercises(
@@ -80,43 +136,80 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
     });
   }, [visible]);
 
-  const allExercises: Exercise[] = [
+  const allExercises: Exercise[] = useMemo(() => [
     ...customExercises,
     ...(exercisesData as Exercise[]),
-  ];
+  ], [customExercises]);
 
-  const categoryFiltered = activeCategory === 'all'
-    ? allExercises
-    : allExercises.filter((ex) => getExerciseType(ex) === activeCategory);
+  const filteredPool = useMemo(() => allExercises.filter((ex) =>
+    (activeCategory === 'all' || getExerciseType(ex) === activeCategory) && matchesMuscleGroup(ex, muscle)
+  ), [allExercises, activeCategory, muscle]);
 
-  const filtered = search.length === 0
-    ? []
-    : categoryFiltered.filter(
-        (ex) => ex.name && ex.name.toLowerCase().includes(search.toLowerCase())
-      );
+  const searching = search.trim().length > 0;
+  const filtered = useMemo(
+    () => (searching ? searchExercises(filteredPool, search) : []),
+    [filteredPool, search, searching],
+  );
+
+  // With no search: Recent, then everything A–Z, so you can browse (the
+  // list used to stay blank until you typed).
+  const rows: Row[] = useMemo(() => {
+    if (searching) {
+      return filtered.slice(0, SEARCH_LIMIT).map((ex) => ({ kind: "exercise" as const, key: ex.id, ex }));
+    }
+    const byId = new Map(filteredPool.map((ex) => [ex.id, ex]));
+    const recent = recentIds.map((id) => byId.get(id)).filter(Boolean) as Exercise[];
+    const all = [...filteredPool].sort((a, b) => a.name.localeCompare(b.name));
+    const out: Row[] = [];
+    if (recent.length > 0) {
+      out.push({ kind: "header", key: "h-recent", title: "Recent" });
+      for (const ex of recent) out.push({ kind: "exercise", key: `r-${ex.id}`, ex });
+    }
+    out.push({ kind: "header", key: "h-all", title: `All exercises (${all.length})` });
+    for (const ex of all) out.push({ kind: "exercise", key: ex.id, ex });
+    return out;
+  }, [searching, filtered, filteredPool, recentIds]);
 
   const handleClose = () => {
     setSearch("");
+    setMuscle(null);
     setShowCreateForm(false);
     setNewName(""); setNewMuscle(""); setNewEquip(""); setNewType('strength');
     onClose();
   };
 
   const handleSelect = (exercise: Exercise) => {
+    const nextRecent = pushRecent(recentIds, exercise.id);
+    setRecentIds(nextRecent);
+    if (recentKey) AsyncStorage.setItem(recentKey, JSON.stringify(nextRecent)).catch(() => {});
     setSearch("");
     setShowCreateForm(false);
     // Ensure exercise_type is set before passing to caller
     onSelect({ ...exercise, exercise_type: getExerciseType(exercise) });
   };
 
+  // A double tap used to create two custom exercises with different ids.
+  const creatingRef = useRef(false);
+  const [creating, setCreating] = useState(false);
   const handleCreate = async () => {
-    if (!newName.trim()) return;
+    if (!newName.trim() || creatingRef.current) return;
+    creatingRef.current = true;
+    setCreating(true);
+    try {
+      await createAndSelect();
+    } finally {
+      creatingRef.current = false;
+      setCreating(false);
+    }
+  };
+
+  const createAndSelect = async () => {
     const { data: userData } = await db.getUser();
     const userId = userData?.user?.id;
-    if (!userId) return;
+    if (!userId) { showAlert("Not signed in", "Sign in to create custom exercises."); return; }
     const slug = newName.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
     const exerciseId = `custom-${slug}-${Date.now()}`;
-    await db.insertCustomExercise({
+    const { error } = await db.insertCustomExercise({
       exercise_id: exerciseId,
       user_id: userId,
       name: newName.trim(),
@@ -124,6 +217,8 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
       equipment: newEquip.trim() || null,
       exercise_type: newType,
     });
+    // Selecting it anyway would log sets under an id with no exercise row.
+    if (error) { showAlert("Couldn't create exercise", error.message ?? "Please try again."); return; }
     handleSelect({
       id: exerciseId,
       name: newName.trim(),
@@ -155,7 +250,7 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
         <View style={{
           flexDirection: "row",
           alignItems: "center",
-          paddingTop: 60,
+          paddingTop: headerTop,
           paddingHorizontal: 16,
           paddingBottom: 12,
           borderBottomWidth: 1,
@@ -173,12 +268,14 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
               backgroundColor: colors.inputBackground,
               color: colors.text,
             }}
-            placeholder="Search exercises..."
+            placeholder="Search exercises"
             placeholderTextColor={colors.textTertiary}
             value={search}
             onChangeText={(t) => { setSearch(t); setShowCreateForm(false); }}
-            autoFocus
             autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
           />
           <Pressable onPress={handleClose} style={{ paddingHorizontal: 12, paddingVertical: 8 }}>
             <Text style={{ color: colors.primary, fontWeight: "600", fontSize: 16 }}>Cancel</Text>
@@ -189,7 +286,7 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          style={{ borderBottomWidth: 1, borderBottomColor: colors.border, flexGrow: 0, flexShrink: 0 }}
+          style={{ flexGrow: 0, flexShrink: 0 }}
           contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 8, gap: 8, flexDirection: 'row', alignItems: 'center' }}
         >
           {CATEGORY_TABS.map((tab) => {
@@ -214,26 +311,59 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
             );
           })}
         </ScrollView>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ borderBottomWidth: 1, borderBottomColor: colors.border, flexGrow: 0, flexShrink: 0 }}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 8, gap: 8, flexDirection: 'row', alignItems: 'center' }}
+        >
+          {MUSCLE_GROUPS.map((g) => {
+            const active = muscle === g.key;
+            return (
+              <Pressable
+                key={g.key}
+                onPress={() => setMuscle(active ? null : g.key)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                style={{
+                  paddingHorizontal: 14,
+                  paddingVertical: 5,
+                  borderRadius: 999,
+                  backgroundColor: active ? colors.primaryLight : colors.surfaceSecondary,
+                  borderWidth: 1,
+                  borderColor: active ? colors.primary : colors.border,
+                }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: '600', color: active ? colors.primary : colors.textSecondary }}>
+                  {g.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
 
         <FlatList
-          data={filtered.slice(0, 50)}
-          keyExtractor={(ex) => ex.id}
+          data={rows}
+          keyExtractor={(row) => row.key}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          initialNumToRender={20}
+          windowSize={11}
           style={{ flex: 1 }}
           contentContainerStyle={{ paddingBottom: 40 }}
-          ListHeaderComponent={search.length === 0 ? (
-            <Text style={{ textAlign: "center", color: colors.textTertiary, marginTop: 40, fontSize: 15 }}>
-              Type to search 500+ exercises
-            </Text>
-          ) : null}
           ListFooterComponent={
             <>
-              {filtered.length > 50 && (
+              {filtered.length > SEARCH_LIMIT && (
                 <Text style={{ textAlign: "center", color: colors.textTertiary, paddingVertical: 12 }}>
-                  Showing 50 of {filtered.length} — refine your search
+                  Showing {SEARCH_LIMIT} of {filtered.length} — refine your search
                 </Text>
               )}
-              {search.length > 0 && filtered.length === 0 && !showCreateForm && (
+              {!searching && filteredPool.length === 0 && (
+                <Text style={{ textAlign: "center", color: colors.textTertiary, marginTop: 32, fontSize: 15 }}>
+                  No exercises match these filters
+                </Text>
+              )}
+              {searching && filtered.length === 0 && !showCreateForm && (
                 <View style={{ alignItems: "center", marginTop: 32, paddingHorizontal: 24 }}>
                   <Text style={{ color: colors.textTertiary, fontSize: 15, marginBottom: 16 }}>
                     No exercises found for “{search}”
@@ -249,6 +379,11 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
               {showCreateForm && (
                 <View style={{ padding: 20, gap: 12 }}>
                   <Text style={{ fontSize: 16, fontWeight: "700", color: colors.text }}>New Exercise</Text>
+                  {connection === "offline" && (
+                    <Text style={{ fontSize: 13, color: colors.warning }}>
+                      You&apos;re offline. Creating an exercise needs a connection.
+                    </Text>
+                  )}
                   <TextInput
                     style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, fontSize: 15, backgroundColor: colors.inputBackground, color: colors.text }}
                     placeholder="Exercise name *"
@@ -305,15 +440,29 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
                     <Pressable
                       style={{ flex: 2, paddingVertical: 12, borderRadius: 8, backgroundColor: colors.primary, alignItems: "center" }}
                       onPress={handleCreate}
+                      disabled={creating}
                     >
-                      <Text style={{ fontWeight: "700", color: "#fff" }}>Create & Add</Text>
+                      <Text style={{ fontWeight: "700", color: "#fff" }}>{creating ? "Creating…" : "Create & Add"}</Text>
                     </Pressable>
                   </View>
                 </View>
               )}
             </>
           }
-          renderItem={({ item: ex }) => (
+          renderItem={({ item: row }) => {
+            if (row.kind === "header") {
+              return (
+                <Text style={{
+                  fontSize: 12, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase",
+                  color: colors.textTertiary, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 6,
+                  backgroundColor: colors.background,
+                }}>
+                  {row.title}
+                </Text>
+              );
+            }
+            const ex = row.ex;
+            return (
             <Pressable
               onPress={() => handleSelect(ex)}
               style={({ pressed }) => ({
@@ -337,12 +486,13 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
                   <CategoryBadge ex={ex} />
                 </View>
                 <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>
-                  {ex.primaryMuscles?.join(", ") ?? "Unknown"} • {ex.equipment ?? "none"}
+                  {exerciseSubtitle(ex)}
                 </Text>
               </View>
               <Text style={{ color: colors.primary, fontWeight: "600", fontSize: 14 }}>+ Add</Text>
             </Pressable>
-          )}
+            );
+          }}
         />
       </View>
     </Modal>
