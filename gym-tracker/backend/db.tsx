@@ -52,6 +52,16 @@ const signedPhotoCache = new Map<string, { url: string; expiresAt: number }>();
 // shouldUseSupabase = Supabase configured AND network available (runtime check)
 const shouldUseSupabase = () => isOnline && networkStatus.isConnected;
 
+// Routines, custom exercises and the profile have no offline outbox (only
+// workouts do). Writing them to the on-device store while signed in to an
+// account looked like it worked, but nothing ever synced it and reads come
+// from the server cache, so the change silently vanished. Refuse instead.
+export const OFFLINE_EDIT_MESSAGE = "You're offline. Changes to routines, exercises and your profile need a connection. Try again when you're back online.";
+const offlineAccountWrite = () =>
+  isOnline && !networkStatus.isConnected
+    ? { data: null, error: { message: OFFLINE_EDIT_MESSAGE, offline: true } }
+    : null;
+
 // A workout started with no signal lives in the on-device store (local IDs)
 // until it's finished and queued for sync. Calls about it must keep going
 // there after the signal comes back; sending its local IDs to Supabase used
@@ -625,6 +635,8 @@ export const db = {
   },
 
   updateUserProfile: async (userId: string, updates: { username?: string; bio?: string | null; avatar_url?: string | null }) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("users").update(updates).eq("user_id", userId);
     }
@@ -803,6 +815,8 @@ export const db = {
   },
 
   insertRoutine: async (routine: { routine_name: string; description: string | null; user_id: string }) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("routines").insert(routine).select().single();
     }
@@ -810,6 +824,8 @@ export const db = {
   },
 
   updateRoutine: async (routineId: number, updates: { routine_name?: string; description?: string | null; routine_order?: number }) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("routines").update(updates).eq("routine_id", routineId);
     }
@@ -817,6 +833,8 @@ export const db = {
   },
 
   deleteRoutine: async (routineId: number) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("routines").delete().eq("routine_id", routineId);
     }
@@ -844,6 +862,8 @@ export const db = {
     exercise_order: number;
     exercise_type?: 'strength' | 'cardio' | 'stretching';
   }) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("routine_exercises").insert({ exercise_type: 'strength', ...exercise }).select().single();
     }
@@ -851,6 +871,8 @@ export const db = {
   },
 
   deleteRoutineExercise: async (routineExerciseId: number) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("routine_exercises").delete().eq("routine_exercise_id", routineExerciseId);
     }
@@ -858,6 +880,8 @@ export const db = {
   },
 
   updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string; exercise_type?: 'strength' | 'cardio' | 'stretching' }) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("routine_exercises").update(updates).eq("routine_exercise_id", routineExerciseId);
     }
@@ -888,6 +912,8 @@ export const db = {
     target_distance_meters?: number | null;
     target_effort_level?: number | null;
   }) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("routine_exercise_sets").insert(set);
     }
@@ -895,6 +921,8 @@ export const db = {
   },
 
   deleteRoutineExerciseSet: async (routineSetId: number) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("routine_exercise_sets").delete().eq("routine_set_id", routineSetId);
     }
@@ -905,6 +933,8 @@ export const db = {
     routineSetId: number,
     updates: { set_number?: number; target_reps?: number | null; target_weight?: number | null; is_warmup?: boolean; target_duration_seconds?: number | null; target_distance_meters?: number | null; target_effort_level?: number | null }
   ) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase
         .from("routine_exercise_sets")
@@ -1551,6 +1581,8 @@ export const db = {
     equipment: string | null;
     exercise_type?: 'strength' | 'cardio' | 'stretching';
   }) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("custom_exercises").insert({ exercise_type: 'strength', ...exercise });
     }
@@ -1558,6 +1590,8 @@ export const db = {
   },
 
   deleteCustomExercise: async (exerciseId: string) => {
+    const offline = offlineAccountWrite();
+    if (offline) return offline;
     if (shouldUseSupabase()) {
       return supabase.from("custom_exercises").delete().eq("exercise_id", exerciseId);
     }
