@@ -197,3 +197,32 @@ export function strengthRecordFromHistory(
   const maxVol = Math.max(0, ...volumeBySession.values());
   return { max_weight: maxW || null, max_volume: maxVol || null };
 }
+
+/**
+ * Sets to mark with a live "PR" badge while logging (like Hevy's trophy):
+ * for each exercise, the first completed set with the heaviest weight, if
+ * that weight beats the stored record. Exercises with no earlier record are
+ * skipped, so a first-ever session isn't covered in badges. Matches the
+ * weight PRs that Finish will save.
+ */
+export function liveWeightPRSetIds<S extends CurrentSet & { session_set_id: number }>(
+  exercises: Array<{ session_exercise_id: number; exercise_id: string; exercise_type?: string | null }>,
+  exerciseSets: Record<number, S[]>,
+  previousRecords: PreviousRecord[],
+): Set<number> {
+  const ids = new Set<number>();
+  const prevMap = new Map(
+    previousRecords.filter((r) => r.pr_type !== "cardio").map((r) => [r.exercise_id, r]),
+  );
+  const strength = exercises.filter((e) => e.exercise_type !== "cardio");
+  for (const { exercise, sets } of groupSetsByExercise(strength, exerciseSets)) {
+    const prevMax = prevMap.get(exercise.exercise_id)?.max_weight ?? 0;
+    if (!(prevMax > 0)) continue;
+    let best: S | null = null;
+    for (const s of sets) {
+      if (s.completed && s.weight != null && s.weight > prevMax && (!best || s.weight > best.weight!)) best = s;
+    }
+    if (best) ids.add(best.session_set_id);
+  }
+  return ids;
+}

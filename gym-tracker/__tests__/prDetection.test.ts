@@ -250,3 +250,34 @@ describe("strengthRecordFromHistory", () => {
     expect(strengthRecordFromHistory([])).toEqual({ max_weight: null, max_volume: null });
   });
 });
+
+describe("liveWeightPRSetIds", () => {
+  const { liveWeightPRSetIds } = require("../utils/prDetection");
+  const exercises = [
+    { session_exercise_id: 1, exercise_id: "bench" },
+    { session_exercise_id: 2, exercise_id: "squat" },
+    { session_exercise_id: 3, exercise_id: "bench" },
+    { session_exercise_id: 4, exercise_id: "run", exercise_type: "cardio" },
+  ];
+  const set = (id: number, weight: number | null, completed = true) => ({ session_set_id: id, weight, reps: 5, completed });
+  const records = [
+    { exercise_id: "bench", max_weight: 200, max_volume: 3000, pr_type: "strength" },
+    { exercise_id: "run", max_weight: null, max_volume: null, pr_type: "cardio" },
+  ];
+
+  it("marks only the heaviest completed set above the record, across repeated instances", () => {
+    const ids = liveWeightPRSetIds(exercises, {
+      1: [set(10, 205), set(11, 210, false)],
+      3: [set(30, 215), set(31, 215)],
+    }, records);
+    expect([...ids]).toEqual([30]);
+  });
+
+  it("ignores ties, unticked sets and exercises with no record", () => {
+    const ids = liveWeightPRSetIds(exercises, {
+      1: [set(10, 200), set(11, 300, false)],
+      2: [set(20, 500)],
+    }, records);
+    expect(ids.size).toBe(0);
+  });
+});

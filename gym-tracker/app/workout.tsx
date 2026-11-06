@@ -20,7 +20,7 @@ import { useGuardedPress } from "@/utils/pressGuard";
 import ExercisePicker from "@/components/ExercisePicker";
 import RestTimerBanner from "@/components/RestTimerBanner";
 import { useRestTimer } from "@/utils/useRestTimer";
-import { detectPRs, detectCardioPRs, mergeStrengthRecord, groupSetsByExercise } from "@/utils/prDetection";
+import { detectPRs, detectCardioPRs, mergeStrengthRecord, groupSetsByExercise, liveWeightPRSetIds } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { beginRestNotification, scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
@@ -93,6 +93,8 @@ export default function WorkoutScreen() {
   const [selectedExerciseId, setSelectedExerciseId] = useState<number | null>(null);
   const [showAddExercise, setShowAddExercise] = useState(false);
   const [prevSets, setPrevSets] = useState<Record<string, any[]>>({});
+  // Records as they stood before this workout, for live PR badges.
+  const [records, setRecords] = useState<any[]>([]);
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
   // Exercises whose note box is open (it's always shown once a note exists).
   // Value bumps each time "Add/Edit Note" is chosen, which focuses the box.
@@ -179,6 +181,19 @@ export default function WorkoutScreen() {
   }, [exerciseSets]);
 
 
+  const prSetIds = useMemo(
+    () => liveWeightPRSetIds(exercises, exerciseSets, records),
+    [exercises, exerciseSets, records],
+  );
+  // A buzz when a set newly becomes a PR (not on load or when one is undone).
+  const seenPRs = useRef<Set<number> | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    const prev = seenPRs.current;
+    seenPRs.current = prSetIds;
+    if (prev && [...prSetIds].some((id) => !prev.has(id))) notifySuccess();
+  }, [prSetIds, loading]);
+
   const completedSetsCount = useMemo(() =>
     Object.values(exerciseSets).flat().filter((s) => s.completed).length,
     [exerciseSets]
@@ -222,6 +237,11 @@ export default function WorkoutScreen() {
     setExercises(exs);
 
     const userId = userResult.data?.user?.id;
+    if (userId) {
+      db.getPersonalRecords(userId)
+        .then(({ data }) => setRecords(data ?? []))
+        .catch((e) => logError("loadSession.getPersonalRecords", e));
+    }
 
     // Fetch all sets and all previous sets in parallel
     const [setsResults, prevResults] = await Promise.all([
@@ -853,6 +873,7 @@ export default function WorkoutScreen() {
                     onSetNumberPress={openSetOptions}
                     prevSet={prevSets[ex.exercise_id]?.[idx]}
                     onComplete={startRestTimer}
+                    isPR={prSetIds.has(set.session_set_id)}
                   />
                 )
               ))}
@@ -1277,16 +1298,18 @@ const SetRow = memo(function SetRow({
   prevSet,
   onComplete,
   workingNumber,
+  isPR = false,
 }: {
   set: any;
   workingNumber?: number;
+  isPR?: boolean;
   sessionExerciseId: number;
   onUpdate: (id: number, exId: number, updates: any) => void;
   onSetNumberPress: (set: any, sessionExerciseId: number) => void;
   prevSet?: any;
   onComplete?: (sessionExerciseId: number) => void;
 }) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   // Weights are stored in lbs; inputs show and accept the user's display unit.
   const { unit, toDisplay, toStorage } = useUnits();
   const displayWeight = toDisplay(set.weight);
@@ -1403,6 +1426,14 @@ const SetRow = memo(function SetRow({
         ]}>
           {isWarmup ? "W" : workingNumber ?? set.set_number}
         </Text>
+        {isPR && isCompleted && (
+          <View
+            style={[rowStyles.prBadge, { backgroundColor: colors.warning, borderColor: colors.background }]}
+            accessibilityLabel="Personal record"
+          >
+            <Ionicons name="trophy" size={9} color={isDark ? "#1a1300" : "#fff"} />
+          </View>
+        )}
       </Pressable>
 
       {/* Previous — tap to copy into this set */}
@@ -1634,6 +1665,17 @@ const rowStyles = StyleSheet.create({
     justifyContent: "center",
   },
   badgeText: { fontSize: 13, fontWeight: "700" },
+  prBadge: {
+    position: "absolute",
+    top: -6,
+    right: -7,
+    width: 17,
+    height: 17,
+    borderRadius: 9,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   prevBtn: {
     flex: 1,
     alignSelf: "stretch",
