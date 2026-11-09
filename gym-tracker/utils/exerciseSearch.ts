@@ -19,10 +19,35 @@ export const MUSCLE_GROUPS: { key: MuscleGroup; label: string; muscles: string[]
   { key: "core", label: "Core", muscles: ["abdominals"] },
 ];
 
+const LIBRARY_MUSCLES = new Set(MUSCLE_GROUPS.flatMap((g) => g.muscles));
+
+// Gym words people type for a custom exercise's muscle → the library's names.
+const MUSCLE_WORDS: Record<string, string> = {
+  ab: "abdominals", abs: "abdominals", core: "abdominals", obliques: "abdominals", oblique: "abdominals",
+  quad: "quadriceps", quads: "quadriceps", hammies: "hamstrings", calf: "calves",
+  delt: "shoulders", delts: "shoulders", shoulder: "shoulders",
+  bi: "biceps", bis: "biceps", tri: "triceps", tris: "triceps",
+  pec: "chest", pecs: "chest", pectorals: "chest",
+  lat: "lats", trap: "traps", "upper back": "middle back", back: "middle back",
+};
+
+/**
+ * A muscle name as the exercise library spells it ("Quads" → "quadriceps",
+ * "Bicep" → "biceps"), so custom exercises with free-text muscles still count
+ * in muscle filters and the Muscle Split. Unknown words come back lowercased.
+ */
+export function canonicalMuscle(name: string): string {
+  const m = name.toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+  if (LIBRARY_MUSCLES.has(m)) return m;
+  if (MUSCLE_WORDS[m]) return MUSCLE_WORDS[m];
+  if (LIBRARY_MUSCLES.has(`${m}s`)) return `${m}s`;
+  return m;
+}
+
 export function matchesMuscleGroup(ex: SearchableExercise, group: MuscleGroup | null): boolean {
   if (!group) return true;
   const muscles = MUSCLE_GROUPS.find((g) => g.key === group)?.muscles ?? [];
-  return (ex.primaryMuscles ?? []).some((m) => muscles.includes(m.toLowerCase()));
+  return (ex.primaryMuscles ?? []).some((m) => muscles.includes(canonicalMuscle(m)));
 }
 
 // Common gym shorthand → the words the exercise list uses.

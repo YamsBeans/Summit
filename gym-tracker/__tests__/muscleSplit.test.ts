@@ -9,6 +9,20 @@ describe("muscleGroupFor", () => {
     expect(muscleGroupFor(["toes"])).toBeNull();
     expect(muscleGroupFor([])).toBeNull();
   });
+
+  it("understands gym shorthand typed for custom exercises", () => {
+    expect(muscleGroupFor(["Quads"])).toBe("legs");
+    expect(muscleGroupFor(["glute"])).toBe("legs");
+    expect(muscleGroupFor(["Calf"])).toBe("legs");
+    expect(muscleGroupFor(["Hamstring"])).toBe("legs");
+    expect(muscleGroupFor(["Abs"])).toBe("core");
+    expect(muscleGroupFor(["Delts"])).toBe("shoulders");
+    expect(muscleGroupFor(["Bicep"])).toBe("arms");
+    expect(muscleGroupFor(["tricep"])).toBe("arms");
+    expect(muscleGroupFor(["Pecs"])).toBe("chest");
+    expect(muscleGroupFor(["Upper Back"])).toBe("back");
+    expect(muscleGroupFor(["Back"])).toBe("back");
+  });
 });
 
 describe("muscleSplit", () => {

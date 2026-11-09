@@ -1,4 +1,4 @@
-import { MUSCLE_GROUPS, type MuscleGroup } from "@/utils/exerciseSearch";
+import { MUSCLE_GROUPS, canonicalMuscle, type MuscleGroup } from "@/utils/exerciseSearch";
 
 export type MuscleSplitRow = { key: MuscleGroup; label: string; sets: number };
 
@@ -12,10 +12,15 @@ export type SplitEntry = {
 
 /** The muscle group an exercise counts toward (its first primary muscle). */
 export function muscleGroupFor(primaryMuscles: string[] | null | undefined): MuscleGroup | null {
-  const first = primaryMuscles?.[0]?.toLowerCase().trim();
-  if (!first) return null;
+  const raw = primaryMuscles?.[0]?.toLowerCase().trim();
+  if (!raw) return null;
+  // "Legs" / "Arms" name a group outright; anything else is one muscle,
+  // possibly in gym shorthand ("Quads", "Bicep") on a custom exercise.
+  const byName = MUSCLE_GROUPS.find((g) => g.key === raw || g.label.toLowerCase() === raw);
+  if (byName) return byName.key;
+  const first = canonicalMuscle(raw);
   for (const g of MUSCLE_GROUPS) {
-    if (g.muscles.includes(first) || g.key === first || g.label.toLowerCase() === first) return g.key;
+    if (g.muscles.includes(first)) return g.key;
   }
   return null;
 }

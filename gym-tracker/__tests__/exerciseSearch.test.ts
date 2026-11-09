@@ -50,6 +50,12 @@ describe("matchesMuscleGroup", () => {
     expect(matchesMuscleGroup(list[2], "chest")).toBe(false);
     expect(matchesMuscleGroup(list[2], null)).toBe(true);
   });
+
+  it("matches custom exercises whose muscle is typed in shorthand", () => {
+    const custom = { id: "c1", name: "Hack Squat Machine", primaryMuscles: ["Quads"] } as any;
+    expect(matchesMuscleGroup(custom, "legs")).toBe(true);
+    expect(matchesMuscleGroup({ ...custom, primaryMuscles: ["Bicep"] }, "arms")).toBe(true);
+  });
 });
 
 describe("pushRecent", () => {
