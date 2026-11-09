@@ -14,6 +14,7 @@ import { useRestTimer } from "@/utils/useRestTimer";
 import { formatRest } from "@/utils/exerciseRest";
 import { requestNotificationPermissions } from "@/utils/notifications";
 import { ModalShell, SettingItem, SettingSection } from "@/components/SettingsUI";
+import { useConnectionMode } from "@/utils/useConnectionMode";
 
 const NOTIF_KEY = "@gym_tracker_notifications";
 
@@ -154,6 +155,9 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Local-only builds have nowhere to upload a photo, so picking one could
+  // only ever end in an "upload failed" warning that keeps the sheet open.
+  const canChangePhoto = useConnectionMode() !== "local";
 
   useEffect(() => {
     if (!visible) return;
@@ -214,7 +218,6 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
       } else {
         avatarUrl = url;
         uploadedRef.current = { uri: pickedUri, url };
-        if (url) await AsyncStorage.setItem(avatarKey(userId), url).catch(() => {});
       }
     }
 
@@ -227,7 +230,13 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     const { error: err } = await db.updateUserProfile(userId, updates);
     setLoading(false);
     if (err) { setError(err.message); return; }
-    if (avatarUrl !== undefined) { setPickedUri(null); uploadedRef.current = null; }
+    if (avatarUrl !== undefined) {
+      // Cached only once the profile holds it: caching right after the upload
+      // showed a photo on reopen that the profile never saved.
+      if (avatarUrl) await AsyncStorage.setItem(avatarKey(userId), avatarUrl).catch(() => {});
+      setPickedUri(null);
+      uploadedRef.current = null;
+    }
     if (warning) { setError(warning); return; } // stay open so the warning is seen
     onClose();
   };
@@ -245,7 +254,7 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
 
           {/* ── Avatar ── */}
           <View style={profileStyles.avatarRow}>
-            <Pressable style={profileStyles.avatarWrap} onPress={handlePickImage}>
+            <Pressable style={profileStyles.avatarWrap} onPress={handlePickImage} disabled={!canChangePhoto}>
               {avatarUri ? (
                 <Image source={{ uri: avatarUri }} style={profileStyles.avatarImg} />
               ) : (
@@ -253,12 +262,14 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
                   <Text style={[profileStyles.avatarInitials, { color: colors.primary }]}>{initials}</Text>
                 </View>
               )}
-              <View style={[profileStyles.cameraBtn, { backgroundColor: colors.primary }]}>
-                <Text style={{ fontSize: 14 }}>📷</Text>
-              </View>
+              {canChangePhoto && (
+                <View style={[profileStyles.cameraBtn, { backgroundColor: colors.primary }]}>
+                  <Text style={{ fontSize: 14 }}>📷</Text>
+                </View>
+              )}
             </Pressable>
             <Text style={[profileStyles.avatarHint, { color: colors.textTertiary }]}>
-              Tap to change photo
+              {canChangePhoto ? "Tap to change photo" : "Profile photos need an online account"}
             </Text>
           </View>
 
