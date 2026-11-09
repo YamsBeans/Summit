@@ -150,3 +150,10 @@ it("save as routine removes the routine when an insert fails", async () => {
   expect(res).toEqual({ error: "Network request failed" });
   expect(deleted).toEqual([5]);
 });
+
+it("says when the half-made copy couldn't be removed", async () => {
+  const { db } = copyDb("set");
+  const res = await duplicateRoutine({ ...db, deleteRoutine: async () => ({ error: { message: "You're offline." } }) },
+    { routine_id: 9, routine_name: "Legs", description: null }, "u1");
+  expect(res).toEqual({ error: "You're offline. A partial copy was left in your routines; delete it before trying again." });
+});

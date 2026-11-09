@@ -79,8 +79,13 @@ async function fillRoutine(
   items: RoutineCopy[],
 ): Promise<{ routineId: number } | { error: string }> {
   const fail = async (err: any) => {
-    await db.deleteRoutine(routineId).catch(() => {});
-    return { error: err?.message ?? "Couldn't save every exercise. Nothing was saved, so try again." };
+    const cleanup = await db.deleteRoutine(routineId).catch((e) => ({ error: e }));
+    const why = err?.message ?? "Couldn't save every exercise.";
+    // The delete can be refused too (signal gone); say so instead of
+    // implying nothing was saved, so a retry doesn't leave two copies.
+    return cleanup?.error
+      ? { error: `${why} A partial copy was left in your routines; delete it before trying again.` }
+      : { error: why };
   };
   for (let i = 0; i < items.length; i++) {
     const { exercise, sets } = items[i];
