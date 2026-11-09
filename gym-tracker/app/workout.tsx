@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import {
-  ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { showAlert } from "@/utils/alert";
@@ -8,6 +8,7 @@ import ConfirmModal from "@/components/ConfirmModal";
 import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 import WorkoutSummaryModal from "@/components/WorkoutSummaryModal";
 import PlateCalculatorModal from "@/components/PlateCalculatorModal";
+import { ActionSheet, SheetOption } from "@/components/ActionSheet";
 import { useExerciseRest, resolveRest, formatRest, REST_CHOICES } from "@/utils/exerciseRest";
 import { buildWorkoutSummary, workoutNumberFrom, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
@@ -1003,184 +1004,102 @@ export default function WorkoutScreen() {
       />
 
       {/* Set options bottom sheet */}
-      <Modal visible={setOptionsVisible} transparent animationType="slide" onRequestClose={closeSetOptions}>
-        <Pressable style={modalStyles.overlay} onPress={closeSetOptions}>
-          <View style={[modalStyles.sheet, { backgroundColor: colors.surface }]}>
-            <View style={[modalStyles.handle, { backgroundColor: colors.border }]} />
-            <Text style={[modalStyles.sheetTitle, { color: colors.textSecondary }]}>
-              {selectedSetLabel}
-            </Text>
-
-            <Pressable style={[modalStyles.option, { borderBottomColor: colors.border }]} onPress={handleToggleWarmup}>
-              <View style={[modalStyles.iconWrap, { backgroundColor: colors.warningLight }]}>
-                <Text style={{ fontSize: 16 }}>🔥</Text>
-              </View>
-              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>
-                {selectedSet?.is_warmup ? "Remove Warmup" : "Mark as Warmup"}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-            </Pressable>
-
-            {exercises.find((e) => e.session_exercise_id === selectedExerciseId)?.exercise_type !== "cardio" && (
-              <Pressable
-                style={[modalStyles.option, { borderBottomColor: colors.border }]}
-                onPress={() => {
-                  const ex = exercises.find((e) => e.session_exercise_id === selectedExerciseId);
-                  const exSets = exerciseSets[selectedExerciseId ?? -1] ?? [];
-                  const idx = exSets.findIndex((s) => s.session_set_id === selectedSet?.session_set_id);
-                  const prev = ex ? previousSetFor(prevSets[ex.exercise_id], exSets, idx) : null;
-                  const w = toDisplay(selectedSet?.weight ?? prev?.weight ?? null);
-                  closeSetOptions();
-                  setTimeout(() => setPlateWeight(w), Platform.OS === "ios" ? 400 : 0);
-                }}
-              >
-                <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
-                  <Ionicons name="barbell-outline" size={16} color={colors.primary} />
-                </View>
-                <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Plate Calculator</Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-              </Pressable>
-            )}
-
-            <Pressable style={modalStyles.option} onPress={handleRemoveSet}>
-              <View style={[modalStyles.iconWrap, { backgroundColor: colors.dangerLight }]}>
-                <Ionicons name="trash-outline" size={16} color={colors.danger} />
-              </View>
-              <Text style={[modalStyles.optionLabel, { color: colors.danger }]}>Remove Set</Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.danger} style={{ opacity: 0.4 }} />
-            </Pressable>
-
-            <Pressable
-              style={[modalStyles.cancelBtn, { backgroundColor: colors.surfaceSecondary }]}
-              onPress={closeSetOptions}
-            >
-              <Text style={[modalStyles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
-            </Pressable>
-          </View>
-        </Pressable>
-      </Modal>
+      <ActionSheet visible={setOptionsVisible} onClose={closeSetOptions} title={selectedSetLabel}>
+        <SheetOption
+          emoji="🔥"
+          tone="warning"
+          label={selectedSet?.is_warmup ? "Remove Warmup" : "Mark as Warmup"}
+          onPress={handleToggleWarmup}
+        />
+        {exercises.find((e) => e.session_exercise_id === selectedExerciseId)?.exercise_type !== "cardio" && (
+          <SheetOption
+            icon="barbell-outline"
+            label="Plate Calculator"
+            onPress={() => {
+              const ex = exercises.find((e) => e.session_exercise_id === selectedExerciseId);
+              const exSets = exerciseSets[selectedExerciseId ?? -1] ?? [];
+              const idx = exSets.findIndex((s) => s.session_set_id === selectedSet?.session_set_id);
+              const prev = ex ? previousSetFor(prevSets[ex.exercise_id], exSets, idx) : null;
+              const w = toDisplay(selectedSet?.weight ?? prev?.weight ?? null);
+              closeSetOptions();
+              setTimeout(() => setPlateWeight(w), Platform.OS === "ios" ? 400 : 0);
+            }}
+          />
+        )}
+        <SheetOption icon="trash-outline" tone="danger" label="Remove Set" onPress={handleRemoveSet} last />
+      </ActionSheet>
 
       {/* Exercise options bottom sheet */}
-      <Modal visible={exerciseOptionsVisible} transparent animationType="slide" onRequestClose={closeExerciseOptions}>
-        <Pressable style={modalStyles.overlay} onPress={closeExerciseOptions}>
-          <View style={[modalStyles.sheet, { backgroundColor: colors.surface }]}>
-            <View style={[modalStyles.handle, { backgroundColor: colors.border }]} />
-            <Text style={[modalStyles.sheetTitle, { color: colors.textSecondary }]} numberOfLines={1}>
-              {selectedExerciseForOptions?.exercise_name}
-            </Text>
+      <ActionSheet visible={exerciseOptionsVisible} onClose={closeExerciseOptions} title={selectedExerciseForOptions?.exercise_name}>
+        <SheetOption
+          icon="create-outline"
+          label={selectedExerciseForOptions?.notes ? "Edit Note" : "Add Note"}
+          onPress={() => {
+            const ex = selectedExerciseForOptions;
+            closeExerciseOptions();
+            if (ex) setNoteFocus((prev) => ({ ...prev, [ex.session_exercise_id]: (prev[ex.session_exercise_id] ?? 0) + 1 }));
+          }}
+        />
+        {exercises.length > 1 && (() => {
+          const idx = exercises.findIndex((e) => e.session_exercise_id === selectedExerciseForOptions?.session_exercise_id);
+          const btn = (dir: -1 | 1, icon: "arrow-up" | "arrow-down", label: string, disabled: boolean) => (
             <Pressable
-              style={[modalStyles.option, { borderBottomColor: colors.border }]}
+              key={label}
+              disabled={disabled}
               onPress={() => {
                 const ex = selectedExerciseForOptions;
                 closeExerciseOptions();
-                if (ex) setNoteFocus((prev) => ({ ...prev, [ex.session_exercise_id]: (prev[ex.session_exercise_id] ?? 0) + 1 }));
+                if (ex) moveExercise(ex.session_exercise_id, dir);
               }}
+              accessibilityRole="button"
+              accessibilityLabel={label}
+              hitSlop={6}
+              style={{ padding: 8, borderRadius: 8, backgroundColor: colors.surfaceSecondary, opacity: disabled ? 0.35 : 1 }}
             >
-              <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
-                <Ionicons name="create-outline" size={16} color={colors.primary} />
-              </View>
-              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>
-                {selectedExerciseForOptions?.notes ? "Edit Note" : "Add Note"}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+              <Ionicons name={icon} size={16} color={colors.text} />
             </Pressable>
-            {exercises.length > 1 && (
-              <View style={[modalStyles.option, { borderBottomColor: colors.border, gap: 10 }]}>
-                <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
-                  <Ionicons name="reorder-three-outline" size={16} color={colors.primary} />
-                </View>
-                <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Reorder</Text>
-                {(() => {
-                  const idx = exercises.findIndex((e) => e.session_exercise_id === selectedExerciseForOptions?.session_exercise_id);
-                  const btn = (dir: -1 | 1, icon: "arrow-up" | "arrow-down", label: string, disabled: boolean) => (
-                    <Pressable
-                      key={label}
-                      disabled={disabled}
-                      onPress={() => {
-                        const ex = selectedExerciseForOptions;
-                        closeExerciseOptions();
-                        if (ex) moveExercise(ex.session_exercise_id, dir);
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel={label}
-                      hitSlop={6}
-                      style={{ padding: 8, borderRadius: 8, backgroundColor: colors.surfaceSecondary, opacity: disabled ? 0.35 : 1 }}
-                    >
-                      <Ionicons name={icon} size={16} color={colors.text} />
-                    </Pressable>
-                  );
-                  return [
-                    btn(-1, "arrow-up", "Move up", idx <= 0),
-                    btn(1, "arrow-down", "Move down", idx < 0 || idx >= exercises.length - 1),
-                  ];
-                })()}
-              </View>
-            )}
-            <Pressable
-              style={[modalStyles.option, { borderBottomColor: colors.border }]}
-              onPress={() => {
-                exercisePickerModeRef.current = "replace";
-                replaceTargetRef.current = selectedExerciseForOptions;
-                closeExerciseOptions();
-                setShowAddExercise(true);
-              }}
-            >
-              <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
-                <Ionicons name="swap-horizontal-outline" size={16} color={colors.primary} />
-              </View>
-              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Replace Exercise</Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-            </Pressable>
-            {selectedExerciseForOptions?.exercise_type !== "cardio" && selectedExerciseForOptions?.exercise_type !== "stretching" && (
-              <Pressable
-                style={[modalStyles.option, { borderBottomColor: colors.border }]}
-                onPress={() => {
-                  const ex = selectedExerciseForOptions;
-                  closeExerciseOptions();
-                  if (ex) addWarmupSets(ex);
-                }}
-              >
-                <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
-                  <Ionicons name="flame-outline" size={16} color={colors.primary} />
-                </View>
-                <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Warm-up Sets</Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-              </Pressable>
-            )}
-            <Pressable
-              style={[modalStyles.option, { borderBottomColor: colors.border }]}
-              onPress={() => {
-                const ex = selectedExerciseForOptions;
-                closeExerciseOptions();
-                // Let the options sheet close before opening the next one (iOS).
-                setTimeout(() => setRestPickerFor(ex), Platform.OS === "ios" ? 400 : 0);
-              }}
-            >
-              <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
-                <Ionicons name="timer-outline" size={16} color={colors.primary} />
-              </View>
-              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Rest Timer</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 14, fontWeight: "600" }}>
-                {formatRest(resolveRest(restOverrides, selectedExerciseForOptions?.exercise_id, restDuration))}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-            </Pressable>
-            <Pressable style={modalStyles.option} onPress={handleRemoveExercise}>
-              <View style={[modalStyles.iconWrap, { backgroundColor: colors.dangerLight }]}>
-                <Ionicons name="trash-outline" size={16} color={colors.danger} />
-              </View>
-              <Text style={[modalStyles.optionLabel, { color: colors.danger }]}>Remove Exercise</Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.danger} style={{ opacity: 0.4 }} />
-            </Pressable>
-            <Pressable
-              style={[modalStyles.cancelBtn, { backgroundColor: colors.surfaceSecondary }]}
-              onPress={closeExerciseOptions}
-            >
-              <Text style={[modalStyles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
-            </Pressable>
-          </View>
-        </Pressable>
-      </Modal>
+          );
+          return (
+            <SheetOption icon="reorder-three-outline" label="Reorder" style={{ gap: 10 }}>
+              {btn(-1, "arrow-up", "Move up", idx <= 0)}
+              {btn(1, "arrow-down", "Move down", idx < 0 || idx >= exercises.length - 1)}
+            </SheetOption>
+          );
+        })()}
+        <SheetOption
+          icon="swap-horizontal-outline"
+          label="Replace Exercise"
+          onPress={() => {
+            exercisePickerModeRef.current = "replace";
+            replaceTargetRef.current = selectedExerciseForOptions;
+            closeExerciseOptions();
+            setShowAddExercise(true);
+          }}
+        />
+        {selectedExerciseForOptions?.exercise_type !== "cardio" && selectedExerciseForOptions?.exercise_type !== "stretching" && (
+          <SheetOption
+            icon="flame-outline"
+            label="Warm-up Sets"
+            onPress={() => {
+              const ex = selectedExerciseForOptions;
+              closeExerciseOptions();
+              if (ex) addWarmupSets(ex);
+            }}
+          />
+        )}
+        <SheetOption
+          icon="timer-outline"
+          label="Rest Timer"
+          value={formatRest(resolveRest(restOverrides, selectedExerciseForOptions?.exercise_id, restDuration))}
+          onPress={() => {
+            const ex = selectedExerciseForOptions;
+            closeExerciseOptions();
+            // Let the options sheet close before opening the next one (iOS).
+            setTimeout(() => setRestPickerFor(ex), Platform.OS === "ios" ? 400 : 0);
+          }}
+        />
+        <SheetOption icon="trash-outline" tone="danger" label="Remove Exercise" onPress={handleRemoveExercise} last />
+      </ActionSheet>
 
       <PlateCalculatorModal
         visible={plateWeight !== undefined}
@@ -1189,51 +1108,41 @@ export default function WorkoutScreen() {
       />
 
       {/* Per-exercise rest timer picker */}
-      <Modal visible={restPickerFor != null} transparent animationType="slide" onRequestClose={() => setRestPickerFor(null)}>
-        <Pressable style={modalStyles.overlay} onPress={() => setRestPickerFor(null)}>
-          <Pressable style={[modalStyles.sheet, { backgroundColor: colors.surface }]} onPress={() => {}}>
-            <View style={[modalStyles.handle, { backgroundColor: colors.border }]} />
-            <Text style={[modalStyles.sheetTitle, { color: colors.textSecondary }]} numberOfLines={1}>
-              Rest Timer · {restPickerFor?.exercise_name}
-            </Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 14, textAlign: "center" }}>
-              Used after each completed set of this exercise, in every workout.
-            </Text>
-            <View style={styles.restGrid}>
-              {[null, ...REST_CHOICES].map((secs) => {
-                const current = restPickerFor ? restOverrides[restPickerFor.exercise_id] : undefined;
-                const selected = secs == null ? current == null : current === secs;
-                return (
-                  <Pressable
-                    key={secs ?? "default"}
-                    onPress={() => {
-                      if (restPickerFor) setRestFor(restPickerFor.exercise_id, secs);
-                      setRestPickerFor(null);
-                    }}
-                    style={[
-                      styles.restChoice,
-                      { borderColor: selected ? colors.primary : colors.border, backgroundColor: selected ? colors.primaryLight : "transparent" },
-                      secs == null && styles.restChoiceWide,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
-                  >
-                    <Text style={{ color: selected ? colors.primary : colors.text, fontSize: 15, fontWeight: "700" }}>
-                      {secs == null ? `Default (${formatRest(restDuration)})` : formatRest(secs)}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <Pressable
-              style={[modalStyles.cancelBtn, { backgroundColor: colors.surfaceSecondary }]}
-              onPress={() => setRestPickerFor(null)}
-            >
-              <Text style={[modalStyles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <ActionSheet
+        visible={restPickerFor != null}
+        onClose={() => setRestPickerFor(null)}
+        title={`Rest Timer · ${restPickerFor?.exercise_name ?? ""}`}
+      >
+        <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 14, textAlign: "center" }}>
+          Used after each completed set of this exercise, in every workout.
+        </Text>
+        <View style={styles.restGrid}>
+          {[null, ...REST_CHOICES].map((secs) => {
+            const current = restPickerFor ? restOverrides[restPickerFor.exercise_id] : undefined;
+            const selected = secs == null ? current == null : current === secs;
+            return (
+              <Pressable
+                key={secs ?? "default"}
+                onPress={() => {
+                  if (restPickerFor) setRestFor(restPickerFor.exercise_id, secs);
+                  setRestPickerFor(null);
+                }}
+                style={[
+                  styles.restChoice,
+                  { borderColor: selected ? colors.primary : colors.border, backgroundColor: selected ? colors.primaryLight : "transparent" },
+                  secs == null && styles.restChoiceWide,
+                ]}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+              >
+                <Text style={{ color: selected ? colors.primary : colors.text, fontSize: 15, fontWeight: "700" }}>
+                  {secs == null ? `Default (${formatRest(restDuration)})` : formatRest(secs)}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </ActionSheet>
 
       <ConfirmModal
         visible={finishPrompt != null}
@@ -1407,45 +1316,4 @@ const styles = StyleSheet.create({
   // Discard
   discardBtn: { alignItems: "center", paddingVertical: 20 },
   discardText: { fontSize: 15, fontWeight: "500" },
-});
-
-const modalStyles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 8,
-    paddingBottom: 44,
-    paddingHorizontal: 16,
-    alignItems: "center",
-    elevation: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-  },
-  handle: { width: 36, height: 4, borderRadius: 2, marginBottom: 16 },
-  sheetTitle: { fontSize: 12, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 12 },
-  option: {
-    flexDirection: "row",
-    alignItems: "center",
-    width: "100%",
-    paddingVertical: 14,
-    gap: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  iconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  optionLabel: { fontSize: 16, fontWeight: "600", flex: 1 },
-  cancelBtn: {
-    marginTop: 14,
-    paddingVertical: 14,
-    borderRadius: 12,
-    width: "100%",
-    alignItems: "center",
-  },
-  cancelText: { fontSize: 16, fontWeight: "600" },
 });
