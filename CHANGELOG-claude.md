@@ -221,3 +221,47 @@ Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jes
 - A share image for Workout Complete.
 - Split the remaining modals (set options, exercise options, rest picker) out of `workout.tsx`.
 - A "next up" hint for split programs.
+
+## 2026-11-09 (Mon)
+
+Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 323 tests in 41 suites (up from 295 in 38), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode. A read-only subagent audited the 11-06 code, and a second one reviewed this run's diff. I fixed what both found.
+
+### Bugs fixed
+- **Save as Routine and Duplicate Routine could half-save silently.** A failed exercise or set insert (dropped signal, or the offline refusal) was skipped, and you still got "Routine saved". They now delete the partial routine and show the error, like Add Program. If that delete is also refused, the message says a partial copy was left.
+- **Routine finish wrote warm-up numbers into working targets.** Sets were copied back by raw set number, so a workout with warm-ups the routine didn't have overwrote targets 1–3 with bar×10, 90×5, 135×3 and dropped the real working sets. Warm-ups now pair with the routine's warm-ups and working sets with working sets (`matchRoutineSets`).
+- **Repeated exercises in a routine (heavy + back-off squats):**
+  - Deleting the heavy squats mid-workout made the back-offs overwrite the heavy template. Exact (exercise, position) matches now pair first.
+  - Positions are only trusted when every occurrence lines up, because reordering renumbers the session.
+- **Edit Profile:**
+  - A photo that uploaded while the profile save failed showed on reopen but was never saved. The cache is now written only after the save succeeds.
+  - In local-only mode every photo pick ended in a stuck "upload failed" warning. The picker is off there, with a hint.
+- **Muscle Split and the picker's muscle chips ignored custom exercises** whose muscle was typed as "Quads", "Abs", "Delts", "Bicep", "Glute" or "Calf". `canonicalMuscle` maps gym words to the library's names.
+- **PREVIOUS column lined up by position,** so adding warm-ups put last time's working sets beside today's warm-ups, and tick-empty copied them. It now pairs warm-ups with warm-ups and working with working, like Hevy.
+
+### New / UX
+- **Warm-up Sets** (exercise ••• menu, like Strong's warm-up calculator): ramps to the first working set's weight (typed, or last time's). Barbell lifts get the empty bar ×10, then ~40%×5, 60%×3, 80%×2, rounded down to 5 lb / 2.5 kg. It uses the bar picked in the plate calculator. Running it again replaces unticked warm-ups and skips steps you've already ticked.
+- **Weekly streaks.** The day streak broke on every rest day, so a Mon/Wed/Fri lifter was stuck at "1 day". Streaks now count weeks with at least one workout (like Hevy).
+- **Weekly goal** on Profile → This Week: pick 1–7 workouts per week and see a progress bar ("2/3 workouts", green when hit). Stored on the device.
+- **Exercise picker: Popular section** above A–Z. New accounts used to open on "3/4 Sit-Up".
+- **Workout Complete: "Your 12th workout"** pill, like Strong.
+- **Exercise detail: Volume chart** next to Weight and Est. 1RM.
+
+### Code quality
+- The set, exercise and rest-timer menus in `workout.tsx` now share `components/ActionSheet.tsx` (`ActionSheet` + `SheetOption`). `workout.tsx` is about 130 lines shorter. Taps on a sheet's title no longer close it, and the bottom padding follows the safe area.
+
+### Needs Yams's decision or check
+- **Routine finish now ignores warm-ups that the routine doesn't have**, instead of writing them over working targets. If you'd rather it add new warm-up rows to the routine, say so.
+- **Weekly goal and streak rules:** the streak counts weeks with ≥1 workout, not weeks that hit the goal. The goal is stored per device, not per account.
+- **Still open from earlier runs:**
+  - Should warm-ups count toward PRs? Strong leaves them out.
+  - `completed = null` counts as done.
+  - `routines.routine_order` isn't in `supabaseSchema.md`.
+  - Offline routine edits are refused rather than queued.
+
+### Ideas for next run
+- Store `routine_exercise_id` on session exercises (a schema column), so routine finish doesn't have to guess which instance is which.
+- Warm-up Sets in the routine editor too.
+- The chart's last data label is clipped at the right edge on exercise detail.
+- The workout count reads history, which Supabase caps at 1,000 rows by default.
+- Supersets, set types (drop/failure) and RPE (all need schema columns).
+- A share image for Workout Complete.
