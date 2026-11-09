@@ -20,7 +20,7 @@ import {
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
 import { bestOfRecords, strengthRecordFromHistory } from "@/utils/prDetection";
-import { matchRoutineExercises } from "@/utils/routineMatch";
+import { matchRoutineExercises, matchRoutineSets } from "@/utils/routineMatch";
 import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache, writeCacheMany } from "./readCache";
 import {
   OutboxOp,
@@ -1031,21 +1031,14 @@ export const db = {
         supabase.from("routine_exercise_sets").select("*").in("routine_exercise_id", routineExIds),
       ]);
 
-      // Build lookup: routineExerciseId:setNumber → routineSetId
-      const routineSetMap = new Map<string, number>();
-      for (const rs of routineSets ?? []) {
-        routineSetMap.set(`${rs.routine_exercise_id}:${rs.set_number}`, rs.routine_set_id);
-      }
-
       const updates: PromiseLike<any>[] = [];
       for (const [sessionEx, routineEx] of matchRoutineExercises<any, any>(sessionExercises, routineExercises)) {
-
-        const completedSets = (sessionSets ?? []).filter(
-          (s: any) => s.session_exercise_id === sessionEx.session_exercise_id && s.completed
+        const pairs = matchRoutineSets<any, any>(
+          (sessionSets ?? []).filter((s: any) => s.session_exercise_id === sessionEx.session_exercise_id),
+          (routineSets ?? []).filter((rs: any) => rs.routine_exercise_id === routineEx.routine_exercise_id),
         );
-        for (const ss of completedSets) {
-          const routineSetId = routineSetMap.get(`${routineEx.routine_exercise_id}:${ss.set_number}`);
-          if (routineSetId == null) continue;
+        for (const [ss, rs] of pairs) {
+          const routineSetId = rs.routine_set_id;
 
           const payload =
             sessionEx.exercise_type === "cardio"
@@ -1076,12 +1069,8 @@ export const db = {
           db.getSessionExerciseSets(sessionEx.session_exercise_id),
           db.getRoutineExerciseSets(routineEx.routine_exercise_id),
         ]);
-        const routineSetMap = new Map<number, number>(
-          (routineSets ?? []).map((rs: any) => [rs.set_number, rs.routine_set_id])
-        );
-        for (const ss of (sessionSets ?? []).filter((s: any) => s.completed)) {
-          const routineSetId = routineSetMap.get(ss.set_number);
-          if (routineSetId == null) continue;
+        for (const [ss, rs] of matchRoutineSets<any, any>(sessionSets ?? [], routineSets ?? [])) {
+          const routineSetId = rs.routine_set_id;
           const values =
             sessionEx.exercise_type === "cardio"
               ? { target_distance_meters: ss.distance_meters ?? null, target_duration_seconds: ss.duration_seconds ?? null }
@@ -1105,13 +1094,8 @@ export const db = {
 
       const { data: sessionSets } = await localDb.getSessionExerciseSets(sessionEx.session_exercise_id);
       const { data: routineSets } = await localDb.getRoutineExerciseSets(routineEx.routine_exercise_id);
-      const routineSetMap = new Map<number, number>(
-        (routineSets ?? []).map((rs: any) => [rs.set_number, rs.routine_set_id])
-      );
-
-      for (const ss of (sessionSets ?? []).filter((s: any) => s.completed)) {
-        const routineSetId = routineSetMap.get(ss.set_number);
-        if (routineSetId == null) continue;
+      for (const [ss, rs] of matchRoutineSets<any, any>(sessionSets ?? [], routineSets ?? [])) {
+        const routineSetId = rs.routine_set_id;
 
         const payload =
           sessionEx.exercise_type === "cardio"
