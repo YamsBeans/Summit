@@ -18,6 +18,8 @@ import { SessionWithMeta } from "@/components/WorkoutHistoryList";
 import WorkoutChart from "@/components/WorkoutChart";
 import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardioUtils";
 import { sessionDurationMins } from "@/utils/duration";
+import { GOAL_CHOICES, useWeeklyGoal, weeklyStreaks, workoutsThisWeek } from "@/utils/streaks";
+import { ModalShell } from "@/components/SettingsUI";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 
@@ -52,35 +54,6 @@ const STATS_STORAGE_KEY = "@gym_tracker_profile_stats";
 function localDateStr(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
-
-function calcStreaks(sessions: SessionWithMeta[]) {
-  if (sessions.length === 0) return { current: 0, longest: 0 };
-  const dates = new Set(sessions.map((s) => s.session_date.slice(0, 10)));
-  const sorted = [...dates].sort();
-
-  let longest = 1;
-  let run = 1;
-  for (let i = 1; i < sorted.length; i++) {
-    const diff = (new Date(sorted[i]).getTime() - new Date(sorted[i - 1]).getTime()) / 86400000;
-    if (diff === 1) { run++; longest = Math.max(longest, run); }
-    else run = 1;
-  }
-  if (sorted.length === 1) longest = 1;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  let current = 0;
-  let d = new Date(today);
-  while (dates.has(localDateStr(d))) { current++; d.setDate(d.getDate() - 1); }
-  if (current === 0) {
-    d = new Date(today);
-    d.setDate(d.getDate() - 1);
-    while (dates.has(localDateStr(d))) { current++; d.setDate(d.getDate() - 1); }
-  }
-
-  return { current, longest };
-}
-
 
 function formatMinutes(mins: number): string {
   if (mins === 0) return "—";
@@ -121,6 +94,8 @@ export default function ProfileScreen() {
   const [profile, setProfile] = useState<any>(null);
   const [sessions, setSessions] = useState<SessionWithMeta[]>([]);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [weeklyGoal, setWeeklyGoal] = useWeeklyGoal();
+  const [goalOpen, setGoalOpen] = useState(false);
   const [splitEntries, setSplitEntries] = useState<SplitEntry[]>([]);
   const [customMuscles, setCustomMuscles] = useState<Record<string, string[]>>({});
   const musclesOf = useCallback(
@@ -371,7 +346,10 @@ export default function ProfileScreen() {
     return { dateStr: localDateStr(d), label: d.toLocaleDateString("en-US", { weekday: "short" }).slice(0, 1) };
   });
   const workoutDates = new Set(sessions.map((s) => s.session_date.slice(0, 10)));
-  const { current: currentStreak, longest: longestStreak } = calcStreaks(sessions);
+  const sessionDates = sessions.map((s) => s.session_date.slice(0, 10));
+  const { current: currentStreak, longest: longestStreak } = weeklyStreaks(sessionDates);
+  const thisWeekCount = workoutsThisWeek(sessionDates);
+  const weeks = (n: number) => `${n} ${n === 1 ? "week" : "weeks"}`;
   const initials = profile?.username ? profile.username.slice(0, 2).toUpperCase() : "?";
 
   if (loading) {
@@ -431,7 +409,7 @@ export default function ProfileScreen() {
             <View style={styles.streakRow}>
               <Ionicons name="flame" size={16} color="#ff9f0a" />
               <Text style={[styles.streakText, { color: colors.textSecondary }]}>
-                {currentStreak} day streak
+                {currentStreak} week streak
               </Text>
             </View>
           )}
@@ -474,7 +452,7 @@ export default function ProfileScreen() {
             {longestStreak > 0 && (
               <View style={styles.bestStreakRow}>
                 <Ionicons name="trophy-outline" size={14} color={colors.primary} />
-                <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} {longestStreak === 1 ? "day" : "days"}</Text>
+                <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {weeks(longestStreak)}</Text>
               </View>
             )}
             <Pressable
@@ -507,7 +485,64 @@ export default function ProfileScreen() {
             );
           })}
         </View>
+        {/* Weekly goal (like Hevy/Strong): progress toward N workouts this week */}
+        <Pressable
+          onPress={() => setGoalOpen(true)}
+          style={[styles.goalRow, { borderTopColor: colors.border }]}
+          accessibilityRole="button"
+          accessibilityLabel={weeklyGoal ? `Weekly goal: ${thisWeekCount} of ${weeklyGoal} workouts. Change goal` : "Set a weekly workout goal"}
+        >
+          {weeklyGoal ? (
+            <>
+              <View style={[styles.goalTrack, { backgroundColor: colors.surfaceSecondary }]}>
+                <View style={[styles.goalFill, {
+                  backgroundColor: thisWeekCount >= weeklyGoal ? colors.success : colors.primary,
+                  width: `${Math.min(100, (thisWeekCount / weeklyGoal) * 100)}%`,
+                }]} />
+              </View>
+              <Text style={[styles.goalText, { color: thisWeekCount >= weeklyGoal ? colors.text : colors.textSecondary }]}>
+                {thisWeekCount >= weeklyGoal ? "Goal hit! " : ""}{thisWeekCount}/{weeklyGoal} workouts
+              </Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="flag-outline" size={14} color={colors.primary} />
+              <Text style={[styles.goalText, { color: colors.primary, flex: 1 }]}>Set a weekly goal</Text>
+              <Text style={[styles.goalText, { color: colors.textSecondary }]}>
+                {thisWeekCount} {thisWeekCount === 1 ? "workout" : "workouts"} this week
+              </Text>
+            </>
+          )}
+        </Pressable>
       </View>
+
+      <ModalShell visible={goalOpen} onClose={() => setGoalOpen(false)} title="Weekly Goal">
+        <Text style={{ color: colors.textSecondary, fontSize: 14, textAlign: "center", marginBottom: 16 }}>
+          Workouts per week
+        </Text>
+        <View style={styles.goalChips}>
+          {GOAL_CHOICES.map((n) => {
+            const sel = n === weeklyGoal;
+            return (
+              <Pressable
+                key={n}
+                onPress={() => { setWeeklyGoal(n); setGoalOpen(false); }}
+                style={[styles.goalChip, { backgroundColor: sel ? colors.primary : colors.surfaceSecondary }]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: sel }}
+                accessibilityLabel={`${n} per week`}
+              >
+                <Text style={{ fontSize: 16, fontWeight: "700", color: sel ? "#fff" : colors.text }}>{n}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {weeklyGoal != null && (
+          <Pressable onPress={() => { setWeeklyGoal(null); setGoalOpen(false); }} style={{ alignSelf: "center", marginTop: 16, padding: 6 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 14, fontWeight: "600" }}>No goal</Text>
+          </Pressable>
+        )}
+      </ModalShell>
 
       {/* ── Personal records ── */}
       <Pressable
@@ -830,6 +865,12 @@ const styles = StyleSheet.create({
   dotCell: { alignItems: "center", gap: 6 },
   dot: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   dotLabel: { fontSize: 11, fontWeight: "600" },
+  goalRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  goalTrack: { flex: 1, height: 6, borderRadius: 3, overflow: "hidden" },
+  goalFill: { height: 6, borderRadius: 3 },
+  goalText: { fontSize: 13, fontWeight: "600" },
+  goalChips: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 6 },
+  goalChip: { width: 34, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
 
   sectionHeader: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 },
   sectionTitle: { fontSize: 20, fontWeight: "700" },
