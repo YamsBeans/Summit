@@ -23,7 +23,7 @@ type HistoryPoint = {
   sets: HistorySet[];
 };
 
-type ChartMetric = "weight" | "e1rm";
+type ChartMetric = "weight" | "e1rm" | "volume";
 
 // session_date is a plain "YYYY-MM-DD". new Date("2026-10-28") parses as UTC
 // midnight, which shows as the previous day anywhere west of London — so pin
@@ -34,6 +34,11 @@ function parseLocalDate(d: string) {
 
 function maxWeight(sets: HistorySet[]) {
   return sets.reduce((m, s) => (s.weight != null && s.weight > m ? s.weight : m), 0);
+}
+
+// Total weight × reps for one session (the Volume chart, like Strong's).
+function sessionVolume(sets: HistorySet[]) {
+  return sets.reduce((sum, s) => (s.weight && s.reps ? sum + s.weight * s.reps : sum), 0);
 }
 
 export default function ExerciseDetailScreen() {
@@ -81,10 +86,7 @@ export default function ExerciseDetailScreen() {
   const bests = useMemo(() => {
     const allSets = history.flatMap((h) => h.sets);
     const histWeight = maxWeight(allSets);
-    const histVolume = history.reduce((m, h) => {
-      const v = h.sets.reduce((sum, s) => (s.weight && s.reps ? sum + s.weight * s.reps : sum), 0);
-      return v > m ? v : m;
-    }, 0);
+    const histVolume = history.reduce((m, h) => Math.max(m, sessionVolume(h.sets)), 0);
     return {
       weight: Math.max(histWeight, pr.weight ?? 0) || null,
       volume: Math.max(histVolume, pr.volume ?? 0) || null,
@@ -95,13 +97,15 @@ export default function ExerciseDetailScreen() {
   const chartData = useMemo(() => {
     return history
       .map((h) => {
-        const raw = metric === "weight" ? maxWeight(h.sets) : bestOneRepMax(h.sets);
+        const raw = metric === "weight" ? maxWeight(h.sets)
+          : metric === "volume" ? sessionVolume(h.sets)
+          : bestOneRepMax(h.sets);
         if (!raw) return null;
         const v = toDisplay(raw) ?? raw;
         return {
           value: v,
           label: parseLocalDate(h.session_date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-          dataPointText: String(Math.round(v)),
+          dataPointText: metric === "volume" ? formatVolume(v) : String(Math.round(v)),
         };
       })
       .filter(Boolean) as { value: number; label: string; dataPointText: string }[];
@@ -191,7 +195,7 @@ export default function ExerciseDetailScreen() {
                   Progress ({unitLabel})
                 </Text>
                 <View style={{ flexDirection: "row", backgroundColor: colors.surfaceSecondary, borderRadius: 8, padding: 2 }}>
-                  {([["weight", "Max Weight"], ["e1rm", "Est. 1RM"]] as const).map(([key, label]) => (
+                  {([["weight", "Weight"], ["e1rm", "Est. 1RM"], ["volume", "Volume"]] as const).map(([key, label]) => (
                     <Pressable
                       key={key}
                       onPress={() => setMetric(key)}
