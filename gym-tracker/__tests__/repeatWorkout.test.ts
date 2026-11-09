@@ -64,6 +64,7 @@ it("saves a workout as a routine with its completed sets as targets", async () =
     insertRoutine: async (r: any) => { const row = { routine_id: id++, ...r }; made.routines.push(row); return { data: row, error: null }; },
     insertRoutineExercise: async (e: any) => { const row = { routine_exercise_id: id++, ...e }; made.exercises.push(row); return { data: row, error: null }; },
     insertRoutineExerciseSet: async (s: any) => { made.sets.push(s); return { data: null, error: null }; },
+    deleteRoutine: async () => ({ error: null }),
   };
   const res = await saveWorkoutAsRoutine(sdb, 1, "u1", "  My Push ");
   expect(res).toEqual({ routineId: 1 });
@@ -89,9 +90,63 @@ it("duplicates a routine with its exercises and target sets", async () => {
     insertRoutine: async (r: any) => { const row = { routine_id: id++, ...r }; made.routines.push(row); return { data: row, error: null }; },
     insertRoutineExercise: async (e: any) => { const row = { routine_exercise_id: id++, ...e }; made.exercises.push(row); return { data: row, error: null }; },
     insertRoutineExerciseSet: async (s: any) => { made.sets.push(s); return { error: null }; },
+    deleteRoutine: async () => ({ error: null }),
   }, { routine_id: 9, routine_name: "Pull Day", description: "Back" }, "u1");
   expect(res).toEqual({ routineId: 50 });
   expect(made.routines[0]).toMatchObject({ routine_name: "Pull Day (copy)", description: "Back" });
   expect(made.exercises.map((e) => e.exercise_id)).toEqual(["pull", "row"]);
   expect(made.sets).toEqual([expect.objectContaining({ routine_exercise_id: made.exercises[0].routine_exercise_id, target_reps: 8 })]);
+});
+
+function copyDb(failOn: "exercise" | "set" | "read") {
+  const deleted: number[] = [];
+  let id = 70;
+  const db = {
+    getRoutineExercises: async () => ({ data: [
+      { routine_exercise_id: 1, exercise_id: "squat", exercise_name: "Squat", exercise_order: 1 },
+      { routine_exercise_id: 2, exercise_id: "lunge", exercise_name: "Lunge", exercise_order: 2 },
+    ], error: null }),
+    getRoutineExerciseSets: async (reId: number) => (failOn === "read" && reId === 2
+      ? { data: null as any, error: { message: "Network request failed" } }
+      : { data: [{ set_number: 1, target_reps: 5 }, { set_number: 2, target_reps: 5 }], error: null }),
+    insertRoutine: async (r: any) => ({ data: { routine_id: id++, ...r }, error: null }),
+    insertRoutineExercise: async (e: any) => (failOn === "exercise" && e.exercise_id === "lunge"
+      ? { data: null, error: { message: "You're offline." } }
+      : { data: { routine_exercise_id: id++, ...e }, error: null }),
+    insertRoutineExerciseSet: async (s: any) => (failOn === "set" && s.set_number === 2
+      ? { error: { message: "You're offline." } }
+      : { error: null }),
+    deleteRoutine: async (rid: number) => { deleted.push(rid); return { error: null }; },
+  };
+  return { db, deleted };
+}
+
+it.each(["exercise", "set"] as const)("duplicate removes the half-made copy when a %s insert fails", async (failOn) => {
+  const { db, deleted } = copyDb(failOn);
+  const res = await duplicateRoutine(db, { routine_id: 9, routine_name: "Legs", description: null }, "u1");
+  expect(res).toEqual({ error: "You're offline." });
+  expect(deleted).toEqual([70]);
+});
+
+it("duplicate refuses to copy when a routine's sets can't be read", async () => {
+  const { db, deleted } = copyDb("read");
+  const res = await duplicateRoutine(db, { routine_id: 9, routine_name: "Legs", description: null }, "u1");
+  expect(res).toEqual({ error: "Network request failed" });
+  expect(deleted).toEqual([]);
+});
+
+it("save as routine removes the routine when an insert fails", async () => {
+  const { db } = fakeDb();
+  const deleted: number[] = [];
+  const res = await saveWorkoutAsRoutine({
+    ...db,
+    insertRoutine: async (r: any) => ({ data: { routine_id: 5, ...r }, error: null }),
+    insertRoutineExercise: async (e: any) => (e.exercise_order === 2
+      ? { data: null, error: { message: "Network request failed" } }
+      : { data: { routine_exercise_id: 6, ...e }, error: null }),
+    insertRoutineExerciseSet: async () => ({ error: null }),
+    deleteRoutine: async (rid: number) => { deleted.push(rid); return { error: null }; },
+  }, 1, "u1", "Push");
+  expect(res).toEqual({ error: "Network request failed" });
+  expect(deleted).toEqual([5]);
 });
