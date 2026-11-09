@@ -430,6 +430,12 @@ export default function WorkoutScreen() {
     if (!session) return;
     setFinishPrompt(null);
     setError(null);
+    // Counted before finishing: an offline-started workout gets a new server
+    // id once it syncs, which the history read afterwards could count twice.
+    const workoutNumber = await db.getUser()
+      .then(({ data }) => (data?.user?.id ? db.getWorkoutSessions(data.user.id) : null))
+      .then((res) => workoutNumberFrom(res?.data, session.session_id))
+      .catch(() => null);
     const { error } = await db.finishWorkoutSession(session.session_id, notes || null);
     if (error) { setError(error.message); return; }
 
@@ -448,17 +454,12 @@ export default function WorkoutScreen() {
     finishedSessionId.current = session.session_id;
     const durationSeconds = (Date.now() - startTimestamp.current) / 1000;
     const summaryPRs: SummaryPR[] = [];
-    let workoutNumber: number | null = null;
 
     try {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
       if (userId) {
-        const [{ data: existingPRs }, history] = await Promise.all([
-          db.getPersonalRecords(userId),
-          db.getWorkoutSessions(userId).catch(() => null),
-        ]);
-        workoutNumber = workoutNumberFrom(history?.data, session.session_id);
+        const { data: existingPRs } = await db.getPersonalRecords(userId);
 
         // Strength PRs
         const strengthExercises = exercises.filter((e: any) => e.exercise_type !== 'cardio');
@@ -596,9 +597,13 @@ export default function WorkoutScreen() {
       return;
     }
     const bar = usesBarbell(ex.exercise_id) ? await loadBarWeight(unit) : 0;
-    const plan = warmupPlan(working, unit, bar);
+    // Steps at or below a warm-up already ticked off are done; don't repeat them.
+    const doneTop = Math.max(0, ...sets.filter((s) => s.is_warmup && s.completed).map((s) => toDisplay(s.weight) ?? 0));
+    const plan = warmupPlan(working, unit, bar).filter((w) => w.weight > doneTop);
     if (plan.length === 0) {
-      showAlert("No warm-ups needed", `${working} ${unitLabel} is light enough to start with.`);
+      showAlert("No warm-ups needed", doneTop > 0
+        ? "You've already warmed up to this weight."
+        : `${working} ${unitLabel} is light enough to start with.`);
       return;
     }
     setError(null);
