@@ -1,3 +1,4 @@
+import { BAR_WEIGHT_KEY as BAR_KEY } from "@/utils/warmups";
 import { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -14,7 +15,6 @@ type Props = {
   onClose: () => void;
 };
 
-const BAR_KEY = "@gym_tracker_bar_weight";
 
 // Bumper-plate colours, heaviest first, so a 45/25 kg plate looks like one.
 const PLATE_COLORS = ["#dc2626", "#2563eb", "#eab308", "#16a34a", "#e5e7eb", "#374151", "#9ca3af"];

@@ -46,3 +46,21 @@ export function createSerialQueue() {
     return next;
   };
 }
+
+/**
+ * Last session's set to show in the PREVIOUS column for `sets[index]`, like
+ * Hevy: warm-ups line up with last time's warm-ups and working sets with
+ * working sets. Pairing by plain position put last time's first working set
+ * next to today's first warm-up whenever the warm-up count changed.
+ */
+export function previousSetFor<P extends { is_warmup?: boolean | null }>(
+  previous: readonly P[] | null | undefined,
+  sets: readonly { is_warmup?: boolean | null }[],
+  index: number,
+): P | undefined {
+  if (!previous || !sets[index]) return undefined;
+  const warm = sets[index].is_warmup === true;
+  let ordinal = 0;
+  for (let i = 0; i < index; i++) if ((sets[i].is_warmup === true) === warm) ordinal++;
+  return previous.filter((p) => (p.is_warmup === true) === warm)[ordinal];
+}

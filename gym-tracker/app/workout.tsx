@@ -25,7 +25,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { beginRestNotification, scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
-import { createSerialQueue, nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
+import { createSerialQueue, nextSetNumber, previousSetFor, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
+import { loadBarWeight, usesBarbell, warmupPlan } from "@/utils/warmups";
 import { notifySuccess } from "@/utils/haptics";
 import CardioSetRow from "@/components/CardioSetRow";
 import StrengthSetRow from "@/components/StrengthSetRow";
@@ -40,7 +41,7 @@ export default function WorkoutScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const { colors } = useTheme();
   const { minimizeWorkout, clearActiveWorkout } = useActiveWorkout();
-  const { toDisplay, label: unitLabel } = useUnits();
+  const { unit, toDisplay, toStorage, label: unitLabel } = useUnits();
   const { distanceUnit } = useDistanceUnit();
   const { sessionId: sessionIdParam } = useLocalSearchParams<{ sessionId: string }>();
 
@@ -575,6 +576,55 @@ export default function WorkoutScreen() {
     setSelectedExerciseForOptions(null);
   }, []);
 
+  // "Warm-up Sets" (like Strong's warm-up calculator): ramp up to the first
+  // working set's weight (typed, or last time's). Unticked warm-ups are
+  // replaced, so running it again after changing the weight re-plans them.
+  const addWarmupSets = useGuardedPress((ex: any) => setJobs(ex.session_exercise_id, async () => {
+    const sets = exerciseSetsRef.current[ex.session_exercise_id] ?? [];
+    const firstWorkIdx = sets.findIndex((s) => !s.is_warmup);
+    const prevWork = (prevSets[ex.exercise_id] ?? []).find((p: any) => !p.is_warmup && p.weight != null);
+    const workingLbs = (firstWorkIdx >= 0 ? sets[firstWorkIdx].weight : null) ?? prevWork?.weight ?? null;
+    const working = toDisplay(workingLbs);
+    if (working == null || working <= 0) {
+      showAlert("Add a working weight", "Type the weight for your first working set, then add warm-up sets.");
+      return;
+    }
+    const bar = usesBarbell(ex.exercise_id) ? await loadBarWeight(unit) : 0;
+    const plan = warmupPlan(working, unit, bar);
+    if (plan.length === 0) {
+      showAlert("No warm-ups needed", `${working} ${unitLabel} is light enough to start with.`);
+      return;
+    }
+    setError(null);
+    const stale = sets.filter((s) => s.is_warmup && !s.completed);
+    const kept = sets.filter((s) => !stale.includes(s));
+    for (const s of stale) {
+      const { error } = await db.deleteSessionExerciseSet(s.session_set_id);
+      if (error) { setError(error.message); await reloadSetsForExercise(ex.session_exercise_id); return; }
+    }
+    // Completed warm-ups stay first, then the new ones, then working sets.
+    const doneWarm = kept.filter((s) => s.is_warmup);
+    const work = kept.filter((s) => !s.is_warmup);
+    const start = doneWarm.length;
+    const moves = [...doneWarm, ...work]
+      .map((s, i) => ({ s, n: i < start ? i + 1 : i + 1 + plan.length }))
+      .filter(({ s, n }) => s.set_number !== n);
+    for (const { s, n } of moves) {
+      const { error } = await db.updateSessionExerciseSet(s.session_set_id, { set_number: n });
+      if (error) { setError(error.message); await reloadSetsForExercise(ex.session_exercise_id); return; }
+    }
+    const results = await Promise.all(plan.map((w, i) => db.insertSessionExerciseSet({
+      session_exercise_id: ex.session_exercise_id,
+      set_number: start + i + 1,
+      weight: toStorage(w.weight),
+      reps: w.reps,
+      is_warmup: true,
+    })));
+    const insErr = results.find((r: any) => r.error)?.error;
+    if (insErr) setError(insErr.message);
+    await reloadSetsForExercise(ex.session_exercise_id);
+  }), 300);
+
   const handleRemoveExercise = useGuardedPress(async () => {
     if (!selectedExerciseForOptions) return;
     const { error } = await db.deleteSessionExercise(selectedExerciseForOptions.session_exercise_id);
@@ -863,7 +913,7 @@ export default function WorkoutScreen() {
                     sessionExerciseId={ex.session_exercise_id}
                     onUpdate={updateSet}
                     onSetNumberPress={openSetOptions}
-                    prevSet={prevSets[ex.exercise_id]?.[idx]}
+                    prevSet={previousSetFor(prevSets[ex.exercise_id], sets, idx)}
                     onComplete={startRestTimer}
                     distanceUnit={distanceUnit}
                   />
@@ -876,7 +926,7 @@ export default function WorkoutScreen() {
                     sessionExerciseId={ex.session_exercise_id}
                     onUpdate={updateSet}
                     onSetNumberPress={openSetOptions}
-                    prevSet={prevSets[ex.exercise_id]?.[idx]}
+                    prevSet={previousSetFor(prevSets[ex.exercise_id], sets, idx)}
                     onComplete={startRestTimer}
                     isPR={prSetIds.has(set.session_set_id)}
                   />
@@ -971,8 +1021,9 @@ export default function WorkoutScreen() {
                 style={[modalStyles.option, { borderBottomColor: colors.border }]}
                 onPress={() => {
                   const ex = exercises.find((e) => e.session_exercise_id === selectedExerciseId);
-                  const idx = (exerciseSets[selectedExerciseId ?? -1] ?? []).findIndex((s) => s.session_set_id === selectedSet?.session_set_id);
-                  const prev = ex ? prevSets[ex.exercise_id]?.[idx] : null;
+                  const exSets = exerciseSets[selectedExerciseId ?? -1] ?? [];
+                  const idx = exSets.findIndex((s) => s.session_set_id === selectedSet?.session_set_id);
+                  const prev = ex ? previousSetFor(prevSets[ex.exercise_id], exSets, idx) : null;
                   const w = toDisplay(selectedSet?.weight ?? prev?.weight ?? null);
                   closeSetOptions();
                   setTimeout(() => setPlateWeight(w), Platform.OS === "ios" ? 400 : 0);
@@ -1075,6 +1126,22 @@ export default function WorkoutScreen() {
               <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Replace Exercise</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </Pressable>
+            {selectedExerciseForOptions?.exercise_type !== "cardio" && selectedExerciseForOptions?.exercise_type !== "stretching" && (
+              <Pressable
+                style={[modalStyles.option, { borderBottomColor: colors.border }]}
+                onPress={() => {
+                  const ex = selectedExerciseForOptions;
+                  closeExerciseOptions();
+                  if (ex) addWarmupSets(ex);
+                }}
+              >
+                <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                  <Ionicons name="flame-outline" size={16} color={colors.primary} />
+                </View>
+                <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Warm-up Sets</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+              </Pressable>
+            )}
             <Pressable
               style={[modalStyles.option, { borderBottomColor: colors.border }]}
               onPress={() => {
