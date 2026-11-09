@@ -93,3 +93,15 @@ describe("searchExercises on the real exercise list", () => {
     expect([...STAPLE_EXERCISE_IDS].filter((id: string) => !ids.has(id))).toEqual([]);
   });
 });
+
+import { popularExercises } from "../utils/exerciseSearch";
+
+describe("popularExercises", () => {
+  it("lists staple lifts in order, skipping ones already shown", () => {
+    const pool = [
+      { id: "3/4_Sit-Up" }, { id: "Barbell_Squat" }, { id: "Pullups" }, { id: "Barbell_Bench_Press_-_Medium_Grip" },
+    ];
+    expect(popularExercises(pool).map((e) => e.id)).toEqual(["Barbell_Bench_Press_-_Medium_Grip", "Barbell_Squat", "Pullups"]);
+    expect(popularExercises(pool, ["Barbell_Squat"], 1).map((e) => e.id)).toEqual(["Barbell_Bench_Press_-_Medium_Grip"]);
+  });
+});

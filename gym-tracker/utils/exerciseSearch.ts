@@ -97,6 +97,19 @@ export const STAPLE_EXERCISE_IDS = new Set(STAPLES);
 const stapleRank = new Map(STAPLES.map((id, i) => [id, i]));
 
 /**
+ * The common lifts from `pool` (already filtered by type/muscle), most
+ * common first, leaving out ones shown elsewhere (e.g. Recent). Gives a new
+ * user something better than "3/4 Sit-Up" at the top of the browse list.
+ */
+export function popularExercises<T extends { id: string }>(pool: T[], exclude: Iterable<string> = [], max = 12): T[] {
+  const skip = new Set(exclude);
+  return pool
+    .filter((ex) => stapleRank.has(ex.id) && !skip.has(ex.id))
+    .sort((a, b) => stapleRank.get(a.id)! - stapleRank.get(b.id)!)
+    .slice(0, max);
+}
+
+/**
  * Search by every word, in any order, across name, muscles and equipment —
  * "incline db" finds "Incline Dumbbell Press". Each word has to start a word
  * ("run" finds Running, not Crunch) unless that finds nothing, then any

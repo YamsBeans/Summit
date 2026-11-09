@@ -11,6 +11,7 @@ import {
   MUSCLE_GROUPS,
   MuscleGroup,
   matchesMuscleGroup,
+  popularExercises,
   pushRecent,
   searchExercises,
 } from "@/utils/exerciseSearch";
@@ -151,8 +152,8 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
     [filteredPool, search, searching],
   );
 
-  // With no search: Recent, then everything A–Z, so you can browse (the
-  // list used to stay blank until you typed).
+  // With no search: Recent, Popular, then everything A–Z, so you can browse
+  // (the list used to stay blank until you typed).
   const rows: Row[] = useMemo(() => {
     if (searching) {
       return filtered.slice(0, SEARCH_LIMIT).map((ex) => ({ kind: "exercise" as const, key: ex.id, ex }));
@@ -164,6 +165,11 @@ export default function ExercisePicker({ visible, onSelect, onClose }: Props) {
     if (recent.length > 0) {
       out.push({ kind: "header", key: "h-recent", title: "Recent" });
       for (const ex of recent) out.push({ kind: "exercise", key: `r-${ex.id}`, ex });
+    }
+    const popular = popularExercises(filteredPool, recentIds, recent.length >= 6 ? 6 : 12);
+    if (popular.length > 0) {
+      out.push({ kind: "header", key: "h-popular", title: "Popular" });
+      for (const ex of popular) out.push({ kind: "exercise", key: `p-${ex.id}`, ex });
     }
     out.push({ kind: "header", key: "h-all", title: `All exercises (${all.length})` });
     for (const ex of all) out.push({ kind: "exercise", key: ex.id, ex });
