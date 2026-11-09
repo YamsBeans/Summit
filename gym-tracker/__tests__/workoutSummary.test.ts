@@ -86,3 +86,20 @@ describe("best set with high reps", () => {
     expect(summary.exercises[0].bestSet).toEqual({ weight: 100, reps: 15 });
   });
 });
+
+import { ordinal, workoutNumberFrom } from "../utils/workoutSummary";
+
+describe("workout number", () => {
+  it("formats ordinals", () => {
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111, 112].map(ordinal)).toEqual(
+      ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th", "112th"]);
+  });
+
+  it("counts earlier finished workouts, whether or not history already has this one", () => {
+    const done = [{ session_id: 1, end_time: "x" }, { session_id: 2, end_time: "x" }];
+    expect(workoutNumberFrom(done, 3)).toBe(3);
+    expect(workoutNumberFrom([...done, { session_id: 3, end_time: "x" }], 3)).toBe(3);
+    expect(workoutNumberFrom([...done, { session_id: 9, end_time: null }], 3)).toBe(3);
+    expect(workoutNumberFrom(null, 3)).toBeNull();
+  });
+});

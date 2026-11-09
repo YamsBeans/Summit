@@ -44,7 +44,25 @@ export type WorkoutSummary = {
   totalDistanceMeters: number;
   exercises: ExerciseSummary[];
   prCount: number;
+  /** Lifetime workout count including this one ("your 12th workout"), if known. */
+  workoutNumber?: number | null;
 };
+
+/** 1 → "1st", 12 → "12th", 22 → "22nd". */
+export function ordinal(n: number): string {
+  const mod100 = n % 100;
+  const suffix = mod100 >= 11 && mod100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th";
+  return `${n}${suffix}`;
+}
+
+/** This workout's number in the user's history: earlier finished workouts + 1. */
+export function workoutNumberFrom(
+  sessions: { session_id: number | string; end_time?: string | null }[] | null | undefined,
+  currentSessionId: number | string,
+): number | null {
+  if (!sessions) return null;
+  return sessions.filter((s) => s.session_id !== currentSessionId && s.end_time).length + 1;
+}
 
 function setScore(s: SummarySet): [number, number, number] {
   const w = s.weight ?? 0;

@@ -9,7 +9,7 @@ import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 import WorkoutSummaryModal from "@/components/WorkoutSummaryModal";
 import PlateCalculatorModal from "@/components/PlateCalculatorModal";
 import { useExerciseRest, resolveRest, formatRest, REST_CHOICES } from "@/utils/exerciseRest";
-import { buildWorkoutSummary, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
+import { buildWorkoutSummary, workoutNumberFrom, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -447,12 +447,17 @@ export default function WorkoutScreen() {
     finishedSessionId.current = session.session_id;
     const durationSeconds = (Date.now() - startTimestamp.current) / 1000;
     const summaryPRs: SummaryPR[] = [];
+    let workoutNumber: number | null = null;
 
     try {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
       if (userId) {
-        const { data: existingPRs } = await db.getPersonalRecords(userId);
+        const [{ data: existingPRs }, history] = await Promise.all([
+          db.getPersonalRecords(userId),
+          db.getWorkoutSessions(userId).catch(() => null),
+        ]);
+        workoutNumber = workoutNumberFrom(history?.data, session.session_id);
 
         // Strength PRs
         const strengthExercises = exercises.filter((e: any) => e.exercise_type !== 'cardio');
@@ -502,7 +507,7 @@ export default function WorkoutScreen() {
     // iOS won't present the summary while the "Finish Workout?" dialog is
     // still fading out, and the summary is the only way off this screen.
     if (Platform.OS === "ios") await new Promise((r) => setTimeout(r, 400));
-    setSummary(buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds));
+    setSummary({ ...buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds), workoutNumber });
   }, 1000);
 
   const handleSummaryAddPhoto = useCallback(() => {

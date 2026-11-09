@@ -5,7 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits, formatVolume } from "@/utils/units";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
-import { formatWorkoutDuration, type WorkoutSummary } from "@/utils/workoutSummary";
+import { formatWorkoutDuration, ordinal, type WorkoutSummary } from "@/utils/workoutSummary";
 
 type Props = {
   visible: boolean;
@@ -98,6 +98,12 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
           </Text>
           <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">Workout Complete</Text>
           <Text style={[styles.name, { color: colors.textSecondary }]} numberOfLines={2}>{workoutName}</Text>
+          {summary.workoutNumber != null && summary.workoutNumber > 0 && (
+            <View style={[styles.countPill, { backgroundColor: colors.primaryLight }]}>
+              <Ionicons name="ribbon-outline" size={13} color={colors.primary} />
+              <Text style={[styles.countText, { color: colors.primary }]}>Your {ordinal(summary.workoutNumber)} workout</Text>
+            </View>
+          )}
 
           <View style={styles.statsGrid}>
             {stats.map((s) => (
@@ -180,6 +186,8 @@ const styles = StyleSheet.create({
   kicker: { fontSize: 14, fontWeight: "600", marginBottom: 4 },
   title: { fontSize: 26, fontWeight: "800", letterSpacing: -0.5 },
   name: { fontSize: 15, marginTop: 4, marginBottom: 24, textAlign: "center" },
+  countPill: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, marginTop: -14, marginBottom: 22 },
+  countText: { fontSize: 13, fontWeight: "700" },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, width: "100%", marginBottom: 16 },
   statCard: {
     flexBasis: "47%", flexGrow: 1, borderRadius: 14, borderWidth: 1,
