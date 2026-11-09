@@ -224,7 +224,7 @@ Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jes
 
 ## 2026-11-09 (Mon)
 
-Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 323 tests in 41 suites (up from 295 in 38), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode. A read-only subagent audited the 11-06 code, and a second one reviewed this run's diff. I fixed what both found.
+Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 323 tests in 40 suites (up from 295 in 38), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode. A read-only subagent audited the 11-06 code, and a second one reviewed this run's diff. I fixed what both found.
 
 ### Bugs fixed
 - **Save as Routine and Duplicate Routine could half-save silently.** A failed exercise or set insert (dropped signal, or the offline refusal) was skipped, and you still got "Routine saved". They now delete the partial routine and show the error, like Add Program. If that delete is also refused, the message says a partial copy was left.
