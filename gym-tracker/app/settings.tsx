@@ -15,6 +15,7 @@ import { formatRest } from "@/utils/exerciseRest";
 import { requestNotificationPermissions } from "@/utils/notifications";
 import { ModalShell, SettingItem, SettingSection } from "@/components/SettingsUI";
 import { useConnectionMode } from "@/utils/useConnectionMode";
+import { useKeepAwakeSetting } from "@/utils/keepAwake";
 
 const NOTIF_KEY = "@gym_tracker_notifications";
 
@@ -401,6 +402,7 @@ export default function SettingsScreen() {
   const { unit } = useUnits();
   const { duration } = useRestTimer();
 
+  const [keepAwake, setKeepAwake] = useKeepAwakeSetting();
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showAppearance, setShowAppearance] = useState(false);
   const [showUnits, setShowUnits] = useState(false);
@@ -519,6 +521,19 @@ export default function SettingsScreen() {
           <SettingItem icon="timer-outline" label="Rest Timer" onPress={() => setShowRestTimer(true)} value={formatRest(duration)} />
           <SettingItem icon="scale-outline" label="Units" onPress={() => setShowUnits(true)} value={unit} />
           <SettingItem icon="moon-outline" label="Appearance" onPress={() => setShowAppearance(true)} value={appearanceLabel} />
+          <SettingItem
+            icon="sunny-outline"
+            label="Keep Screen On in Workouts"
+            rightElement={
+              <Switch
+                value={keepAwake}
+                onValueChange={setKeepAwake}
+                trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor="#fff"
+                accessibilityLabel="Keep screen on during workouts"
+              />
+            }
+          />
         </SettingSection>
 
         {/* Guides */}

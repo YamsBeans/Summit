@@ -18,6 +18,7 @@ import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
+import { useWorkoutKeepAwake } from "@/utils/keepAwake";
 import ExercisePicker from "@/components/ExercisePicker";
 import RestTimerBanner from "@/components/RestTimerBanner";
 import { useRestTimer } from "@/utils/useRestTimer";
@@ -63,6 +64,8 @@ export default function WorkoutScreen() {
   const startTimestamp = useRef<number>(Date.now());
 
   const isMinimizingRef = useRef(false);
+  // Screen stays on while this screen shows a running workout.
+  useWorkoutKeepAwake(!!session && !session.end_time);
 
   // Values typed into a set but not saved yet (rows save on blur, and a tap
   // on Add Set or the minimize chevron doesn't blur the box). Saved first by
