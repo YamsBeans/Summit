@@ -419,7 +419,8 @@ export default function RoutineScreen() {
                 )}
               </View>
 
-              {/* Column headers */}
+              {/* Column headers (not over an empty list when just viewing) */}
+              {(isEditing || sets.length > 0) && (
               <View style={[styles.colHeaders, { borderBottomColor: colors.border }]}>
                 <Text style={[styles.colHeader, styles.colSet, { color: colors.textTertiary }]}>SET</Text>
                 {isCardio ? (
@@ -443,6 +444,7 @@ export default function RoutineScreen() {
                   <View style={styles.colDel} />
                 )}
               </View>
+              )}
 
               {/* Set rows */}
               {sets.map((set, idx) => {
@@ -477,6 +479,12 @@ export default function RoutineScreen() {
                   )
                 );
               })}
+
+              {!isEditing && sets.length === 0 && (
+                <Text style={{ color: colors.textTertiary, fontSize: 13, paddingHorizontal: 16, paddingVertical: 12 }}>
+                  No sets planned. You&apos;ll add them during the workout, or edit the routine to plan them.
+                </Text>
+              )}
 
               {/* Add Set (edit only) */}
               {isEditing && (
