@@ -321,9 +321,13 @@ export default function WorkoutScreen() {
     sessionExerciseId: number,
     updates: { reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean }
   ) => {
-    // These values are being saved now; they're no longer drafts.
+    // These values are being saved now; they're no longer drafts. Ticking a
+    // set (or un-ticking it) settles the whole row: the check reads what's
+    // in the boxes, or copies last time's numbers over them.
     const draft = draftsRef.current.get(sessionSetId);
-    if (draft) {
+    if (draft && "completed" in updates) {
+      draftsRef.current.delete(sessionSetId);
+    } else if (draft) {
       for (const k of Object.keys(updates)) delete draft.updates[k];
       if (Object.keys(draft.updates).length === 0) draftsRef.current.delete(sessionSetId);
     }
@@ -403,6 +407,7 @@ export default function WorkoutScreen() {
   };
 
   const deleteSet = (sessionSetId: number, sessionExerciseId: number) => setJobs(sessionExerciseId, async () => {
+    draftsRef.current.delete(sessionSetId);
     const remaining = (exerciseSetsRef.current[sessionExerciseId] ?? []).filter((s) => s.session_set_id !== sessionSetId);
     // Close the gap so the next added set doesn't reuse a number and the
     // routine sync lines sets up by position.
@@ -706,6 +711,9 @@ export default function WorkoutScreen() {
     if (!selectedExerciseForOptions) return;
     const { error } = await db.deleteSessionExercise(selectedExerciseForOptions.session_exercise_id);
     if (error) { setError(error.message); closeExerciseOptions(); return; }
+    for (const [setId, d] of [...draftsRef.current]) {
+      if (d.exId === selectedExerciseForOptions.session_exercise_id) draftsRef.current.delete(setId);
+    }
     setExercises((prev) => prev.filter((e) => e.session_exercise_id !== selectedExerciseForOptions.session_exercise_id));
     setExerciseSets((prev) => {
       const next = { ...prev };

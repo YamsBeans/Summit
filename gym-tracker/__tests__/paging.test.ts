@@ -70,3 +70,10 @@ describe("fetchInChunks", () => {
     expect(q).not.toHaveBeenCalled();
   });
 });
+
+it("stops after the page limit if a server ignores .range()", async () => {
+  const page = jest.fn(async () => ({ data: rows(5), error: null }));
+  const res = await fetchAllPages(page, 5);
+  expect(page).toHaveBeenCalledTimes(1000);
+  expect(res.data).toHaveLength(5000);
+});

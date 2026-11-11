@@ -5,8 +5,15 @@
 
 export type RowsResult = { data: any[] | null; error: any };
 
-/** PostgREST's default `max-rows`. A page shorter than this is the last one. */
+/**
+ * PostgREST's default `max-rows` (Supabase → API settings → Max rows). A page
+ * shorter than this is taken as the last one, so if that setting is ever
+ * lowered, lower this to match or reads will stop after the first page.
+ */
 export const PAGE_SIZE = 1000;
+
+/** Safety stop (a million rows) in case a server or mock ignores `.range()`. */
+const MAX_PAGES = 1000;
 
 /** Short `.in()` lists keep URLs small and each request well under one page. */
 export const IN_CHUNK = 40;
@@ -27,13 +34,14 @@ export async function fetchAllPages(
   pageSize = PAGE_SIZE,
 ): Promise<RowsResult> {
   const rows: any[] = [];
-  for (let from = 0; ; from += pageSize) {
+  for (let pageNo = 0, from = 0; pageNo < MAX_PAGES; pageNo++, from += pageSize) {
     const { data, error } = await page(from, from + pageSize - 1);
     if (error) return { data: null, error };
     const list = data ?? [];
     rows.push(...list);
     if (list.length < pageSize) return { data: rows, error: null };
   }
+  return { data: rows, error: null };
 }
 
 /**

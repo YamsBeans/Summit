@@ -106,11 +106,13 @@ const StrengthSetRow = memo(function StrengthSetRow({
       setReps(formatNumberInput(prevSet.reps));
       if (prevSet.reps !== set.reps) updates.reps = prevSet.reps;
     }
+    // Whatever was typed is replaced by last time's numbers.
+    onDraft?.(set.session_set_id, sessionExerciseId, { weight: undefined, reps: undefined });
     if (Object.keys(updates).length > 0) {
       tapLight();
       onUpdate(set.session_set_id, sessionExerciseId, updates);
     }
-  }, [hasPrev, prevSet, set, toDisplay, sessionExerciseId, onUpdate]);
+  }, [hasPrev, prevSet, set, toDisplay, sessionExerciseId, onUpdate, onDraft]);
 
   const isCompleted = set.completed === true;
   const isWarmup = set.is_warmup === true;
