@@ -322,7 +322,10 @@ export default function WorkoutScreen() {
   const updateSet = useCallback(async (
     sessionSetId: number,
     sessionExerciseId: number,
-    updates: { reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean }
+    updates: {
+      reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean;
+      distance_meters?: number | null; duration_seconds?: number | null; pace_sec_per_km?: number | null;
+    }
   ) => {
     // These values are being saved now; they're no longer drafts. Ticking a
     // set (or un-ticking it) settles the whole row: the check reads what's
@@ -783,6 +786,18 @@ export default function WorkoutScreen() {
         : e
     ));
     replaceTargetRef.current = null;
+    // Strength numbers mean nothing on a run (and vice versa): clear them so
+    // they don't count as completed sets or volume under the new exercise.
+    const oldType = target.exercise_type ?? "strength";
+    if ((oldType === "cardio") !== (exType === "cardio")) {
+      const sets = exerciseSetsRef.current[target.session_exercise_id] ?? [];
+      await Promise.all(sets
+        .filter((st) => st.completed || st.weight != null || st.reps != null || st.distance_meters != null || st.duration_seconds != null)
+        .map((st) => updateSet(st.session_set_id, target.session_exercise_id, {
+          completed: false, weight: null, reps: null,
+          distance_meters: null, duration_seconds: null, pace_sec_per_km: null,
+        })));
+    }
     if (!prevSets[exercise.id]) loadPrevSetsFor(exercise.id);
   });
 
