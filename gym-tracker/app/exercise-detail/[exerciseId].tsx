@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -13,6 +13,7 @@ import CardioExerciseDetail from "@/components/CardioExerciseDetail";
 import ExerciseAbout from "@/components/ExerciseAbout";
 import { buildRepRecords } from "@/utils/repRecords";
 import { workingSetNumber } from "@/utils/setNumbers";
+import exercisesData from "@/assets/data/exercises.json";
 
 type HistorySet = {
   weight: number | null; reps: number | null; completed: boolean; is_warmup?: boolean | null;
@@ -41,6 +42,15 @@ function sessionVolume(sets: HistorySet[]) {
   return sets.reduce((sum, s) => (s.weight && s.reps ? sum + s.weight * s.reps : sum), 0);
 }
 
+// A reload or shared link loses the name param: fall back to the library's
+// name, then to the id with underscores turned back into spaces.
+function displayName(exerciseId: string | undefined, exerciseName: string | undefined) {
+  if (exerciseName) return exerciseName;
+  if (!exerciseId) return "";
+  const lib = (exercisesData as { id: string; name?: string }[]).find((e) => e.id === exerciseId);
+  return lib?.name ?? exerciseId.replace(/_/g, " ");
+}
+
 export default function ExerciseDetailScreen() {
   const headerTop = useHeaderTop();
   const { exerciseId, exerciseName, exerciseType } = useLocalSearchParams<{ exerciseId: string; exerciseName: string; exerciseType?: string }>();
@@ -51,6 +61,9 @@ export default function ExerciseDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [pr, setPr] = useState<{ weight: number | null; volume: number | null }>({ weight: null, volume: null });
   const [metric, setMetric] = useState<ChartMetric>("weight");
+  // Long histories scroll sideways; open on the newest sessions (like
+  // Strong) instead of the oldest.
+  const chartScrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,7 +155,7 @@ export default function ExerciseDetailScreen() {
           <Ionicons name="chevron-back" size={28} color={colors.primary} />
         </Pressable>
         <Text style={{ flex: 1, fontSize: 17, fontWeight: "700", color: colors.text, textAlign: "center" }} numberOfLines={1}>
-          {exerciseName ?? exerciseId}
+          {displayName(exerciseId, exerciseName)}
         </Text>
         <View style={{ width: 40 }} />
       </View>
@@ -214,7 +227,12 @@ export default function ExerciseDetailScreen() {
                 </View>
               </View>
               {chartData.length >= 2 ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <ScrollView
+                  ref={chartScrollRef}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  onContentSizeChange={() => chartScrollRef.current?.scrollToEnd({ animated: false })}
+                >
                   <LineChart
                     key={metric}
                     data={chartData}

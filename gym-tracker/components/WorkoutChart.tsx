@@ -17,6 +17,8 @@ const RANGE_WEEKS: Record<Range, number> = {
 };
 
 const Y_AXIS_LABEL_WIDTH = 38;
+// Week labels are wider than a bar ("Sep 20"), so they're drawn this wide.
+const LABEL_WIDTH = 44;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -63,10 +65,18 @@ export default function WorkoutChart({ sessions }: Props) {
 
   const chartBodyWidth = Math.max(100, screenWidth - 32 - 32 - Y_AXIS_LABEL_WIDTH);
   const barSpacing = 4;
+  // A label centred under the first or last bar sticks out past it by about
+  // half a label; leave that much room at both ends so it isn't clipped.
+  // (Solved for the bar width the gutter itself leaves room for.)
+  const roughBarWidth = (chartBodyWidth - numWeeks * barSpacing) / numWeeks;
+  const edgeGutter = Math.max(0, Math.ceil(LABEL_WIDTH / 2 - roughBarWidth / 2) + 2);
   const barWidth = Math.max(
     1,
-    Math.floor((chartBodyWidth - numWeeks * barSpacing) / numWeeks)
+    Math.floor((chartBodyWidth - 2 * edgeGutter - numWeeks * barSpacing) / numWeeks)
   );
+  // gifted-charts starts a label at the bar's left edge, so a label wider
+  // than its bar sat ~half a label to the right of it. Shift it back.
+  const labelShift = (barWidth - LABEL_WIDTH) / 2;
 
   const { barData, periodTotal, weekLabels } = useMemo(() => {
     // The last `numWeeks` weeks, ending with this one. (It used to centre on
@@ -105,11 +115,11 @@ export default function WorkoutChart({ sessions }: Props) {
       weekLabels.push(shortLabel(weekDate));
       return {
         value,
-        // Count back from the current week, skipping the last bar, whose
-        // label would be clipped at the chart's right edge.
-        label: (weeks.length - 1 - i) % labelEvery === 1 ? shortLabel(weekDate) : "",
+        // Count back from the current week, so this week is always labelled.
+        label: (weeks.length - 1 - i) % labelEvery === 0 ? shortLabel(weekDate) : "",
         // Labels default to the bar's width, which truncated them to "Au…".
-        labelWidth: 44,
+        labelWidth: LABEL_WIDTH,
+        labelTextStyle: { color: colors.textSecondary, fontSize: 9, transform: [{ translateX: labelShift }] },
         // frontColor updated after selectedIndex is known — patched below
         frontColor: value > 0 ? colors.primary : colors.surfaceSecondary,
         onPress: () => {
@@ -119,7 +129,7 @@ export default function WorkoutChart({ sessions }: Props) {
     });
 
     return { barData, periodTotal: total, weekLabels };
-  }, [sessions, metric, numWeeks, colors, toDisplay]);
+  }, [sessions, metric, numWeeks, colors, toDisplay, labelShift]);
 
   // Apply selection-aware colors without rerunning the full memo
   const coloredBarData = barData.map((item, i) => {
@@ -198,7 +208,8 @@ export default function WorkoutChart({ sessions }: Props) {
         width={chartBodyWidth}
         barWidth={barWidth}
         spacing={barSpacing}
-        initialSpacing={0}
+        initialSpacing={edgeGutter}
+        endSpacing={edgeGutter}
         roundedTop
         maxValue={maxValue}
         noOfSections={4}
