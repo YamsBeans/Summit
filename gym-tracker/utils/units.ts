@@ -44,6 +44,22 @@ export function formatVolume(v: number | null | undefined): string {
   return Math.round(v).toLocaleString();
 }
 
+/**
+ * Short form for tight stat tiles: 98,765 → "98,765", 1,234,567 → "1.23M",
+ * 456,789 → "457K". Lifetime volume overflowed Profile's stat cells.
+ */
+export function formatCompact(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "0";
+  const n = Math.round(v);
+  const abs = Math.abs(n);
+  const trim = (x: number, digits: number) => String(Number(x.toFixed(digits)));
+  if (abs >= 1_000_000_000) return `${trim(n / 1_000_000_000, 2)}B`;
+  // From 999,500 up, "K" would round to "1000K".
+  if (abs >= 999_500) return `${trim(n / 1_000_000, 2)}M`;
+  if (abs >= 100_000) return `${trim(n / 1_000, 0)}K`;
+  return n.toLocaleString();
+}
+
 export function useUnits() {
   const [unit, setUnit] = useState<UnitSystem>(cachedUnit);
 

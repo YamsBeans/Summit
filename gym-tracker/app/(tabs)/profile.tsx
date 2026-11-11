@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Image, Modal, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -10,7 +10,7 @@ import type { SplitEntry } from "@/utils/muscleSplit";
 import exercisesData from "@/assets/data/exercises.json";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
-import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
+import { useUnits, useDistanceUnit, formatCompact } from "@/utils/units";
 import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
 import WorkoutCalendarModal from "@/components/WorkoutCalendarModal";
@@ -120,12 +120,19 @@ export default function ProfileScreen() {
 
   const hasDataRef = useRef(false);
   const lastFetchedRef = useRef(0);
+  // Loads overlap (focus, pull-to-refresh, a delete right after another);
+  // only the newest one may write state, or an older one finishing last
+  // brings back a workout that was just deleted.
+  const loadSeqRef = useRef(0);
+  useEffect(() => () => { loadSeqRef.current++; }, []);
 
   const loadProfile = useCallback(async (isRefresh = false) => {
     const now = Date.now();
     const isStale = now - lastFetchedRef.current > 30_000;
 
     if (hasDataRef.current && !isStale && !isRefresh) return;
+    const seq = ++loadSeqRef.current;
+    const superseded = () => seq !== loadSeqRef.current;
 
     if (isRefresh) {
       setRefreshing(true);
@@ -155,6 +162,7 @@ export default function ProfileScreen() {
         db.getCardioStats(user.id),
         db.getCustomExercises(user.id),
       ]);
+      if (superseded()) return;
 
       const custom: Record<string, string[]> = {};
       for (const c of customResult?.data ?? []) {
@@ -173,10 +181,15 @@ export default function ProfileScreen() {
       const sessionsData = sessionsResult.data ?? [];
 
       const sessionIds = sessionsData.map((s: any) => s.session_id);
-      const { data: allExercisesFlat } = await db.getBatchSessionExercises(sessionIds);
+      const { data: allExercisesFlat, error: exercisesError } = await db.getBatchSessionExercises(sessionIds);
+      if (superseded()) return;
+      // Totals built from a failed read would all show 0.
+      if (exercisesError) { setError(exercisesError.message ?? "Couldn't load your workouts"); return; }
 
       const exerciseIds = (allExercisesFlat ?? []).map((ex: any) => ex.session_exercise_id);
-      const { data: allSetsFlat } = await db.getBatchSessionExerciseSets(exerciseIds);
+      const { data: allSetsFlat, error: setsError } = await db.getBatchSessionExerciseSets(exerciseIds);
+      if (superseded()) return;
+      if (setsError) { setError(setsError.message ?? "Couldn't load your workouts"); return; }
 
       const exercisesBySession: Record<number, any[]> = {};
       for (const ex of allExercisesFlat ?? []) {
@@ -277,10 +290,12 @@ export default function ProfileScreen() {
       hasDataRef.current = true;
       lastFetchedRef.current = Date.now();
     } catch (e: any) {
-      setError(e.message ?? "Something went wrong");
+      if (!superseded()) setError(e.message ?? "Something went wrong");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!superseded()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -295,7 +310,9 @@ export default function ProfileScreen() {
   }, [loadProfile]);
 
   const handleEditWorkout = useCallback((sessionId: number) => {
-    hasDataRef.current = false;
+    // Reload quietly on return; dropping hasData showed the full-screen
+    // spinner and lost the scroll position, even after a cancelled edit.
+    lastFetchedRef.current = 0;
     router.push(`/workout-edit/${sessionId}` as any);
   }, [router]);
 
@@ -324,9 +341,9 @@ export default function ProfileScreen() {
   function getStatDisplay(id: StatId): { value: string; label: string } {
     switch (id) {
       case "totalWorkouts":   return { value: String(stats.totalWorkouts), label: "Workouts" };
-      case "totalSets":       return { value: String(stats.totalSets), label: "Sets" };
-      case "totalVolume":     return { value: formatVolume(toDisplay(stats.totalVolume)), label: `Vol (${unitLabel})` };
-      case "totalReps":       return { value: stats.totalReps.toLocaleString(), label: "Reps" };
+      case "totalSets":       return { value: formatCompact(stats.totalSets), label: "Sets" };
+      case "totalVolume":     return { value: formatCompact(toDisplay(stats.totalVolume)), label: `Vol (${unitLabel})` };
+      case "totalReps":       return { value: formatCompact(stats.totalReps), label: "Reps" };
       case "uniqueExercises": return { value: String(stats.totalExercises), label: "Exercises" };
       case "heaviestWeight":  return { value: (toDisplay(stats.heaviestWeight) ?? stats.heaviestWeight).toLocaleString(), label: `Best (${unitLabel})` };
       case "longestSession":  return { value: formatMinutes(stats.longestSession), label: "Longest" };
@@ -434,7 +451,7 @@ export default function ProfileScreen() {
                 <View key={id} style={{ flexDirection: "row", flex: 1 }}>
                   {i > 0 && <View style={[styles.statDivider, { backgroundColor: colors.border }]} />}
                   <View style={styles.statCell}>
-                    <Text style={[styles.statNum, { color: colors.text }]}>{value}</Text>
+                    <Text style={[styles.statNum, { color: colors.text }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
                     <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{label}</Text>
                   </View>
                 </View>

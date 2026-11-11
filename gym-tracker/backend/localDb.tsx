@@ -529,6 +529,8 @@ const rawLocalDb = {
     best_distance_meters?: number | null;
     best_pace_sec_per_km?: number | null;
     best_duration_seconds?: number | null;
+    // Rebuilt records pass the day the record was set; new PRs are today.
+    achieved_at?: string | null;
   }) => {
     const prType = record.pr_type ?? 'strength';
     const existing = localPersonalRecords.findIndex(
@@ -542,7 +544,7 @@ const rawLocalDb = {
         best_distance_meters: record.best_distance_meters ?? null,
         best_pace_sec_per_km: record.best_pace_sec_per_km ?? null,
         best_duration_seconds: record.best_duration_seconds ?? null,
-        achieved_at: new Date().toISOString(),
+        achieved_at: record.achieved_at ?? new Date().toISOString(),
       };
     } else {
       localPersonalRecords.push({
@@ -552,7 +554,7 @@ const rawLocalDb = {
         best_pace_sec_per_km: record.best_pace_sec_per_km ?? null,
         best_duration_seconds: record.best_duration_seconds ?? null,
         ...record,
-        achieved_at: new Date().toISOString(),
+        achieved_at: record.achieved_at ?? new Date().toISOString(),
       });
     }
     return { error: null };

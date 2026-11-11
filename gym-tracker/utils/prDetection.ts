@@ -199,6 +199,28 @@ export function strengthRecordFromHistory(
 }
 
 /**
+ * When the rebuilt record was set: the first workout that reached its
+ * heaviest weight, as an ISO timestamp at local noon on that day. Without
+ * it, a record lowered by an edit or delete was dated today. Null when the
+ * history has no weighted sets or no dates.
+ */
+export function strengthRecordDateFromHistory(
+  history: { session_date?: string; sets: CurrentSet[] }[],
+): string | null {
+  let maxW = 0;
+  let date: string | null = null;
+  for (const entry of history) {
+    for (const s of entry.sets) {
+      if (s.completed === false || s.weight == null) continue;
+      if (s.weight > maxW) { maxW = s.weight; date = entry.session_date ?? null; }
+    }
+  }
+  if (!date) return null;
+  const d = new Date(`${date.slice(0, 10)}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/**
  * Sets to mark with a live "PR" badge while logging (like Hevy's trophy):
  * for each exercise, the first completed set with the heaviest weight, if
  * that weight beats the stored record. Exercises with no earlier record are

@@ -281,3 +281,20 @@ describe("liveWeightPRSetIds", () => {
     expect(ids.size).toBe(0);
   });
 });
+
+describe("strengthRecordDateFromHistory", () => {
+  const { strengthRecordDateFromHistory } = jest.requireActual("../utils/prDetection");
+  it("dates the record to the first workout that reached the heaviest weight", () => {
+    const iso = strengthRecordDateFromHistory([
+      { session_date: "2026-09-01", sets: [{ weight: 200, reps: 5, completed: true }] },
+      { session_date: "2026-10-01", sets: [{ weight: 225, reps: 3, completed: true }] },
+      { session_date: "2026-10-08", sets: [{ weight: 225, reps: 5, completed: true }, { weight: 315, reps: 1, completed: false }] },
+    ]);
+    const d = new Date(iso);
+    expect([d.getFullYear(), d.getMonth() + 1, d.getDate()]).toEqual([2026, 10, 1]);
+  });
+  it("is null without weighted sets", () => {
+    expect(strengthRecordDateFromHistory([{ session_date: "2026-10-01", sets: [{ weight: null, reps: 10, completed: true }] }])).toBeNull();
+    expect(strengthRecordDateFromHistory([])).toBeNull();
+  });
+});

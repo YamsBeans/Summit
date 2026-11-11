@@ -19,7 +19,7 @@ import {
   forgetSyncedLocalSessions,
 } from "./offlineQueue";
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
-import { bestOfRecords, strengthRecordFromHistory } from "@/utils/prDetection";
+import { bestOfRecords, strengthRecordDateFromHistory, strengthRecordFromHistory } from "@/utils/prDetection";
 import { matchRoutineExercises, matchRoutineSets } from "@/utils/routineMatch";
 import { fetchAllPages, fetchInChunks } from "./paging";
 import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache, writeCacheMany } from "./readCache";
@@ -1540,7 +1540,8 @@ export const db = {
         const current = (records ?? []).find((r: any) => r.exercise_id === exerciseId && (r.pr_type ?? "strength") === "strength");
         if (!current && rebuilt.max_weight == null && rebuilt.max_volume == null) continue;
         if (current && current.max_weight === rebuilt.max_weight && current.max_volume === rebuilt.max_volume) continue;
-        await localDb.upsertPersonalRecord({ user_id: userId, exercise_id: exerciseId, pr_type: "strength", ...rebuilt });
+        const achieved_at = strengthRecordDateFromHistory((history ?? []) as any[]);
+        await localDb.upsertPersonalRecord({ user_id: userId, exercise_id: exerciseId, pr_type: "strength", ...rebuilt, ...(achieved_at ? { achieved_at } : {}) });
       }
       return;
     }
@@ -1568,7 +1569,8 @@ export const db = {
         const current = (records ?? []).find((r: any) => r.exercise_id === exerciseId);
         if (!current && rebuilt.max_weight == null && rebuilt.max_volume == null) continue;
         if (current && current.max_weight === rebuilt.max_weight && current.max_volume === rebuilt.max_volume) continue;
-        const values = { user_id: userId, exercise_id: exerciseId, pr_type: "strength" as const, ...rebuilt };
+        const achieved_at = strengthRecordDateFromHistory(history);
+        const values = { user_id: userId, exercise_id: exerciseId, pr_type: "strength" as const, ...rebuilt, ...(achieved_at ? { achieved_at } : {}) };
         const { error: upErr } = await supabase.from("personal_records")
           .upsert(values, { onConflict: "user_id,exercise_id,pr_type" });
         if (upErr) { logError("rebuildStrengthRecords.write", upErr); return; }
@@ -1576,7 +1578,7 @@ export const db = {
           const i = rows.findIndex((r) => r.exercise_id === exerciseId && (r.pr_type ?? "strength") === "strength");
           if (i < 0) return [...rows, values];
           const next = [...rows];
-          next[i] = { ...next[i], ...rebuilt };
+          next[i] = { ...next[i], ...rebuilt, ...(achieved_at ? { achieved_at } : {}) };
           return next;
         });
       }

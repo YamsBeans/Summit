@@ -160,3 +160,16 @@ describe("kg round trip", () => {
     expect(lbsToUnit(45, "kg")).toBe(20.4);
   });
 });
+
+describe("formatCompact", () => {
+  const { formatCompact } = jest.requireActual("../utils/units");
+  it("keeps small numbers exact and shortens big ones", () => {
+    expect(formatCompact(98765)).toBe((98765).toLocaleString());
+    expect(formatCompact(456789)).toBe("457K");
+    expect(formatCompact(1_234_567)).toBe("1.23M");
+    expect(formatCompact(2_000_000)).toBe("2M");
+    expect(formatCompact(999_700)).toBe("1M");
+    expect(formatCompact(null)).toBe("0");
+    expect(formatCompact(NaN)).toBe("0");
+  });
+});

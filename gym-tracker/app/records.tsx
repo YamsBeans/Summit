@@ -20,19 +20,28 @@ export default function RecordsScreen() {
   const { distanceUnit } = useDistanceUnit();
   const [rows, setRows] = useState<RecordRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"recent" | "name">("recent");
 
+  // A failed or thrown read used to leave the spinner up for good.
   const load = useCallback(async () => {
-    const { data: userData } = await db.getUser();
-    const userId = userData?.user?.id;
-    if (!userId) { setLoading(false); return; }
-    const [{ data: prs }, { data: customs }] = await Promise.all([
-      db.getPersonalRecords(userId),
-      db.getCustomExercises(userId),
-    ]);
-    setRows(buildRecordRows(prs ?? [], exercisesData as any[], customs ?? []));
-    setLoading(false);
+    try {
+      const { data: userData } = await db.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return;
+      const [{ data: prs, error: prError }, { data: customs }] = await Promise.all([
+        db.getPersonalRecords(userId),
+        db.getCustomExercises(userId),
+      ]);
+      if (prError) { setError(prError.message ?? "Couldn't load your records."); return; }
+      setError(null);
+      setRows(buildRecordRows(prs ?? [], exercisesData as any[], customs ?? []));
+    } catch (e: any) {
+      setError(e?.message ?? "Couldn't load your records.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -82,6 +91,19 @@ export default function RecordsScreen() {
       {loading ? (
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
           <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      ) : error && rows.length === 0 ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <Ionicons name="cloud-offline-outline" size={44} color={colors.textTertiary} />
+          <Text style={{ color: colors.text, fontSize: 17, fontWeight: "700", marginTop: 12 }}>Couldn&apos;t load records</Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 14, textAlign: "center", marginTop: 6 }}>{error}</Text>
+          <Pressable
+            onPress={() => { setLoading(true); load(); }}
+            style={{ marginTop: 16, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, backgroundColor: colors.primary }}
+            accessibilityRole="button"
+          >
+            <Text style={{ color: "#fff", fontWeight: "700" }}>Try Again</Text>
+          </Pressable>
         </View>
       ) : rows.length === 0 ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>

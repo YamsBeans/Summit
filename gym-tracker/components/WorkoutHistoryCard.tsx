@@ -201,16 +201,24 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
           style: "destructive",
           onPress: async () => {
             setDeleting(true);
-            const { data: exs } = await db.getSessionExercises(session_id);
-            const { error } = await db.deleteWorkoutSession(session_id);
-            setDeleting(false);
+            // A throw here used to leave the card dimmed with no message.
+            let exs: any[] | null = null;
+            let error: { message?: string } | null = null;
+            try {
+              exs = (await db.getSessionExercises(session_id)).data ?? null;
+              error = (await db.deleteWorkoutSession(session_id)).error;
+            } catch (e: any) {
+              error = { message: e?.message };
+            } finally {
+              setDeleting(false);
+            }
             if (error) {
               showAlert("Couldn't Delete Workout", error.message ?? "Please try again.");
               return;
             }
             onDelete?.(session_id);
             // A PR set in this workout shouldn't outlive it.
-            if (!error) rebuildRecordsFor((exs ?? []).map((e: any) => e.exercise_id));
+            rebuildRecordsFor((exs ?? []).map((e: any) => e.exercise_id));
           },
         },
       ]
