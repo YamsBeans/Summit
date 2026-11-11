@@ -103,3 +103,18 @@ describe("workout number", () => {
     expect(workoutNumberFrom(null, 3)).toBeNull();
   });
 });
+
+describe("same exercise twice", () => {
+  it("counts its PR once", () => {
+    const top = { session_exercise_id: 10, exercise_id: "bench", exercise_name: "Bench Press", exercise_type: "strength" };
+    const backoff = { ...top, session_exercise_id: 11 };
+    const s = buildWorkoutSummary(
+      [top, backoff],
+      { 10: [{ weight: 225, reps: 3, completed: true }], 11: [{ weight: 185, reps: 8, completed: true }] },
+      [{ exerciseId: "bench", label: "Weight" }],
+      600,
+    );
+    expect(s.prCount).toBe(1);
+    expect(s.exercises.map((e) => e.pr)).toEqual(["Weight", null]);
+  });
+});

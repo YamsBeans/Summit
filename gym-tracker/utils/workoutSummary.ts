@@ -96,6 +96,7 @@ export function buildWorkoutSummary(
   let totalReps = 0;
   let totalDistanceMeters = 0;
   const rows: ExerciseSummary[] = [];
+  const prShown = new Set<string>();
 
   for (const ex of exercises) {
     const sets = (exerciseSets[ex.session_exercise_id] ?? []).filter((s) => s.completed);
@@ -130,8 +131,11 @@ export function buildWorkoutSummary(
       bestSet: best ? { weight: best.weight ?? null, reps: best.reps ?? null } : null,
       distanceMeters,
       durationSeconds: duration,
-      pr: prByExercise.get(ex.exercise_id) ?? null,
+      // The same exercise twice (top set + back-offs) shares one PR: badge
+      // the first row only, so the recap doesn't say "2 new PRs".
+      pr: prShown.has(ex.exercise_id) ? null : prByExercise.get(ex.exercise_id) ?? null,
     });
+    if (prByExercise.has(ex.exercise_id)) prShown.add(ex.exercise_id);
   }
 
   return {

@@ -64,8 +64,25 @@ export default function WorkoutScreen() {
 
   const isMinimizingRef = useRef(false);
 
+  // Values typed into a set but not saved yet (rows save on blur, and a tap
+  // on Add Set or the minimize chevron doesn't blur the box). Saved first by
+  // Add Set, Finish and minimize so the number isn't lost or skipped.
+  const draftsRef = useRef(new Map<number, { exId: number; updates: Record<string, any> }>());
+  const setDraft = useCallback((setId: number, exId: number, updates: Record<string, any>) => {
+    const cur = draftsRef.current.get(setId)?.updates ?? {};
+    const next: Record<string, any> = { ...cur };
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === undefined) delete next[k];
+      else next[k] = v;
+    }
+    if (Object.keys(next).length === 0) draftsRef.current.delete(setId);
+    else draftsRef.current.set(setId, { exId, updates: next });
+  }, []);
+  const flushDraftsRef = useRef<(exId?: number) => Promise<void>>(async () => {});
+
   const handleMinimize = useCallback(() => {
     if (!session) return;
+    flushDraftsRef.current();
     minimizeWorkout(session.session_id, session.session_name, startTimestamp.current);
     isMinimizingRef.current = true;
     router.back();
@@ -160,7 +177,11 @@ export default function WorkoutScreen() {
 
   const totalVolume = useMemo(() => {
     let total = 0;
-    for (const sets of Object.values(exerciseSets)) {
+    // Cardio rows don't count, matching the Workout Complete summary (a
+    // strength exercise replaced by a run kept its old weight × reps).
+    const cardio = new Set(exercises.filter((e) => e.exercise_type === "cardio").map((e) => e.session_exercise_id));
+    for (const [exId, sets] of Object.entries(exerciseSets)) {
+      if (cardio.has(Number(exId))) continue;
       for (const set of sets) {
         if (set.completed && set.weight != null && set.reps != null) {
           total += set.weight * set.reps;
@@ -168,7 +189,7 @@ export default function WorkoutScreen() {
       }
     }
     return total;
-  }, [exerciseSets]);
+  }, [exerciseSets, exercises]);
 
   const { totalCardioDistanceMeters, totalCardioDurationSeconds } = useMemo(() => {
     let dist = 0;
@@ -300,6 +321,17 @@ export default function WorkoutScreen() {
     sessionExerciseId: number,
     updates: { reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean }
   ) => {
+    // These values are being saved now; they're no longer drafts.
+    const draft = draftsRef.current.get(sessionSetId);
+    if (draft) {
+      for (const k of Object.keys(updates)) delete draft.updates[k];
+      if (Object.keys(draft.updates).length === 0) draftsRef.current.delete(sessionSetId);
+    }
+    // Keep the ref current too, so a queued Add Set right after sees it.
+    const patch = (sets: any[]) => sets.map((s) => (s.session_set_id === sessionSetId ? { ...s, ...updates } : s));
+    if (exerciseSetsRef.current[sessionExerciseId]) {
+      exerciseSetsRef.current = { ...exerciseSetsRef.current, [sessionExerciseId]: patch(exerciseSetsRef.current[sessionExerciseId]) };
+    }
     setExerciseSets((prev) => {
       const sets = prev[sessionExerciseId] ?? [];
       return {
@@ -317,32 +349,58 @@ export default function WorkoutScreen() {
     }
   }, []);
 
-  const addSet = useGuardedPress((sessionExerciseId: number) => setJobs(sessionExerciseId, async () => {
-    const currentSets = exerciseSetsRef.current[sessionExerciseId] ?? [];
-    setError(null);
-
-    let prefillWeight: number | null = null;
-    let prefillReps: number | null = null;
-
-    for (let i = currentSets.length - 1; i >= 0; i--) {
-      const s = currentSets[i];
-      if (s.weight != null || s.reps != null) {
-        prefillWeight = s.weight ?? null;
-        prefillReps = s.reps ?? null;
-        break;
-      }
+  const flushDrafts = useCallback(async (exId?: number) => {
+    const jobs: Promise<void>[] = [];
+    for (const [setId, d] of [...draftsRef.current]) {
+      if (exId != null && d.exId !== exId) continue;
+      jobs.push(updateSet(setId, d.exId, { ...d.updates }));
     }
+    await Promise.all(jobs);
+  }, [updateSet]);
+  flushDraftsRef.current = flushDrafts;
 
-    const { error } = await db.insertSessionExerciseSet({
-      session_exercise_id: sessionExerciseId,
-      set_number: nextSetNumber(currentSets),
-      weight: prefillWeight,
-      reps: prefillReps,
-      is_warmup: false,
+  // Double-tap guard per exercise only. One shared guard held for the whole
+  // insert used to drop a quick tap on another exercise's Add Set.
+  const lastAddTapRef = useRef<Record<number, number>>({});
+  const addSet = (sessionExerciseId: number) => {
+    const now = Date.now();
+    if (now - (lastAddTapRef.current[sessionExerciseId] ?? 0) < 300) return;
+    lastAddTapRef.current[sessionExerciseId] = now;
+    return setJobs(sessionExerciseId, async () => {
+      // A number still being typed in this exercise counts as the last set.
+      await flushDrafts(sessionExerciseId);
+      const currentSets = exerciseSetsRef.current[sessionExerciseId] ?? [];
+      setError(null);
+
+      // Prefill from the last set that has numbers (weight/reps, or
+      // distance/time for cardio).
+      let prefill: Record<string, number | null> = { weight: null, reps: null };
+      for (let i = currentSets.length - 1; i >= 0; i--) {
+        const s = currentSets[i];
+        if (s.weight != null || s.reps != null || s.distance_meters != null || s.duration_seconds != null) {
+          prefill = {
+            weight: s.weight ?? null,
+            reps: s.reps ?? null,
+            distance_meters: s.distance_meters ?? null,
+            duration_seconds: s.duration_seconds ?? null,
+            pace_sec_per_km: s.pace_sec_per_km ?? null,
+          };
+          break;
+        }
+      }
+
+      const { error } = await db.insertSessionExerciseSet({
+        session_exercise_id: sessionExerciseId,
+        set_number: nextSetNumber(currentSets),
+        ...prefill,
+        weight: prefill.weight ?? null,
+        reps: prefill.reps ?? null,
+        is_warmup: false,
+      });
+      if (error) setError(error.message);
+      else await reloadSetsForExercise(sessionExerciseId);
     });
-    if (error) setError(error.message);
-    else await reloadSetsForExercise(sessionExerciseId);
-  }), 300);
+  };
 
   const deleteSet = (sessionSetId: number, sessionExerciseId: number) => setJobs(sessionExerciseId, async () => {
     const remaining = (exerciseSetsRef.current[sessionExerciseId] ?? []).filter((s) => s.session_set_id !== sessionSetId);
@@ -430,6 +488,7 @@ export default function WorkoutScreen() {
     if (!session) return;
     setFinishPrompt(null);
     setError(null);
+    await flushDrafts();
     // Counted before finishing: an offline-started workout gets a new server
     // id once it syncs, which the history read afterwards could count twice.
     const workoutNumber = await db.getUser()
@@ -565,11 +624,18 @@ export default function WorkoutScreen() {
   const handleConfirmDiscard = useCallback(async () => {
     if (!session) return;
     setShowDiscardModal(false);
+    // Check the delete first: clearing state and leaving on a refused delete
+    // made the workout look gone, then it came back as "Resume".
+    const { error } = await db.deleteWorkoutSession(session.session_id);
+    if (error) {
+      showAlert("Couldn't Discard Workout", error.message ?? "Please try again.");
+      return;
+    }
+    draftsRef.current.clear();
     skipRest();
     cancelRestDoneNotification();
     clearActiveWorkout();
     isMinimizingRef.current = true;
-    await db.deleteWorkoutSession(session.session_id);
     router.back();
   }, [session, clearActiveWorkout, router, skipRest]);
 
@@ -926,7 +992,9 @@ export default function WorkoutScreen() {
                     onSetNumberPress={openSetOptions}
                     prevSet={previousSetFor(prevSets[ex.exercise_id], sets, idx)}
                     onComplete={startRestTimer}
+                    onDraft={setDraft}
                     distanceUnit={distanceUnit}
+                    workingNumber={workingSetNumber(sets, idx) ?? undefined}
                   />
                 ) : (
                   <StrengthSetRow
@@ -939,6 +1007,7 @@ export default function WorkoutScreen() {
                     onSetNumberPress={openSetOptions}
                     prevSet={previousSetFor(prevSets[ex.exercise_id], sets, idx)}
                     onComplete={startRestTimer}
+                    onDraft={setDraft}
                     isPR={prSetIds.has(set.session_set_id)}
                   />
                 )

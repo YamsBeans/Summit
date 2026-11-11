@@ -17,6 +17,7 @@ const StrengthSetRow = memo(function StrengthSetRow({
   onSetNumberPress,
   prevSet,
   onComplete,
+  onDraft,
   workingNumber,
   isPR = false,
 }: {
@@ -28,6 +29,9 @@ const StrengthSetRow = memo(function StrengthSetRow({
   onSetNumberPress: (set: any, sessionExerciseId: number) => void;
   prevSet?: any;
   onComplete?: (sessionExerciseId: number) => void;
+  /** Typed-but-unsaved values (saved on blur), so the screen can save them
+   *  first when Add Set, Finish or minimize is tapped mid-typing. */
+  onDraft?: (sessionSetId: number, sessionExerciseId: number, updates: Record<string, any>) => void;
 }) {
   const { colors, isDark } = useTheme();
   // Weights are stored in lbs; inputs show and accept the user's display unit.
@@ -110,6 +114,8 @@ const StrengthSetRow = memo(function StrengthSetRow({
 
   const isCompleted = set.completed === true;
   const isWarmup = set.is_warmup === true;
+  // Screen readers hear the number on screen ("Set 1", "Warm-up set").
+  const setLabel = isWarmup ? "Warm-up set" : `Set ${workingNumber ?? set.set_number}`;
 
   const prevWeight = toDisplay(prevSet?.weight);
   const prevText = prevWeight != null && prevSet?.reps != null
@@ -136,7 +142,7 @@ const StrengthSetRow = memo(function StrengthSetRow({
         onPress={() => onSetNumberPress(set, sessionExerciseId)}
         hitSlop={8}
         accessibilityRole="button"
-        accessibilityLabel={`Set ${set.set_number} options`}
+        accessibilityLabel={`${setLabel} options`}
       >
         <Text style={[
           rowStyles.badgeText,
@@ -176,7 +182,10 @@ const StrengthSetRow = memo(function StrengthSetRow({
           color: isCompleted ? colors.success : colors.text,
         }]}
         value={weight}
-        onChangeText={setWeight}
+        onChangeText={(t) => {
+          setWeight(t);
+          onDraft?.(set.session_set_id, sessionExerciseId, { weight: weightUpdate(t) });
+        }}
         onFocus={() => { isFocused.current = "weight"; }}
         onBlur={() => { isFocused.current = null; commitWeight(); }}
         keyboardType="decimal-pad"
@@ -188,7 +197,7 @@ const StrengthSetRow = memo(function StrengthSetRow({
         placeholderTextColor={colors.textTertiary}
         editable={!isCompleted}
         selectTextOnFocus
-        accessibilityLabel={`Set ${set.set_number} weight in ${unit}`}
+        accessibilityLabel={`${setLabel} weight in ${unit}`}
       />
 
       {/* Reps input */}
@@ -199,7 +208,11 @@ const StrengthSetRow = memo(function StrengthSetRow({
         }]}
         ref={repsRef}
         value={reps}
-        onChangeText={setReps}
+        onChangeText={(t) => {
+          setReps(t);
+          const val = parseIntInput(t);
+          onDraft?.(set.session_set_id, sessionExerciseId, { reps: val !== set.reps ? val : undefined });
+        }}
         returnKeyType="done"
         onFocus={() => { isFocused.current = "reps"; }}
         onBlur={() => { isFocused.current = null; commitReps(); }}
@@ -208,7 +221,7 @@ const StrengthSetRow = memo(function StrengthSetRow({
         placeholderTextColor={colors.textTertiary}
         editable={!isCompleted}
         selectTextOnFocus
-        accessibilityLabel={`Set ${set.set_number} reps`}
+        accessibilityLabel={`${setLabel} reps`}
       />
 
       {/* Check button */}
@@ -223,7 +236,7 @@ const StrengthSetRow = memo(function StrengthSetRow({
         hitSlop={6}
         accessibilityRole="checkbox"
         accessibilityState={{ checked: isCompleted }}
-        accessibilityLabel={`Complete set ${set.set_number}`}
+        accessibilityLabel={`Complete ${setLabel.toLowerCase()}`}
       >
         <Ionicons
           name="checkmark"
