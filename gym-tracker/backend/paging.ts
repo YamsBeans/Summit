@@ -15,8 +15,15 @@ export const PAGE_SIZE = 1000;
 /** Safety stop (a million rows) in case a server or mock ignores `.range()`. */
 const MAX_PAGES = 1000;
 
-/** Short `.in()` lists keep URLs small and each request well under one page. */
-export const IN_CHUNK = 40;
+/**
+ * Ids per `.in()` request: ~2 KB of URL, and usually under one page of rows
+ * (paging covers the rest). A whole history is a few dozen requests, not
+ * hundreds.
+ */
+export const IN_CHUNK = 150;
+
+/** Chunk requests in flight at once, so a long history doesn't fire them all together. */
+const MAX_PARALLEL = 6;
 
 export function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -54,10 +61,20 @@ export async function fetchInChunks<T>(
   chunkSize = IN_CHUNK,
 ): Promise<RowsResult> {
   if (ids.length === 0) return { data: [], error: null };
-  const results = await Promise.all(
-    chunk(ids, chunkSize).map((c) => fetchAllPages((from, to) => query(c, from, to))),
-  );
-  const failed = results.find((r) => r.error);
-  if (failed) return { data: null, error: failed.error };
+  const chunks = chunk(ids, chunkSize);
+  const results: RowsResult[] = new Array(chunks.length);
+  let next = 0;
+  let failed = false;
+  const worker = async () => {
+    while (!failed && next < chunks.length) {
+      const i = next++;
+      results[i] = await fetchAllPages((from, to) => query(chunks[i], from, to));
+      if (results[i].error) failed = true;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL, chunks.length) }, worker));
+  const err = results.find((r) => r?.error);
+  if (err) return { data: null, error: err.error };
+  // Rows come back in id-chunk order, whatever order the requests finished in.
   return { data: results.flatMap((r) => r.data ?? []), error: null };
 }

@@ -48,7 +48,7 @@ describe("fetchInChunks", () => {
     const res = await fetchInChunks(ids, async (c) => {
       seen.push(c);
       return { data: c.map((id) => ({ id })), error: null };
-    });
+    }, 40);
     expect(seen.map((c) => c.length)).toEqual([40, 40, 15]);
     expect(res.data?.map((r) => r.id)).toEqual(ids);
   });
@@ -62,6 +62,22 @@ describe("fetchInChunks", () => {
     const res = await fetchInChunks([1, 2, 3], async (c) =>
       c.includes(3) ? { data: null, error: { message: "nope" } } : { data: [{ id: 1 }], error: null }, 2);
     expect(res).toEqual({ data: null, error: { message: "nope" } });
+  });
+
+  it("keeps at most 6 requests in flight and returns rows in chunk order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const ids = Array.from({ length: 20 }, (_, i) => i);
+    const res = await fetchInChunks(ids, async (c) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      // Later chunks finish first.
+      await new Promise((r) => setTimeout(r, 20 - c[0]));
+      inFlight--;
+      return { data: c.map((id) => ({ id })), error: null };
+    }, 1);
+    expect(peak).toBe(6);
+    expect(res.data?.map((r) => r.id)).toEqual(ids);
   });
 
   it("skips the network for an empty id list", async () => {
