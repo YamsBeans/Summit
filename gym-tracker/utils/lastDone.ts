@@ -28,3 +28,29 @@ export function formatLastDone(date: string, now: Date = new Date()): string {
   if (days < 35) return `${Math.floor(days / 7)} weeks ago`;
   return y === now.getFullYear() ? `on ${MONTHS[m - 1]} ${d}` : `on ${MONTHS[m - 1]} ${d}, ${y}`;
 }
+
+/**
+ * Which routine is "Up next" on Home: of the routines in active rotation
+ * (finished within the last `windowDays`), the one done longest ago. For a
+ * Push/Pull/Legs split done in order that is the next day of the split, and
+ * routines the user no longer does are ignored. Needs at least two routines
+ * in rotation; ties go to the first in display order. Null when there's no
+ * clear answer (fewer than two active, or everything was done today).
+ */
+export function nextUpRoutineId(
+  orderedIds: number[],
+  lastDone: Record<number, string>,
+  now: Date = new Date(),
+  windowDays = 42,
+): number | null {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const dayKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const today = dayKey(now);
+  const cutoffDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - windowDays);
+  const cutoff = dayKey(cutoffDate);
+  const active = orderedIds.filter((id) => lastDone[id] && lastDone[id] >= cutoff);
+  if (active.length < 2) return null;
+  let best = active[0];
+  for (const id of active) if (lastDone[id] < lastDone[best]) best = id;
+  return lastDone[best] >= today ? null : best;
+}

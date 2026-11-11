@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
@@ -7,7 +7,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
 import { useConnectionMode } from "@/utils/useConnectionMode";
-import { formatLastDone, lastDoneByRoutine } from "@/utils/lastDone";
+import { formatLastDone, lastDoneByRoutine, nextUpRoutineId } from "@/utils/lastDone";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
@@ -107,6 +107,12 @@ export default function WorkoutsScreen() {
 
   const [routinePreviews, setRoutinePreviews] = useState<Record<number, string[]>>({});
   const [lastDone, setLastDone] = useState<Record<number, string>>({});
+  // Highlight the routine that's next in the user's rotation (e.g. Pull
+  // after Push), so a split's next day is one glance away.
+  const nextUpId = useMemo(
+    () => nextUpRoutineId(routines.map((r) => r.routine_id), lastDone),
+    [routines, lastDone],
+  );
   const previewRun = useRef(0);
 
   const loadRoutines = useCallback(async (showSpinner = true) => {
@@ -395,7 +401,11 @@ export default function WorkoutsScreen() {
             {routines.map((item) => (
               <Pressable
                 key={String(item.routine_id)}
-                style={[styles.routineCard, { backgroundColor: colors.surface }]}
+                style={[
+                  styles.routineCard,
+                  { backgroundColor: colors.surface },
+                  item.routine_id === nextUpId && { borderColor: colors.primary },
+                ]}
                 onPress={() =>
                   router.push({
                     pathname: "/routine/[routineId]",
@@ -412,7 +422,17 @@ export default function WorkoutsScreen() {
                     <Ionicons name="barbell-outline" size={18} color={colors.primary} />
                   </View>
                   <View style={styles.routineText}>
-                    <Text style={[styles.routineName, { color: colors.text }]}>{item.routine_name}</Text>
+                    <View style={styles.routineNameRow}>
+                      <Text style={[styles.routineName, { color: colors.text, flexShrink: 1 }]} numberOfLines={1}>{item.routine_name}</Text>
+                      {item.routine_id === nextUpId ? (
+                        <View
+                          style={[styles.upNextPill, { backgroundColor: colors.primary }]}
+                          accessibilityLabel="Up next in your rotation"
+                        >
+                          <Text style={styles.upNextText}>UP NEXT</Text>
+                        </View>
+                      ) : null}
+                    </View>
                     {item.description ? (
                       <Text style={[styles.routineDesc, { color: colors.textSecondary }]} numberOfLines={1}>
                         {item.description}
@@ -647,7 +667,11 @@ const styles = StyleSheet.create({
   emptySubText: { fontSize: 14, textAlign: "center" },
 
   routineList: { paddingHorizontal: 16, gap: 10 },
-  routineCard: { borderRadius: 16, overflow: "hidden" },
+  // Transparent border so the Up next card's outline doesn't shift it.
+  routineCard: { borderRadius: 16, overflow: "hidden", borderWidth: 1.5, borderColor: "transparent" },
+  routineNameRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  upNextPill: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  upNextText: { color: "#fff", fontSize: 10, fontWeight: "800", letterSpacing: 0.5 },
 
   routineInfo: {
     flexDirection: "row",
