@@ -58,7 +58,8 @@ export default function TopLiftsCard({ entries }: { entries: LiftEntry[] }) {
       </View>
       {lifts.map((l, i) => {
         const value = Math.round(toDisplay(l.current) ?? l.current);
-        const delta = l.change == null ? null : Math.round(toDisplay(l.change) ?? l.change);
+        // `|| 0` turns a rounded -0 into 0 ("same", not "up 0").
+        const delta = l.change == null ? null : Math.round(toDisplay(l.change) ?? l.change) || 0;
         const up = delta != null && delta > 0;
         const down = delta != null && delta < 0;
         const tone = up ? colors.success : down ? colors.danger : colors.textTertiary;

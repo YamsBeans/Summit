@@ -790,6 +790,10 @@ export default function WorkoutScreen() {
     // they don't count as completed sets or volume under the new exercise.
     const oldType = target.exercise_type ?? "strength";
     if ((oldType === "cardio") !== (exType === "cardio")) {
+      // Unsaved typing too, or it would be saved onto the new rows later.
+      for (const [setId, d] of [...draftsRef.current]) {
+        if (d.exId === target.session_exercise_id) draftsRef.current.delete(setId);
+      }
       const sets = exerciseSetsRef.current[target.session_exercise_id] ?? [];
       await Promise.all(sets
         .filter((st) => st.completed || st.weight != null || st.reps != null || st.distance_meters != null || st.duration_seconds != null)
