@@ -18,6 +18,8 @@ export type SessionWithMeta = {
   totalCardioDistanceMeters?: number;
   totalCardioDurationSeconds?: number;
   hasCardio?: boolean;
+  /** Exercises that beat their best weight from every earlier workout. */
+  prCount?: number;
 };
 
 type Props = {
@@ -70,6 +72,7 @@ const WorkoutHistoryList = memo(function WorkoutHistoryList({ sessions, onDelete
           totalCardioDistanceMeters={session.totalCardioDistanceMeters ?? 0}
           totalCardioDurationSeconds={session.totalCardioDurationSeconds ?? 0}
           distanceUnit={distanceUnit}
+          prCount={session.prCount ?? 0}
         />
       ))}
     </View>

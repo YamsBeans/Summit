@@ -30,6 +30,7 @@ type WorkoutHistoryCardProps = {
   totalCardioDistanceMeters?: number;
   totalCardioDurationSeconds?: number;
   distanceUnit?: 'km' | 'mi';
+  prCount?: number;
 };
 
 function rebuildRecordsFor(exerciseIds: string[]) {
@@ -86,6 +87,7 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   totalCardioDistanceMeters = 0,
   totalCardioDurationSeconds = 0,
   distanceUnit = 'km',
+  prCount = 0,
 }: WorkoutHistoryCardProps) {
   const { colors } = useTheme();
   const photoSrc = useProgressPhotoUrl(photo_url);
@@ -242,6 +244,17 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
             {relativeDate(sessionDate)}
           </Text>
         </View>
+        {prCount > 0 && (
+          <View
+            style={[styles.prPill, { backgroundColor: colors.warningLight }]}
+            accessibilityLabel={`${prCount} personal record${prCount === 1 ? "" : "s"}`}
+          >
+            <Ionicons name="trophy" size={12} color={colors.warning} />
+            <Text style={[styles.prPillText, { color: colors.warning }]}>
+              {prCount} PR{prCount === 1 ? "" : "s"}
+            </Text>
+          </View>
+        )}
         <Pressable
           style={({ pressed }) => [styles.menuBtn, pressed && { opacity: 0.4 }]}
           onPress={() => setMenuOpen(true)}
@@ -449,6 +462,8 @@ const styles = StyleSheet.create({
   statItem: {},
   statValue: { fontSize: 14, fontWeight: "600" },
   statLabel: { fontSize: 11, fontWeight: "500", marginTop: 1 },
+  prPill: { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, marginRight: 4 },
+  prPillText: { fontSize: 12, fontWeight: "700" },
 
   exerciseList: { gap: 3 },
   exerciseName: { fontSize: 13 },

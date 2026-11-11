@@ -7,6 +7,7 @@ import { db } from "@/backend/db";
 import { useConnectionMode } from "@/utils/useConnectionMode";
 import MuscleSplitCard from "@/components/MuscleSplitCard";
 import TopLiftsCard from "@/components/TopLiftsCard";
+import { prCountsBySession } from "@/utils/sessionPRs";
 import type { LiftEntry } from "@/utils/topLifts";
 import type { SplitEntry } from "@/utils/muscleSplit";
 import exercisesData from "@/assets/data/exercises.json";
@@ -208,6 +209,7 @@ export default function ProfileScreen() {
       let heaviestWeight = 0;
       const uniqueExercises = new Set<string>();
 
+      const prCounts = prCountsBySession(sessionsData, exercisesBySession, setsByExercise);
       const enriched: SessionWithMeta[] = sessionsData.map((s: any) => {
         const exs = exercisesBySession[s.session_id] ?? [];
         let sessionVolume = 0;
@@ -252,6 +254,7 @@ export default function ProfileScreen() {
           totalCardioDistanceMeters: sessionCardioDistance,
           totalCardioDurationSeconds: sessionCardioDuration,
           hasCardio: sessionHasCardio,
+          prCount: prCounts[s.session_id] ?? 0,
         };
       });
 
@@ -708,6 +711,7 @@ export default function ProfileScreen() {
               totalCardioDistanceMeters={item.totalCardioDistanceMeters ?? 0}
               totalCardioDurationSeconds={item.totalCardioDurationSeconds ?? 0}
               distanceUnit={distanceUnit}
+              prCount={item.prCount ?? 0}
             />
           </View>
         )}
