@@ -265,3 +265,74 @@ Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jes
 - The workout count reads history, which Supabase caps at 1,000 rows by default.
 - Supersets, set types (drop/failure) and RPE (all need schema columns).
 - A share image for Workout Complete.
+
+## 2026-11-11 (Wed)
+
+Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 350 tests in 43 suites (up from 323 in 40), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode with about 3 months of seeded workouts. Two read-only audit subagents went through Profile/history and the workout logger. Two more reviewed this run's diffs. I fixed what all four found.
+
+### Bugs fixed
+- **Profile stopped counting after a few hundred sets (Supabase).**
+  - Profile's batch reads passed every id in one `.in()` list. PostgREST returns at most 1000 rows and says nothing, so totals, Muscle Split, the calendar and the chart quietly dropped older workouts.
+  - New `backend/paging.ts` splits id lists into chunks of 150 (at most 6 requests at a time) and pages each one with a unique tiebreak order.
+  - It's used for workout history, the batch session reads, exercise history and cardio stats.
+- **Workout logger:**
+  - **A number still being typed was skipped.** Add Set, Finish and the minimize chevron don't blur the box, and rows only saved on blur. So Add Set copied the set before, and minimize could drop the value. Rows now report unsaved typing (`onDraft`), and those taps save it first. Ticking a set, tapping PREVIOUS, deleting a set or exercise, and changing an exercise's type all clear that row's draft.
+  - **Add Set used one double-tap guard for every exercise**, held for the whole save. A quick tap on another exercise was dropped. The guard is now per exercise and short.
+  - **Discard didn't check the delete.** A refused delete looked discarded, then the workout came back as "Resume".
+  - **Replace Exercise (strength ↔ cardio)** kept the old weight × reps. They showed as empty cardio rows but still counted as completed sets and header volume. The sets are now reset, and header volume leaves cardio out.
+  - **Cardio rows:**
+    - Numbering is now W, 1, 2, like strength rows.
+    - Tap PREVIOUS to copy last time's distance and time.
+    - Ticking an empty row logs last time's numbers instead of an empty set.
+    - Add Set copies distance and time.
+    - They use the same check icon and screen-reader labels as strength rows.
+- **Workout Complete:**
+  - The same exercise twice (top set plus back-offs) counted its PR twice ("2 new PRs!").
+  - A first-ever exercise is no longer announced as a PR. Its record is still saved as the baseline. This matches the live trophy, and before, a new user's first workout was all PRs.
+- **Profile:**
+  - Loads overlap (focus, pull-to-refresh, back-to-back deletes). If they finished out of order, a deleted workout came back. Only the newest load writes now.
+  - A failed exercise or set read shows an error instead of all-zero totals.
+  - Coming back from Edit no longer shows a full-screen spinner or loses your scroll position.
+  - Big stat totals are compact (161K, 1.23M) and stay on one line.
+- **Weekly chart:** labels sat half a label to the right of their bars, and the current week was never labelled. Both are fixed, with a small gutter at each end.
+- **Exercise detail:** the chart opens on the newest sessions. The title falls back to the library name after a web reload.
+- **Records screen:** a failed load spun forever. It now shows an error with Try Again.
+- **History card delete:** a thrown error left the card dimmed with no message.
+- **A record lowered by an edit or delete** was dated today, which put it at the top of "Most recent". It now keeps the date it was really set.
+- **Local-mode Cardio Summary** now counts `completed = null` sets, the same as history. Supabase cardio stats too.
+- **Routine view:** an exercise with no planned sets says so, instead of showing a bare SET/LBS/REPS header.
+
+### New / UX
+- **Up next on Home.** Of the routines done in the last six weeks, the one done longest ago gets an outline and an UP NEXT pill (Pull after Push).
+- **Top Lifts card on Profile** (like Strong's and Hevy's widgets).
+  - Shows your most-logged lifts from the last 90 days, each with its estimated 1RM, the 30-day change and a sparkline.
+  - Tap a lift for its detail.
+  - It needs no extra requests.
+- **PR trophy on history cards** (like Hevy's feed): "🏆 2 PRs" on workouts where exercises beat every earlier workout's heaviest weight. It's worked out from history, so edits and deletes update it.
+- **Keep Screen On in Workouts** (Settings → Preferences, on by default, stored per device).
+  - The workout screen keeps the phone awake while a workout is running.
+  - It uses `expo-keep-awake`. That package was already in the Expo SDK and is now listed in package.json.
+  - I checked it on web with a fake Wake Lock: the lock is taken during a workout, released on leaving, and never taken when the setting is off.
+
+### Code quality / notes
+- **The app runs the React Compiler.** It memoizes hook return values, so a hook that reads a module-level variable during render goes stale. My first keep-awake hook did this and never took the lock. Shared settings should live in hook state, as `useUnits` and `useExerciseRest` already do.
+- `paging.ts` assumes Supabase's default API "Max rows" of 1000. If that setting is ever lowered, lower `PAGE_SIZE` to match.
+
+### Needs Yams's decision or check
+- **First-time exercises are no longer PRs** on Workout Complete or the history pill. Say if you'd rather celebrate them.
+- **Keep Screen On defaults to on.**
+- **The Profile "Sets" total counts warm-ups (and cardio sets), but Muscle Split doesn't.** On the test data that was 120 vs 27. This is the same open question as warm-ups and PRs.
+- **The history-card PR pill counts weight PRs only.** Workout Complete also counts volume PRs.
+- **Still open from earlier runs:**
+  - Should warm-ups count toward PRs?
+  - `completed = null` counts as done.
+  - `routines.routine_order` isn't in `supabaseSchema.md`.
+  - Offline routine edits are refused rather than queued.
+  - Routine finish ignores warm-ups the routine doesn't have.
+
+### Ideas for next run
+- Swipe-to-delete set rows (needs a `GestureHandlerRootView` at the root, so a native check first).
+- Outbox support for routine edits.
+- A share image for Workout Complete (needs `react-native-view-shot`).
+- Supersets, set types and RPE (schema columns).
+- `routine_exercise_id` on session exercises, so routine finish doesn't have to guess.
