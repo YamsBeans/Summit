@@ -557,11 +557,19 @@ export default function WorkoutScreen() {
             const label = cardioPR.bestDistanceMeters ? "Distance"
               : cardioPR.bestPaceSecPerKm ? "Pace"
               : "Duration";
-            summaryPRs.push({ exerciseId: ex.exercise_id, label });
+            // The first time is a baseline, not a PR (it's still saved).
+            if (existingPR) summaryPRs.push({ exerciseId: ex.exercise_id, label });
           }
         }
 
+        // A first-ever session sets the baseline record but isn't announced
+        // as a PR, matching the live trophy (and Hevy): otherwise a new
+        // user's first workout is all PRs.
+        const hadRecord = new Set((existingPRs ?? [])
+          .filter((r: any) => r.pr_type !== 'cardio' && ((r.max_weight ?? 0) > 0 || (r.max_volume ?? 0) > 0))
+          .map((r: any) => r.exercise_id));
         for (const p of prs) {
+          if (!hadRecord.has(p.exerciseId)) continue;
           summaryPRs.push({
             exerciseId: p.exerciseId,
             label: p.type === "both" ? "Weight & Volume" : p.type === "weight" ? "Weight" : "Volume",
