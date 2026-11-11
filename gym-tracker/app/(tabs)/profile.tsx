@@ -6,6 +6,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db } from "@/backend/db";
 import { useConnectionMode } from "@/utils/useConnectionMode";
 import MuscleSplitCard from "@/components/MuscleSplitCard";
+import TopLiftsCard from "@/components/TopLiftsCard";
+import type { LiftEntry } from "@/utils/topLifts";
 import type { SplitEntry } from "@/utils/muscleSplit";
 import exercisesData from "@/assets/data/exercises.json";
 import { useTheme } from "@/theme/ThemeContext";
@@ -96,7 +98,7 @@ export default function ProfileScreen() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [weeklyGoal, setWeeklyGoal] = useWeeklyGoal();
   const [goalOpen, setGoalOpen] = useState(false);
-  const [splitEntries, setSplitEntries] = useState<SplitEntry[]>([]);
+  const [splitEntries, setSplitEntries] = useState<(SplitEntry & LiftEntry)[]>([]);
   const [customMuscles, setCustomMuscles] = useState<Record<string, string[]>>({});
   const musclesOf = useCallback(
     (id: string) => customMuscles[id] ?? LIBRARY_MUSCLES.get(id),
@@ -273,6 +275,7 @@ export default function ProfileScreen() {
         (exercisesBySession[s.session_id] ?? []).map((ex: any) => ({
           date: s.session_date,
           exerciseId: ex.exercise_id,
+          exerciseName: ex.exercise_name,
           exerciseType: ex.exercise_type,
           sets: setsByExercise[ex.session_exercise_id] ?? [],
         }))));
@@ -579,6 +582,9 @@ export default function ProfileScreen() {
 
       {/* ── Muscle split ── */}
       {sessions.length > 0 && <MuscleSplitCard entries={splitEntries} musclesOf={musclesOf} />}
+
+      {/* ── Top lifts (est. 1RM trends) ── */}
+      {sessions.length > 0 && <TopLiftsCard entries={splitEntries} />}
 
       <WorkoutCalendarModal visible={calendarOpen} onClose={() => setCalendarOpen(false)} sessions={sessions} />
 
