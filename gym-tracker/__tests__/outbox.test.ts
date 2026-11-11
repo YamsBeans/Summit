@@ -39,6 +39,8 @@ function mockQuery(table: string) {
     is: (k: string, v: any) => { filters.push((r) => (r[k] ?? null) === v); return q; },
     order: () => q,
     limit: () => q,
+    range: () => q,
+    or: () => q,
     single: () => { single = true; return q; },
     maybeSingle: () => { single = true; return q; },
     then: (resolve: any) => resolve(run()),

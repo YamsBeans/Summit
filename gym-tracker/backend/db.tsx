@@ -21,6 +21,7 @@ import {
 import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
 import { bestOfRecords, strengthRecordFromHistory } from "@/utils/prDetection";
 import { matchRoutineExercises, matchRoutineSets } from "@/utils/routineMatch";
+import { fetchAllPages, fetchInChunks } from "./paging";
 import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache, writeCacheMany } from "./readCache";
 import {
   OutboxOp,
@@ -435,13 +436,15 @@ async function mirrorPerParent(rows: any, parentIds: number[], parentKey: string
 // Every finished workout's completed sets for one exercise, oldest first.
 // Errors are returned, never turned into an empty history.
 async function fetchExerciseHistory(exerciseId: string, userId: string): Promise<{ data: any; error: any }> {
-  const { data: sessionExercises, error: exError } = await supabase
+  const { data: sessionExercises, error: exError } = await fetchAllPages((from, to) => supabase
     .from("session_exercises")
     .select("session_exercise_id, workout_sessions!inner(session_id, session_date, end_time, user_id)")
     .eq("exercise_id", exerciseId)
     .eq("workout_sessions.user_id", userId)
     .not("workout_sessions.end_time", "is", null)
-    .order("workout_sessions(session_date)", { ascending: true });
+    .order("workout_sessions(session_date)", { ascending: true })
+    .order("session_exercise_id", { ascending: true })
+    .range(from, to));
 
   if (exError) return { data: null, error: exError };
   if (!sessionExercises || sessionExercises.length === 0) return { data: [], error: null };
@@ -451,10 +454,7 @@ async function fetchExerciseHistory(exerciseId: string, userId: string): Promise
   // Chunked so each request stays well under PostgREST's default
   // 1000-row cap and URL length limits on long histories.
   const ids = sessionExercises.map((se: any) => se.session_exercise_id);
-  const CHUNK = 40;
-  const chunks: number[][] = [];
-  for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
-  const results = await Promise.all(chunks.map((chunk) =>
+  const setsRes = await fetchInChunks(ids, (chunk, from, to) =>
     supabase
       .from("session_exercise_sets")
       .select("*")
@@ -462,10 +462,11 @@ async function fetchExerciseHistory(exerciseId: string, userId: string): Promise
       // Unticked sets weren't done; rows from before the flag existed are null.
       .or("completed.is.null,completed.eq.true")
       .order("set_number", { ascending: true })
-  ));
-  const setsError = results.find((r) => r.error)?.error;
-  if (setsError) return { data: null, error: setsError };
-  const allSets = results.flatMap((r) => r.data ?? []);
+      .order("session_set_id", { ascending: true })
+      .range(from, to)
+  );
+  if (setsRes.error) return { data: null, error: setsRes.error };
+  const allSets = setsRes.data ?? [];
 
   const setsByExercise = new Map<number, any[]>();
   for (const set of allSets ?? []) {
@@ -1111,11 +1112,14 @@ export const db = {
     return cachedRead(
       shouldUseSupabase(),
       `workoutSessions:${userId}`,
-      () => supabase.from("workout_sessions")
+      // Every finished workout, not just the first 1000 rows.
+      () => fetchAllPages((from, to) => supabase.from("workout_sessions")
         .select("*")
         .eq("user_id", userId)
         .not("end_time", "is", null)
-        .order("created_at", { ascending: false }),
+        .order("created_at", { ascending: false })
+        .order("session_id", { ascending: false })
+        .range(from, to)),
       () => localDb.getWorkoutSessions(userId),
     );
   },
@@ -1638,10 +1642,14 @@ export const db = {
     const batchRes = await cachedRead(
       shouldUseSupabase(),
       `batchSessionExercises:${[...sessionIds].sort((a, b) => a - b).join(",")}`,
-      () => supabase.from("session_exercises")
+      // Chunked and paged: Profile passes every workout ever logged, which
+      // went past the 1000-row cap (and URL limits) after a few months.
+      () => fetchInChunks(sessionIds, (chunk, from, to) => supabase.from("session_exercises")
         .select("*")
-        .in("session_id", sessionIds)
-        .order("exercise_order"),
+        .in("session_id", chunk)
+        .order("exercise_order")
+        .order("session_exercise_id")
+        .range(from, to)),
       async () => {
         const results = await Promise.all(sessionIds.map(id => localDb.getSessionExercises(id)));
         return { data: results.flatMap(r => r.data ?? []), error: null };
@@ -1669,10 +1677,12 @@ export const db = {
     const batchRes = await cachedRead(
       shouldUseSupabase(),
       `batchSessionExerciseSets:${[...exerciseIds].sort((a, b) => a - b).join(",")}`,
-      () => supabase.from("session_exercise_sets")
+      () => fetchInChunks(exerciseIds, (chunk, from, to) => supabase.from("session_exercise_sets")
         .select("*")
-        .in("session_exercise_id", exerciseIds)
-        .order("set_number"),
+        .in("session_exercise_id", chunk)
+        .order("set_number")
+        .order("session_set_id")
+        .range(from, to)),
       async () => {
         const results = await Promise.all(exerciseIds.map(id => localDb.getSessionExerciseSets(id)));
         return { data: results.flatMap(r => r.data ?? []), error: null };
@@ -1720,12 +1730,15 @@ export const db = {
   getCardioStats: async (userId: string) => {
     if (shouldUseSupabase()) {
       // Fetch all cardio session exercises for this user's completed sessions
-      const { data: cardioExercises } = await supabase
+      const { data: cardioExercises, error: cardioError } = await fetchAllPages((from, to) => supabase
         .from("session_exercises")
         .select("session_exercise_id, session_id, workout_sessions!inner(user_id, end_time)")
         .eq("exercise_type", "cardio")
         .eq("workout_sessions.user_id", userId)
-        .not("workout_sessions.end_time", "is", null);
+        .not("workout_sessions.end_time", "is", null)
+        .order("session_exercise_id")
+        .range(from, to));
+      if (cardioError) return { data: null, error: cardioError };
 
       if (!cardioExercises || cardioExercises.length === 0) {
         return { data: { totalDistanceMeters: 0, totalDurationSeconds: 0, totalCardioSessions: 0, longestRunMeters: 0, fastestPaceSecPerKm: null }, error: null };
@@ -1736,19 +1749,18 @@ export const db = {
       const sessionByExercise = new Map<number, number>();
       for (const e of cardioExercises as any[]) sessionByExercise.set(e.session_exercise_id, e.session_id);
       const exerciseIds = [...sessionByExercise.keys()];
-      const CHUNK = 40;
-      const chunks: number[][] = [];
-      for (let i = 0; i < exerciseIds.length; i += CHUNK) chunks.push(exerciseIds.slice(i, i + CHUNK));
-      const results = await Promise.all(chunks.map((chunk) =>
+      const setsRes = await fetchInChunks(exerciseIds, (chunk, from, to) =>
         supabase
           .from("session_exercise_sets")
-          .select("session_exercise_id, distance_meters, duration_seconds, pace_sec_per_km")
+          .select("session_set_id, session_exercise_id, distance_meters, duration_seconds, pace_sec_per_km")
           .in("session_exercise_id", chunk)
-          .eq("completed", true)
-      ));
-      const setsError = results.find((r) => r.error)?.error;
-      if (setsError) return { data: null, error: setsError };
-      const sets = results.flatMap((r) => r.data ?? []);
+          // Same rule as history: rows from before the done flag are null.
+          .or("completed.is.null,completed.eq.true")
+          .order("session_set_id")
+          .range(from, to)
+      );
+      if (setsRes.error) return { data: null, error: setsRes.error };
+      const sets = setsRes.data ?? [];
 
       let totalDistanceMeters = 0;
       let totalDurationSeconds = 0;
