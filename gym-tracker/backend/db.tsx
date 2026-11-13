@@ -537,6 +537,58 @@ async function forgetCachedActiveSession(sessionId: number) {
   if (cached && cached.session_id === sessionId) await writeCache(ACTIVE_SESSION_KEY, false);
 }
 
+// Offline with Supabase configured: the routine only exists in the read
+// cache (the in-memory local store is empty), so build the session from
+// there. This used to fail with "Routine not found" even though the
+// routine was right there on the home screen.
+// Also used when the server can't be reached despite NetInfo (lie-fi).
+// Null if the routine isn't cached.
+async function startRoutineFromCache(routineId: number, userId: string): Promise<{ data: any; error: any } | null> {
+  const [{ data: routines }, { data: routineExercises }] = await Promise.all([
+    db.getRoutines(),
+    db.getRoutineExercises(routineId),
+  ]);
+  const routine = (routines ?? []).find((r: any) => r.routine_id === routineId);
+  if (routine) {
+    const { data: session, error } = await localDb.startWorkoutSession({
+      routine_id: routineId,
+      session_name: routine.routine_name,
+      user_id: userId,
+    });
+    if (error || !session) return { data: null, error: error ?? { message: "Couldn't start the workout" } };
+    const sorted = [...(routineExercises ?? [])].sort((a: any, b: any) => a.exercise_order - b.exercise_order);
+    for (const ex of sorted) {
+      const { data: sessionEx } = await localDb.insertSessionExercise({
+        session_id: session.session_id,
+        exercise_id: ex.exercise_id,
+        exercise_name: ex.exercise_name,
+        exercise_order: ex.exercise_order,
+        notes: null,
+        exercise_type: ex.exercise_type ?? "strength",
+      });
+      const { data: templateSets } = await db.getRoutineExerciseSets(ex.routine_exercise_id);
+      const sets = [...(templateSets ?? [])].sort((a: any, b: any) => a.set_number - b.set_number);
+      // No cached template (routine never opened online): start with one set.
+      const rows = sets.length > 0 ? sets : [{ set_number: 1, is_warmup: false }];
+      for (const ts of rows as any[]) {
+        await localDb.insertSessionExerciseSet({
+          session_exercise_id: sessionEx.session_exercise_id,
+          set_number: ts.set_number,
+          weight: ts.target_weight ?? null,
+          reps: ts.target_reps ?? null,
+          is_warmup: !!ts.is_warmup,
+          duration_seconds: ts.target_duration_seconds ?? null,
+          distance_meters: ts.target_distance_meters ?? null,
+          effort_level: ts.target_effort_level ?? null,
+        });
+      }
+    }
+    await markSessionOrigin(session.session_id, true);
+    return { data: session, error: null };
+  }
+  return null;
+}
+
 export const db = {
   // Auth
   signUp: async (email: string, password: string, username: string) => {
@@ -1042,30 +1094,36 @@ export const db = {
   // Sync completed session sets back to the routine template targets.
   // Called after finishing a workout so the routine reflects what was actually done.
   syncSessionSetsToRoutine: async (sessionId: number, routineId: number) => {
-    if (shouldUseSupabase()) {
+    // A server workout with changes still queued (the finish flushed only
+    // part way) isn't fully on the server yet: reading it there missed the
+    // queued sets and exercises. Use the offline view and the outbox then.
+    if (shouldUseSupabase() && (isLocalId(sessionId) || !(await hasPendingOps()))) {
       // A workout logged offline and finished after reconnecting is still in
       // the on-device store; the routine it updates is in Supabase.
       const sessionIsLocal = isLocalId(sessionId);
       // Fetch session exercises + routine exercises in parallel
-      const [{ data: sessionExercises }, { data: routineExercises }] = await Promise.all([
+      const [{ data: sessionExercises, error: seErr }, { data: routineExercises, error: reErr }] = await Promise.all([
         sessionIsLocal
           ? localDb.getSessionExercises(sessionId)
           : supabase.from("session_exercises").select("*").eq("session_id", sessionId),
         supabase.from("routine_exercises").select("*").eq("routine_id", routineId),
       ]);
+      if (seErr || reErr) { logError("syncSessionSetsToRoutine.read", seErr ?? reErr); return; }
       if (!sessionExercises?.length || !routineExercises?.length) return;
 
       const sessionExIds = sessionExercises.map((e: any) => e.session_exercise_id);
       const routineExIds = routineExercises.map((e: any) => e.routine_exercise_id);
 
       // Fetch all sets in parallel
-      const [{ data: sessionSets }, { data: routineSets }] = await Promise.all([
+      const [{ data: sessionSets, error: ssErr }, { data: routineSets, error: rsErr }] = await Promise.all([
         sessionIsLocal
           ? Promise.all(sessionExIds.map((id: number) => localDb.getSessionExerciseSets(id)))
-              .then((rs) => ({ data: rs.flatMap((r) => r.data ?? []) }))
+              .then((rs) => ({ data: rs.flatMap((r) => r.data ?? []), error: null }))
           : supabase.from("session_exercise_sets").select("*").in("session_exercise_id", sessionExIds),
         supabase.from("routine_exercise_sets").select("*").in("routine_exercise_id", routineExIds),
       ]);
+      // A failed read must not pair sets against an empty list.
+      if (ssErr || rsErr) { logError("syncSessionSetsToRoutine.read", ssErr ?? rsErr); return; }
 
       const updates: PromiseLike<any>[] = [];
       for (const [sessionEx, routineEx] of matchRoutineExercises<any, any>(sessionExercises, routineExercises)) {
@@ -1086,7 +1144,9 @@ export const db = {
           );
         }
       }
-      await Promise.all(updates);
+      const results = await Promise.all(updates);
+      const failed = results.find((r: any) => r?.error);
+      if (failed) logError("syncSessionSetsToRoutine.update", failed.error);
       return;
     }
 
@@ -1346,17 +1406,26 @@ export const db = {
   startWorkoutFromRoutine: async (routineId: number, userId: string) => {
     if (shouldUseSupabase()) {
       // Round 1: fetch routine + exercises in parallel
-      const [{ data: routine }, { data: exercises }] = await Promise.all([
+      const [{ data: routine, error: routineErr }, { data: exercises, error: exListErr }] = await Promise.all([
         supabase.from("routines").select("*").eq("routine_id", routineId).single(),
         supabase.from("routine_exercises").select("*").eq("routine_id", routineId).order("exercise_order"),
       ]);
-      if (!routine) return { data: null, error: { message: "Routine not found" } };
+      // Can't reach the server even though NetInfo says connected: start from
+      // the cached routine, like a phone that knows it's offline.
+      if (isNetworkError(routineErr) || isNetworkError(exListErr)) {
+        const cached = await startRoutineFromCache(routineId, userId);
+        if (cached) return cached;
+      }
+      if (!routine) return { data: null, error: routineErr?.code === "PGRST116" || !routineErr ? { message: "Routine not found" } : routineErr };
+      // A failed read used to start an empty workout as if the routine had
+      // no exercises.
+      if (exListErr) return { data: null, error: exListErr };
 
       const now = new Date();
       const routineExerciseIds = (exercises ?? []).map((e: any) => e.routine_exercise_id);
 
       // Round 2: create session + fetch all template sets in parallel
-      const [{ data: session, error: sessionErr }, { data: allTemplateSets }] = await Promise.all([
+      const [{ data: session, error: sessionErr }, { data: allTemplateSets, error: templateErr }] = await Promise.all([
         supabase.from("workout_sessions").insert({
           routine_id: routineId,
           session_name: routine.routine_name,
@@ -1366,9 +1435,15 @@ export const db = {
         }).select().single(),
         routineExerciseIds.length > 0
           ? supabase.from("routine_exercise_sets").select("*").in("routine_exercise_id", routineExerciseIds).order("set_number")
-          : Promise.resolve({ data: [] }),
+          : Promise.resolve({ data: [], error: null }),
       ]);
       if (sessionErr) return { data: null, error: sessionErr };
+      // Without the targets the workout would start with no sets, and the
+      // cache refresh below would wipe the offline copy of every template.
+      if (templateErr) {
+        await db.deleteWorkoutSession(session.session_id).catch((e: unknown) => logError("startWorkoutFromRoutine.cleanup", e));
+        return { data: null, error: templateErr };
+      }
 
       if ((exercises ?? []).length === 0) return { data: session, error: null };
 
@@ -1440,53 +1515,9 @@ export const db = {
       await writeCache(ACTIVE_SESSION_KEY, session);
       return { data: session, error: null };
     }
-    // Offline with Supabase configured: the routine only exists in the read
-    // cache (the in-memory local store is empty), so build the session from
-    // there. This used to fail with "Routine not found" even though the
-    // routine was right there on the home screen.
     if (isOnline) {
-      const [{ data: routines }, { data: routineExercises }] = await Promise.all([
-        db.getRoutines(),
-        db.getRoutineExercises(routineId),
-      ]);
-      const routine = (routines ?? []).find((r: any) => r.routine_id === routineId);
-      if (routine) {
-        const { data: session, error } = await localDb.startWorkoutSession({
-          routine_id: routineId,
-          session_name: routine.routine_name,
-          user_id: userId,
-        });
-        if (error || !session) return { data: null, error: error ?? { message: "Couldn't start the workout" } };
-        const sorted = [...(routineExercises ?? [])].sort((a: any, b: any) => a.exercise_order - b.exercise_order);
-        for (const ex of sorted) {
-          const { data: sessionEx } = await localDb.insertSessionExercise({
-            session_id: session.session_id,
-            exercise_id: ex.exercise_id,
-            exercise_name: ex.exercise_name,
-            exercise_order: ex.exercise_order,
-            notes: null,
-            exercise_type: ex.exercise_type ?? "strength",
-          });
-          const { data: templateSets } = await db.getRoutineExerciseSets(ex.routine_exercise_id);
-          const sets = [...(templateSets ?? [])].sort((a: any, b: any) => a.set_number - b.set_number);
-          // No cached template (routine never opened online): start with one set.
-          const rows = sets.length > 0 ? sets : [{ set_number: 1, is_warmup: false }];
-          for (const ts of rows as any[]) {
-            await localDb.insertSessionExerciseSet({
-              session_exercise_id: sessionEx.session_exercise_id,
-              set_number: ts.set_number,
-              weight: ts.target_weight ?? null,
-              reps: ts.target_reps ?? null,
-              is_warmup: !!ts.is_warmup,
-              duration_seconds: ts.target_duration_seconds ?? null,
-              distance_meters: ts.target_distance_meters ?? null,
-              effort_level: ts.target_effort_level ?? null,
-            });
-          }
-        }
-        await markSessionOrigin(session.session_id, true);
-        return { data: session, error: null };
-      }
+      const cached = await startRoutineFromCache(routineId, userId);
+      if (cached) return cached;
     }
     const result = await localDb.startWorkoutFromRoutine(routineId, userId);
     if (result.data) await markSessionOrigin(result.data.session_id, true);

@@ -69,3 +69,25 @@ it("falls back to the local store when the routine isn't cached", async () => {
   expect(mockLocal.startWorkoutFromRoutine).toHaveBeenCalledWith(9, "user-1");
   expect(res.error).toEqual({ message: "Routine not found" });
 });
+
+it("starts from the cache when NetInfo says connected but the server can't be reached", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { supabase } = require("../backend/supabaseClient");
+  const fail = { data: null, error: { message: "Network request failed" } };
+  const q: any = new Proxy({}, { get: (_t, k) => (k === "then" ? (r: any) => r(fail) : () => q) });
+  supabase.from = () => q;
+  mockNet.isConnected = true;
+  try {
+    mockStore[C + "routines"] = JSON.stringify([{ routine_id: 7, routine_name: "Push Day" }]);
+    mockStore[C + "routineExercises:7"] = JSON.stringify([
+      { routine_exercise_id: 1, exercise_id: "bench", exercise_name: "Bench", exercise_order: 1, exercise_type: "strength" },
+    ]);
+    const { data, error } = await db.startWorkoutFromRoutine(7, "user-1");
+    expect(error).toBeNull();
+    expect(data.session_id).toBe(500);
+    expect(mockLocal.insertSessionExercise).toHaveBeenCalledTimes(1);
+  } finally {
+    mockNet.isConnected = false;
+    delete supabase.from;
+  }
+});

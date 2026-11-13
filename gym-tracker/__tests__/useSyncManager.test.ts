@@ -1,7 +1,7 @@
 import { renderHook, act, waitFor } from "@testing-library/react-native";
 import NetInfo from "@react-native-community/netinfo";
 import { db } from "../backend/db";
-import { useSyncManager } from "../utils/useSyncManager";
+import { retryDelay, useSyncManager } from "../utils/useSyncManager";
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 // NetInfo is a native module — mock its two methods used by the hook.
@@ -199,5 +199,27 @@ describe("useSyncManager — cleanup", () => {
 
     unmount();
     expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useSyncManager — retry while changes are still waiting", () => {
+  it("tries again on a backoff when a sync leaves changes queued", async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetPendingCount.mockResolvedValue(2); // never drains
+      renderHook(() => useSyncManager("user-1"));
+      await act(async () => { await Promise.resolve(); });
+      await waitFor(() => expect(mockSync).toHaveBeenCalledTimes(1));
+      await act(async () => { jest.advanceTimersByTime(retryDelay(0)); });
+      await waitFor(() => expect(mockSync).toHaveBeenCalledTimes(2));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("backs off up to five minutes", () => {
+    expect(retryDelay(0)).toBe(30_000);
+    expect(retryDelay(1)).toBe(60_000);
+    expect(retryDelay(10)).toBe(300_000);
   });
 });
