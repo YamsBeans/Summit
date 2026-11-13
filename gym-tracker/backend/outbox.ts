@@ -202,7 +202,8 @@ export function flushOutbox(
         }
         if (!result.ok) onDrop?.(op, result.error);
         await withLock(async () => {
-          ops.shift();
+          // Sign-out may have parked the queue while this op was in flight.
+          if (ops[0] === op) ops.shift();
           if (result.ok) {
             done++;
             if (op.tempId != null && result.id != null) idMap[String(op.tempId)] = result.id;
@@ -216,6 +217,66 @@ export function flushOutbox(
     return { done, dropped, remaining: ops.length };
   })().finally(() => { flushing = null; });
   return flushing;
+}
+
+// ─── Changes waiting for a signed-out account ────────────────────────────────
+// Queued changes belong to whoever was signed in when they were made. On
+// sign-out they're set aside under that account and put back when it signs
+// in again. Before, the next account on the device replayed them: its login
+// was refused by row-level security and the first account's sets were lost.
+
+const PARKED_PREFIX = "@gym_tracker_outbox_parked:";
+
+/** Set aside every queued change for `owner` (on sign-out). Returns how many. */
+export function parkOps(owner: string): Promise<number> {
+  return withLock(async () => {
+    await ensureLoaded();
+    if (ops.length === 0) return 0;
+    const key = PARKED_PREFIX + owner;
+    let parked: OutboxOp[] = [];
+    try {
+      const raw = await AsyncStorage.getItem(key);
+      parked = raw ? JSON.parse(raw) : [];
+    } catch {
+      parked = [];
+    }
+    const n = ops.length;
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify([...parked, ...ops]));
+    } catch {
+      // Couldn't set them aside; keep them queued rather than lose them.
+      return 0;
+    }
+    ops = [];
+    await persist();
+    return n;
+  });
+}
+
+/** Put `owner`'s parked changes back at the front of the queue (on sign-in). */
+export function unparkOps(owner: string): Promise<number> {
+  return withLock(async () => {
+    await ensureLoaded();
+    const key = PARKED_PREFIX + owner;
+    let parked: OutboxOp[] = [];
+    try {
+      const raw = await AsyncStorage.getItem(key);
+      parked = raw ? JSON.parse(raw) : [];
+    } catch {
+      return 0;
+    }
+    if (parked.length === 0) return 0;
+    ops = [...parked, ...ops];
+    // Drop the parked copy first, so a failure can't put them back twice.
+    try {
+      await AsyncStorage.removeItem(key);
+    } catch {
+      ops = ops.slice(parked.length);
+      return 0;
+    }
+    await persist();
+    return parked.length;
+  });
 }
 
 /** Test helper. */

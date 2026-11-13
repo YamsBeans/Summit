@@ -267,3 +267,74 @@ it("never lowers a better PR already on the server", async () => {
   await db.syncPendingSessions("u1");
   expect(server.personal_records[0]).toMatchObject({ max_weight: 300, max_volume: 1125 });
 });
+
+describe("changes queued before a sign-out", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { supabase } = require("../backend/supabaseClient");
+  let signedIn: string | null = "u1";
+  beforeEach(() => {
+    signedIn = "u1";
+    supabase.auth.getSession = async () => ({ data: { session: signedIn ? { user: { id: signedIn } } : null }, error: null });
+    supabase.auth.signOut = async () => { signedIn = null; return { error: null }; };
+  });
+
+  it("wait for their account instead of replaying under the next one", async () => {
+    await db.getSessionExerciseSets(10);
+    goOffline();
+    await db.updateSessionExerciseSet(100, { reps: 9 });
+    await db.signOut();
+    expect(await db.getPendingSessionCount()).toBe(0); // set aside, not dropped
+
+    goOnline();
+    signedIn = "u2";
+    await db.syncPendingSessions("u2");
+    expect(server.session_exercise_sets[0].reps).toBe(5); // u2 didn't replay it
+
+    signedIn = "u1";
+    await db.syncPendingSessions("u1");
+    expect(server.session_exercise_sets[0].reps).toBe(9);
+    expect(await db.getPendingSessionCount()).toBe(0);
+  });
+
+  it("puts parked changes ahead of newer ones, once", async () => {
+    await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 1, values: { reps: 1 } });
+    expect(await outbox.parkOps("u1")).toBe(1);
+    await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 2, values: { reps: 2 } });
+    expect(await outbox.unparkOps("u1")).toBe(1);
+    expect(await outbox.unparkOps("u1")).toBe(0);
+    const seen: number[] = [];
+    await outbox.flushOutbox(async (op: any) => { seen.push(op.id); return { ok: true }; });
+    expect(seen).toEqual([1, 2]);
+  });
+});
+
+describe("workouts logged offline and uploaded later", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const queue = require("../backend/offlineQueue");
+  const pending = (user: string, localId: number) => ({
+    local_session_id: localId,
+    session: { routine_id: null, session_name: "Legs", session_date: "2026-11-09", start_time: "18:30:00", end_time: "19:30:00", notes: null, user_id: user },
+    exercises: [],
+    sets: [],
+  });
+
+  it("are dated when they happened and only go to their own account", async () => {
+    await queue.enqueuePendingSession(pending("u1", 1e12 + 1));
+    await queue.enqueuePendingSession(pending("u2", 1e12 + 2));
+    await db.syncPendingSessions("u1");
+    const uploaded = server.workout_sessions.filter((s) => s.session_name === "Legs");
+    expect(uploaded).toHaveLength(1);
+    expect(uploaded[0].user_id).toBe("u1");
+    expect(uploaded[0].created_at).toBe(new Date("2026-11-09T18:30:00").toISOString());
+    // u2's workout is still waiting for u2.
+    expect((await queue.getPendingQueue()).map((p: any) => p.session.user_id)).toEqual(["u2"]);
+  });
+
+  it("aren't uploaded twice if the app closed before the queue was trimmed", async () => {
+    await queue.enqueuePendingSession(pending("u1", 1e12 + 3));
+    await queue.markLocalSessionsSynced({ [1e12 + 3]: 777 });
+    await db.syncPendingSessions("u1");
+    expect(server.workout_sessions.filter((s) => s.session_name === "Legs")).toHaveLength(0);
+    expect(await queue.getPendingQueue()).toEqual([]);
+  });
+});

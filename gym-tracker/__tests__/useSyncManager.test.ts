@@ -17,6 +17,7 @@ jest.mock("../backend/db", () => ({
   isOnline: true,
   db: {
     getPendingSessionCount: jest.fn(),
+    restoreParkedChanges: jest.fn(() => Promise.resolve(0)),
     syncPendingSessions: jest.fn(),
   },
 }));

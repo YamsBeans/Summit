@@ -437,8 +437,14 @@ export default function SettingsScreen() {
 
   const appearanceLabel = mode === "light" ? "Light" : mode === "dark" ? "Dark" : "System";
 
-  const handleSignOut = () => {
-    showAlert("Sign Out", "Are you sure you want to sign out?", [
+  const handleSignOut = async () => {
+    // Say so when changes haven't uploaded yet: they wait on this device until
+    // this account signs in here again.
+    const pending = await db.getPendingSessionCount().catch(() => 0);
+    const message = pending > 0
+      ? `${pending} ${pending === 1 ? "change hasn't" : "changes haven't"} uploaded yet. They'll stay on this device and upload the next time you sign in here.\n\nSign out anyway?`
+      : "Are you sure you want to sign out?";
+    showAlert("Sign Out", message, [
       { text: "Cancel", style: "cancel" },
       { text: "Sign Out", style: "destructive", onPress: async () => { await db.signOut(); } },
     ]);

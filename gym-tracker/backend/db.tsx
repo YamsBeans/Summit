@@ -34,8 +34,10 @@ import {
   inOutboxOrder,
   isTempId,
   newTempId,
+  parkOps,
   pendingOpCount,
   resolveId,
+  unparkOps,
   translateWithKnownIds,
 } from "./outbox";
 
@@ -201,11 +203,20 @@ async function rollbackSyncedSession(sessionId: number) {
   }
 }
 
+/** The workout's start as a timestamp, or undefined to let the server default it. */
+export function workoutTimestamp(date: string | null | undefined, time: string | null | undefined): string | undefined {
+  if (!date) return undefined;
+  const d = new Date(`${date}T${time || "00:00:00"}`);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
+
 async function runPendingSync(userId: string): Promise<{ synced: number; errors: number }> {
   if (!isOnline) return { synced: 0, errors: 0 };
+  // Changes this account made before signing out on this device come back first.
+  await unparkOps(userId).catch((e) => logError("unparkOps", e));
   // Changes to server workouts made offline go first, in order.
   await flushNow();
-  const queue = await getPendingQueue();
+  const [queue, alreadySynced] = await Promise.all([getPendingQueue(), getSyncedLocalSessions()]);
   if (queue.length === 0) return { synced: 0, errors: 0 };
 
   let synced = 0;
@@ -214,11 +225,23 @@ async function runPendingSync(userId: string): Promise<{ synced: number; errors:
 
   for (let i = 0; i < queue.length; i++) {
     const { session, exercises, sets } = queue[i];
+    // Another account's workout, logged before it signed out on this device.
+    // It waits for that account. It used to be uploaded into whoever was
+    // signed in now.
+    if (session.user_id && session.user_id !== userId) continue;
+    // Uploaded already, but the app closed before the queue was trimmed.
+    const localId = queue[i].local_session_id;
+    if (localId != null && alreadySynced[String(localId)] != null) {
+      successfulIndices.push(i);
+      continue;
+    }
     try {
-      // Insert session row
+      // Insert session row. created_at is when the workout happened, not when
+      // it uploaded: history and the PREVIOUS column sort by it, so Monday's
+      // offline workout uploaded on Friday showed up as the newest one.
       const { data: newSession, error: sessionErr } = await supabase
         .from("workout_sessions")
-        .insert({ ...session, user_id: userId })
+        .insert({ ...session, user_id: userId, created_at: workoutTimestamp(session.session_date, session.start_time) })
         .select()
         .single();
       if (sessionErr || !newSession) { errors++; continue; }
@@ -260,7 +283,6 @@ async function runPendingSync(userId: string): Promise<{ synced: number; errors:
 
       successfulIndices.push(i);
       synced++;
-      const localId = queue[i].local_session_id;
       if (localId != null) await markLocalSessionsSynced({ [localId]: newSession.session_id });
     } catch {
       errors++;
@@ -586,6 +608,12 @@ export const db = {
   },
 
   signOut: async () => {
+    // Queued changes belong to this account: set them aside so the next
+    // account to sign in here doesn't replay them (see parkOps).
+    if (isOnline) {
+      const user = await sessionUser().catch(() => null);
+      if (user?.id) await parkOps(user.id).catch((e) => logError("parkOps", e));
+    }
     if (shouldUseSupabase()) {
       await supabase.auth.signOut();
     } else if (isOnline) {
@@ -1727,6 +1755,9 @@ export const db = {
 
   // Workouts waiting to upload, plus queued changes to server workouts.
   getPendingSessionCount: async (): Promise<number> => (await getPendingCount()) + (await pendingOpCount()),
+
+  /** Put back changes this account queued before it last signed out here. */
+  restoreParkedChanges: (userId: string): Promise<number> => unparkOps(userId),
 
   // Cardio aggregate stats
   getCardioStats: async (userId: string) => {

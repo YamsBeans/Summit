@@ -13,6 +13,8 @@ export function useSyncManager(userId: string | null) {
     // Sync any sessions queued from a previous app session
     (async () => {
       try {
+        // Changes this account queued before it last signed out on this device.
+        await db.restoreParkedChanges(userId).catch(() => 0);
         const pending = await db.getPendingSessionCount();
         if (pending === 0) return;
         const state = await NetInfo.fetch();
