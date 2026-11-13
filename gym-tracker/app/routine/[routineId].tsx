@@ -6,6 +6,7 @@ import {
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
+import { useCommitOnUnmount } from "@/utils/useCommitOnUnmount";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
@@ -71,16 +72,38 @@ export default function RoutineScreen() {
 
   // ─── Data loading ─────────────────────────────────────────────────────────
 
+  const isEditingRef = useRef(isEditing);
+  isEditingRef.current = isEditing;
+
   const loadData = async () => {
     setLoading(true);
-    const { data: exData, error: exErr } = await db.getRoutineExercises(routineId);
+    const [{ data: exData, error: exErr }, { data: routines }] = await Promise.all([
+      db.getRoutineExercises(routineId),
+      db.getRoutines(),
+    ]);
     if (exErr) { setError(exErr.message); setLoading(false); return; }
+    // The name and description came only from the route params, so after a
+    // rename a web reload showed the old name, and saving the name alone
+    // wrote the stale description back. Use the saved routine when we have it.
+    const saved = (routines ?? []).find((r: any) => r.routine_id === routineId);
+    if (saved && !isEditingRef.current) {
+      const name = saved.routine_name ?? "Routine";
+      const desc = saved.description ?? "";
+      setDisplayName(name);
+      setDisplayDesc(desc);
+      setEditableName(name);
+      setEditableDesc(desc);
+    }
     const exs = exData ?? [];
     setExercises(exs);
 
     const setsResults = await Promise.all(
       exs.map((ex: any) => db.getRoutineExerciseSets(ex.routine_exercise_id))
     );
+    // A failed read used to show the exercise with no sets, and Add Set then
+    // reused set number 1.
+    const setsErr = setsResults.find((r: any) => r.error)?.error;
+    if (setsErr) { setError(setsErr.message ?? "Failed to load sets"); setLoading(false); return; }
     const setsMap: Record<number, any[]> = {};
     exs.forEach((ex: any, i: number) => {
       setsMap[ex.routine_exercise_id] = setsResults[i].data ?? [];
@@ -121,22 +144,26 @@ export default function RoutineScreen() {
     }
   };
 
-  const handleSaveNameDesc = async () => {
+  /** Saves only the fields that changed. False if the save failed. */
+  const handleSaveNameDesc = async (): Promise<boolean> => {
     const trimmedName = editableName.trim();
-    if (!trimmedName) return;
+    if (!trimmedName) return true;
     const trimmedDesc = editableDesc.trim();
-    if (trimmedName === displayName && trimmedDesc === displayDesc) return;
-    const { error: err } = await db.updateRoutine(routineId, {
-      routine_name: trimmedName,
-      description: trimmedDesc || null,
-    });
-    if (err) { setError(err.message); return; }
+    const updates: { routine_name?: string; description?: string | null } = {};
+    if (trimmedName !== displayName) updates.routine_name = trimmedName;
+    if (trimmedDesc !== displayDesc) updates.description = trimmedDesc || null;
+    if (Object.keys(updates).length === 0) return true;
+    const { error: err } = await db.updateRoutine(routineId, updates);
+    if (err) { setError(err.message); return false; }
     setDisplayName(trimmedName);
     setDisplayDesc(trimmedDesc);
+    return true;
   };
 
   const handleDoneEditing = async () => {
-    await handleSaveNameDesc();
+    // Stay in edit mode if the save failed (e.g. offline), so the typed name
+    // isn't thrown away.
+    if (!(await handleSaveNameDesc())) return;
     // Dismiss keyboard so any focused TextInput fires its onBlur before we switch modes
     Keyboard.dismiss();
     setIsEditing(false);
@@ -206,7 +233,16 @@ export default function RoutineScreen() {
     replaceTargetRef.current = null;
   });
 
-  const handleAddSet = useGuardedPress((routineExerciseId: number) => setJobs(routineExerciseId, async () => {
+  // Double-tap guard per exercise. One shared guard held for the whole save
+  // dropped a quick tap on another exercise's Add Set.
+  const lastAddTapRef = useRef<Record<number, number>>({});
+  const handleAddSet = (routineExerciseId: number) => {
+    const now = Date.now();
+    if (now - (lastAddTapRef.current[routineExerciseId] ?? 0) < 300) return;
+    lastAddTapRef.current[routineExerciseId] = now;
+    return addSetNow(routineExerciseId);
+  };
+  const addSetNow = (routineExerciseId: number) => setJobs(routineExerciseId, async () => {
     const currentSets = exerciseSetsRef.current[routineExerciseId] ?? [];
     const ex = exercises.find((e) => e.routine_exercise_id === routineExerciseId);
     const isCardio = ex?.exercise_type === 'cardio';
@@ -221,7 +257,7 @@ export default function RoutineScreen() {
     });
     if (err) { setError(err.message); return; }
     await reloadSetsForExercise(routineExerciseId);
-  }), 300);
+  });
 
   const handleDeleteSet = useCallback((routineSetId: number, routineExerciseId: number) => setJobs(routineExerciseId, async () => {
     const remaining = (exerciseSetsRef.current[routineExerciseId] ?? []).filter((s) => s.routine_set_id !== routineSetId);
@@ -413,7 +449,12 @@ export default function RoutineScreen() {
                   </Text>
                 </Pressable>
                 {isEditing && (
-                  <Pressable onPress={() => openExerciseOptions(ex)} hitSlop={8}>
+                  <Pressable
+                    onPress={() => openExerciseOptions(ex)}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${ex.exercise_name} options`}
+                  >
                     <Ionicons name="ellipsis-horizontal" size={20} color={colors.textTertiary} />
                   </Pressable>
                 )}
@@ -786,18 +827,6 @@ const CardioTemplateSetRow = memo(function CardioTemplateSetRow({
   );
 });
 
-/**
- * Save a value still being typed when the row goes away. Tapping Done
- * dismisses the keyboard and leaves edit mode in the same tick, and on
- * native the rows unmounted before the blur arrived, so the last value
- * typed was dropped. The commit functions only write when the value changed.
- */
-function useCommitOnUnmount(commit: () => void) {
-  const ref = useRef(commit);
-  ref.current = commit;
-  useEffect(() => () => ref.current(), []);
-}
-
 // ─── TemplateSetRow (editable) ────────────────────────────────────────────────
 
 const TemplateSetRow = memo(function TemplateSetRow({
@@ -856,6 +885,7 @@ const TemplateSetRow = memo(function TemplateSetRow({
         onChangeText={setWeight}
         onBlur={commitWeight}
         keyboardType="decimal-pad"
+        accessibilityLabel={`${isWarmup ? "Warm-up set" : `Set ${number}`} target weight in ${unit}`}
         placeholder="—"
         placeholderTextColor={colors.textTertiary}
         returnKeyType="done"
@@ -866,6 +896,7 @@ const TemplateSetRow = memo(function TemplateSetRow({
         onChangeText={setReps}
         onBlur={commitReps}
         keyboardType="number-pad"
+        accessibilityLabel={`${isWarmup ? "Warm-up set" : `Set ${number}`} target reps`}
         placeholder="—"
         placeholderTextColor={colors.textTertiary}
         returnKeyType="done"
@@ -873,6 +904,9 @@ const TemplateSetRow = memo(function TemplateSetRow({
       <Pressable
         style={[rowStyles.warmupBtn, isWarmup && { backgroundColor: colors.warningLight }]}
         onPress={() => onUpdate(set.routine_set_id, routineExerciseId, { is_warmup: !isWarmup })}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: isWarmup }}
+        accessibilityLabel="Warm-up set"
         hitSlop={6}
       >
         <Text style={[rowStyles.warmupLabel, { color: isWarmup ? colors.warning : colors.textTertiary }]}>W</Text>

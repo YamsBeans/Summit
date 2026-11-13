@@ -338,3 +338,16 @@ describe("workouts logged offline and uploaded later", () => {
     expect(await queue.getPendingQueue()).toEqual([]);
   });
 });
+
+it("queues a photo removal made offline instead of pretending it worked", async () => {
+  server.workout_sessions[0].photo_url = "u1/1.jpg";
+  server.workout_sessions[0].end_time = "18:00:00";
+  await db.getWorkoutSession(1);
+  goOffline();
+  const res = await db.updateSessionPhotoUrl(1, null);
+  expect(res.error).toBeNull();
+  expect((await db.getWorkoutSession(1)).data.photo_url).toBeNull();
+  goOnline();
+  await db.syncPendingSessions("u1");
+  expect(server.workout_sessions[0].photo_url).toBeNull();
+});

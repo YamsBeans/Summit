@@ -27,6 +27,7 @@ import { computePace, digitsToSeconds, formatDigits, metersToDisplay, parseDista
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 import { createSerialQueue, nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
 import { logError } from "@/utils/log";
+import { useCommitOnUnmount } from "@/utils/useCommitOnUnmount";
 
 type EditSet = {
   session_set_id: number;
@@ -96,7 +97,22 @@ export default function WorkoutEditScreen() {
       updateSessionExercise: track(db.updateSessionExercise),
     };
   }, []);
+  // Reps typed but not yet saved (weights track this with `weight != null`).
+  const dirtyReps = useRef(new Set<number>());
+  // Save whatever is still being typed. Done and Back sit outside the
+  // ScrollView, so on iOS/Android tapping them doesn't blur the input and
+  // the last number typed was lost (and left out of the PR rebuild).
+  const flushTypingRef = useRef(() => {});
+  flushTypingRef.current = () => {
+    for (const ex of exercisesRef.current) {
+      for (const s of ex.sets) {
+        if (s.weight != null) handleWeightBlur(s);
+        if (dirtyReps.current.has(s.session_set_id)) handleRepsBlur(s);
+      }
+    }
+  };
   useEffect(() => () => {
+    flushTypingRef.current();
     const touched = [...loadedExerciseIds.current, ...exercisesRef.current.map((e) => e.exercise_id)];
     setTimeout(async () => {
       if (!dirty.current || touched.length === 0) return;
@@ -141,7 +157,14 @@ export default function WorkoutEditScreen() {
 
     const exList: any[] = exData ?? [];
     const exerciseIds = exList.map((e) => e.session_exercise_id);
-    const { data: allSets } = await db.getBatchSessionExerciseSets(exerciseIds);
+    const { data: allSets, error: setsErr } = await db.getBatchSessionExerciseSets(exerciseIds);
+    // Without this, a failed read showed every exercise with no sets, and
+    // Add Set then reused set number 1.
+    if (setsErr) {
+      setError((setsErr as any)?.message ?? "Failed to load sets");
+      setLoading(false);
+      return;
+    }
 
     const setsByExercise: Record<number, any[]> = {};
     for (const set of allSets ?? []) {
@@ -176,6 +199,7 @@ export default function WorkoutEditScreen() {
   }
 
   async function handleDone() {
+    flushTypingRef.current();
     const trimmedName = sessionName.trim();
     if (!trimmedName) {
       setError("Workout name cannot be empty.");
@@ -208,11 +232,23 @@ export default function WorkoutEditScreen() {
         setShowPhotoModal(false);
         return;
       }
-      await db.updateSessionPhotoUrl(sid, url);
+      const { error: linkError } = await db.updateSessionPhotoUrl(sid, url);
+      if (linkError) {
+        showAlert("Photo Not Saved", (linkError as any)?.message ?? "The photo uploaded but couldn't be added to this workout. Try again.");
+        setPhotoUploading(false);
+        setShowPhotoModal(false);
+        return;
+      }
       setPhotoUrl(url);
     } else {
       // offline — store local URI
-      await db.updateSessionPhotoUrl(sid, uri);
+      const { error: linkError } = await db.updateSessionPhotoUrl(sid, uri);
+      if (linkError) {
+        showAlert("Photo Not Saved", (linkError as any)?.message ?? "Couldn't save the photo. Try again.");
+        setPhotoUploading(false);
+        setShowPhotoModal(false);
+        return;
+      }
       setPhotoUrl(uri);
     }
     setPhotoUploading(false);
@@ -226,7 +262,11 @@ export default function WorkoutEditScreen() {
         text: "Remove",
         style: "destructive",
         onPress: async () => {
-          await db.updateSessionPhotoUrl(sid, null);
+          const { error: err } = await db.updateSessionPhotoUrl(sid, null);
+          if (err) {
+            setError((err as any)?.message ?? "Couldn't remove the photo");
+            return;
+          }
           setPhotoUrl(null);
         },
       },
@@ -236,6 +276,7 @@ export default function WorkoutEditScreen() {
   // ── Set editing ──────────────────────────────────────
 
   function updateSetLocal(sessionSetId: number, field: "weight" | "reps", value: string) {
+    if (field === "reps") dirtyReps.current.add(sessionSetId);
     setExercises((prev) =>
       prev.map((ex) => ({
         ...ex,
@@ -271,6 +312,7 @@ export default function WorkoutEditScreen() {
   }
 
   async function handleRepsBlur(set: EditSet) {
+    dirtyReps.current.delete(set.session_set_id);
     const reps = parseIntInput(set.reps);
     patchSet(set.session_set_id, { reps: formatNumberInput(reps) });
     const { error: err } = await edits.updateSessionExerciseSet(set.session_set_id, { reps });
@@ -381,7 +423,9 @@ export default function WorkoutEditScreen() {
 
   async function handleAddExercise(exercise: { id: string; name: string; exercise_type?: string; category?: string }) {
     setShowPicker(false);
-    const nextOrder = exercises.length + 1;
+    // After the highest order, not the count: removing one exercise and
+    // adding another gave two the same order, so they swapped on reload.
+    const nextOrder = exercises.reduce((m, e) => Math.max(m, e.exercise_order ?? 0), 0) + 1;
     // Same type inference as the live workout screen, so a run added here
     // gets distance/time fields instead of weight/reps.
     const exType = (exercise.exercise_type ?? (exercise.category === "cardio" ? "cardio" : exercise.category === "stretching" ? "stretching" : "strength")) as "strength" | "cardio" | "stretching";
@@ -426,14 +470,33 @@ export default function WorkoutEditScreen() {
       replaceTargetRef.current = null;
       return;
     }
+    // Strength numbers mean nothing on a run (and vice versa): clear them so
+    // they don't count as completed sets or volume under the new exercise.
+    // The live logger already did this; this screen kept the old numbers.
+    const kindChanged = ((target.exercise_type ?? "strength") === "cardio") !== (exType === "cardio");
+    const toClear = kindChanged
+      ? (exercisesRef.current.find((e) => e.session_exercise_id === target.session_exercise_id)?.sets ?? [])
+      : [];
+    for (const st of toClear) dirtyReps.current.delete(st.session_set_id);
     setExercises((prev) =>
       prev.map((ex) =>
         ex.session_exercise_id === target.session_exercise_id
-          ? { ...ex, exercise_id: exercise.id, exercise_name: exercise.name, exercise_type: exType }
+          ? {
+            ...ex, exercise_id: exercise.id, exercise_name: exercise.name, exercise_type: exType,
+            sets: kindChanged
+              ? ex.sets.map((st) => ({ ...st, weight_lbs: null, weight: null, reps: "", completed: false, distance_meters: null, duration_seconds: null }))
+              : ex.sets,
+          }
           : ex
       )
     );
     replaceTargetRef.current = null;
+    const results = await Promise.all(toClear.map((st) => edits.updateSessionExerciseSet(st.session_set_id, {
+      completed: false, weight: null, reps: null,
+      distance_meters: null, duration_seconds: null, pace_sec_per_km: null,
+    })));
+    const failed = results.find((r) => r.error);
+    if (failed) setError((failed.error as any)?.message ?? "Failed to clear the old sets");
   }
 
   // ── Render ────────────────────────────────────────────
@@ -543,6 +606,8 @@ export default function WorkoutEditScreen() {
               </Text>
               <Pressable
                 hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel={`${ex.exercise_name} options`}
                 onPress={() => {
                   setSelectedExercise(ex);
                   setExerciseOptionsVisible(true);
@@ -592,6 +657,7 @@ export default function WorkoutEditScreen() {
                     value={set.weight ?? formatNumberInput(toDisplay(set.weight_lbs))}
                     onChangeText={(v) => updateSetLocal(set.session_set_id, "weight", v)}
                     onBlur={() => handleWeightBlur(set)}
+                    accessibilityLabel={`${set.is_warmup ? "Warm-up set" : `Set ${workingSetNumber(ex.sets, idx)}`} weight in ${unitLabel}`}
                     placeholder="—"
                     placeholderTextColor={colors.textTertiary}
                     keyboardType="decimal-pad"
@@ -602,6 +668,7 @@ export default function WorkoutEditScreen() {
                     value={set.reps}
                     onChangeText={(v) => updateSetLocal(set.session_set_id, "reps", v)}
                     onBlur={() => handleRepsBlur(set)}
+                    accessibilityLabel={`${set.is_warmup ? "Warm-up set" : `Set ${workingSetNumber(ex.sets, idx)}`} reps`}
                     placeholder="—"
                     placeholderTextColor={colors.textTertiary}
                     keyboardType="number-pad"
@@ -628,6 +695,8 @@ export default function WorkoutEditScreen() {
                 <Pressable
                   hitSlop={8}
                   onPress={() => handleRemoveSet(ex, set)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove set"
                   style={({ pressed }) => [{ width: 28, alignItems: "center" }, pressed && { opacity: 0.5 }]}
                 >
                   <Ionicons name="remove-circle-outline" size={20} color={colors.danger} />
@@ -887,6 +956,7 @@ function CardioEditInputs({
     const secs = digitsToSeconds(digits);
     onCommit(meters != null && meters > 0 ? meters : null, secs > 0 ? secs : null);
   };
+  useCommitOnUnmount(commit);
 
   const inputStyle = [styles.setInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.inputBackground, flex: 1 }];
   return (

@@ -748,8 +748,15 @@ export const db = {
   },
 
   updateSessionPhotoUrl: async (sessionId: number, photoUrl: string | null) => {
-    if (useSupabaseFor(sessionId)) {
-      return supabase.from("workout_sessions").update({ photo_url: photoUrl }).eq("session_id", sessionId);
+    // A server workout goes through the outbox like its name and notes. It
+    // used to fall through to the device store while offline, which has no
+    // such row: Remove Photo looked done and the photo came back later.
+    if (!onDevice(sessionId)) {
+      const values = { photo_url: photoUrl };
+      return writeServerRow(
+        { kind: "update", table: "workout_sessions", id: sessionId, values },
+        () => patchCachedRow(`workoutSession:${sessionId}`, values),
+      );
     }
     const result = await localDb.updateSessionPhotoUrl(sessionId, photoUrl);
     if (isLocalId(sessionId)) await updateFinishedLocalSession(sessionId, { photo_url: photoUrl });
