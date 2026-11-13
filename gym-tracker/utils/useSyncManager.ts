@@ -38,7 +38,7 @@ export function useSyncManager(userId: string | null) {
     async function trySync(checkNetwork: boolean) {
       try {
         if (checkNetwork || attempt > 0) {
-          const pending = await db.getPendingSessionCount();
+          const pending = await db.getPendingSessionCount(userId!);
           if (cancelled || pending === 0) { attempt = 0; return; }
         }
         if (checkNetwork || attempt > 0) {
@@ -56,7 +56,7 @@ export function useSyncManager(userId: string | null) {
           // Without this, a failed sync left "Syncing…" up for good.
           if (!cancelled) setIsSyncing(false);
         }
-        if ((await db.getPendingSessionCount()) > 0) scheduleRetry();
+        if ((await db.getPendingSessionCount(userId!)) > 0) scheduleRetry();
         else attempt = 0;
       } catch {
         // NetInfo unavailable — skip this attempt

@@ -212,6 +212,11 @@ export function workoutTimestamp(date: string | null | undefined, time: string |
 
 async function runPendingSync(userId: string): Promise<{ synced: number; errors: number }> {
   if (!isOnline) return { synced: 0, errors: 0 };
+  // A sync asked for by an account that has since signed out (a run can
+  // repeat after it was requested) must not put that account's parked
+  // changes back under someone else's login.
+  const current = await sessionUser().catch(() => null);
+  if (current?.id !== userId) return { synced: 0, errors: 0 };
   // Changes this account made before signing out on this device come back first.
   await unparkOps(userId).catch((e) => logError("unparkOps", e));
   // Changes to server workouts made offline go first, in order.
@@ -543,10 +548,12 @@ async function forgetCachedActiveSession(sessionId: number) {
 // routine was right there on the home screen.
 // Also used when the server can't be reached despite NetInfo (lie-fi).
 // Null if the routine isn't cached.
+// Reads only the cache: on lie-fi, going through cachedRead would wait on
+// the dead connection again for every read.
 async function startRoutineFromCache(routineId: number, userId: string): Promise<{ data: any; error: any } | null> {
-  const [{ data: routines }, { data: routineExercises }] = await Promise.all([
-    db.getRoutines(),
-    db.getRoutineExercises(routineId),
+  const [routines, routineExercises] = await Promise.all([
+    readCache<any[]>("routines"),
+    readCache<any[]>(`routineExercises:${routineId}`),
   ]);
   const routine = (routines ?? []).find((r: any) => r.routine_id === routineId);
   if (routine) {
@@ -566,7 +573,7 @@ async function startRoutineFromCache(routineId: number, userId: string): Promise
         notes: null,
         exercise_type: ex.exercise_type ?? "strength",
       });
-      const { data: templateSets } = await db.getRoutineExerciseSets(ex.routine_exercise_id);
+      const templateSets = await readCache<any[]>(`routineExerciseSets:${ex.routine_exercise_id}`);
       const sets = [...(templateSets ?? [])].sort((a: any, b: any) => a.set_number - b.set_number);
       // No cached template (routine never opened online): start with one set.
       const rows = sets.length > 0 ? sets : [{ set_number: 1, is_warmup: false }];
@@ -1442,6 +1449,10 @@ export const db = {
       // cache refresh below would wipe the offline copy of every template.
       if (templateErr) {
         await db.deleteWorkoutSession(session.session_id).catch((e: unknown) => logError("startWorkoutFromRoutine.cleanup", e));
+        if (isNetworkError(templateErr)) {
+          const cached = await startRoutineFromCache(routineId, userId);
+          if (cached) return cached;
+        }
         return { data: null, error: templateErr };
       }
 
@@ -1792,7 +1803,13 @@ export const db = {
   },
 
   // Workouts waiting to upload, plus queued changes to server workouts.
-  getPendingSessionCount: async (): Promise<number> => (await getPendingCount()) + (await pendingOpCount()),
+  /** Queued workouts and changes. With a userId, other accounts' queued workouts aren't counted. */
+  getPendingSessionCount: async (userId?: string): Promise<number> => {
+    const queued = userId
+      ? (await getPendingQueue()).filter((p) => !p.session.user_id || p.session.user_id === userId).length
+      : await getPendingCount();
+    return queued + (await pendingOpCount());
+  },
 
   /** Put back changes this account queued before it last signed out here. */
   restoreParkedChanges: (userId: string): Promise<number> => unparkOps(userId),

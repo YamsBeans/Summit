@@ -74,7 +74,7 @@ function mockQuery(table: string) {
   return q;
 }
 
-jest.mock("../backend/supabaseClient", () => ({ supabase: { auth: {}, from: (t: string) => mockQuery(t) } }));
+jest.mock("../backend/supabaseClient", () => ({ supabase: { auth: { getSession: async () => ({ data: { session: { user: { id: "u1" } } }, error: null }) }, from: (t: string) => mockQuery(t) } }));
 jest.mock("../backend/networkStatus", () => ({ networkStatus: mockNet }));
 jest.mock("../backend/localDb", () => ({
   localDb: {
@@ -294,6 +294,25 @@ describe("changes queued before a sign-out", () => {
     await db.syncPendingSessions("u1");
     expect(server.session_exercise_sets[0].reps).toBe(9);
     expect(await db.getPendingSessionCount()).toBe(0);
+  });
+
+  it("doesn't park a change that's uploading, so it isn't sent twice", async () => {
+    await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 1, values: {} });
+    await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 2, values: {} });
+    let release: () => void = () => {};
+    const sent: number[] = [];
+    const flush = outbox.flushOutbox(async (op: any) => {
+      sent.push(op.id);
+      if (op.id === 1) await new Promise<void>((r) => { release = r; });
+      return { ok: true };
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await outbox.parkOps("u1")).toBe(1); // only op 2
+    release();
+    await flush;
+    await outbox.unparkOps("u1");
+    await outbox.flushOutbox(async (op: any) => { sent.push(op.id); return { ok: true }; });
+    expect(sent).toEqual([1, 2]);
   });
 
   it("puts parked changes ahead of newer ones, once", async () => {

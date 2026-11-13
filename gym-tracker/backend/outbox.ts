@@ -165,6 +165,9 @@ export function translateOp(op: OutboxOp, map: Record<string, number>): OutboxOp
 }
 
 let flushing: Promise<{ done: number; dropped: number; remaining: number }> | null = null;
+// The change being uploaded right now (outside the lock). parkOps leaves it
+// in the queue, or it would be parked and uploaded a second time later.
+let inFlight: OutboxOp | null = null;
 let flushAgain = false;
 
 /**
@@ -191,7 +194,13 @@ export function flushOutbox(
         const op = ops[0];
         const ready = translateOp(op, idMap);
         // A change to a row whose creation was refused can never apply.
-        const result: ExecuteResult = ready ? await execute(ready) : { ok: false, retry: false };
+        inFlight = op;
+        let result: ExecuteResult;
+        try {
+          result = ready ? await execute(ready) : { ok: false, retry: false };
+        } finally {
+          inFlight = null;
+        }
         if (!result.ok && result.retry) break;
         if (!result.ok && result.transient && (op.attempts ?? 0) + 1 < MAX_ATTEMPTS) {
           await withLock(async () => {
@@ -231,7 +240,8 @@ const PARKED_PREFIX = "@gym_tracker_outbox_parked:";
 export function parkOps(owner: string): Promise<number> {
   return withLock(async () => {
     await ensureLoaded();
-    if (ops.length === 0) return 0;
+    const toPark = ops.filter((o) => o !== inFlight);
+    if (toPark.length === 0) return 0;
     const key = PARKED_PREFIX + owner;
     let parked: OutboxOp[] = [];
     try {
@@ -240,16 +250,15 @@ export function parkOps(owner: string): Promise<number> {
     } catch {
       parked = [];
     }
-    const n = ops.length;
     try {
-      await AsyncStorage.setItem(key, JSON.stringify([...parked, ...ops]));
+      await AsyncStorage.setItem(key, JSON.stringify([...parked, ...toPark]));
     } catch {
       // Couldn't set them aside; keep them queued rather than lose them.
       return 0;
     }
-    ops = [];
+    ops = ops.filter((o) => o === inFlight);
     await persist();
-    return n;
+    return toPark.length;
   });
 }
 
@@ -287,6 +296,7 @@ export function __resetOutboxForTests() {
   lock = Promise.resolve();
   flushing = null;
   flushAgain = false;
+  inFlight = null;
   lastTemp = 0;
 }
 

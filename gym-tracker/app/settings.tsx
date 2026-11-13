@@ -440,7 +440,8 @@ export default function SettingsScreen() {
   const handleSignOut = async () => {
     // Say so when changes haven't uploaded yet: they wait on this device until
     // this account signs in here again.
-    const pending = await db.getPendingSessionCount().catch(() => 0);
+    const uid = (await db.getUser().catch(() => null))?.data?.user?.id;
+    const pending = await db.getPendingSessionCount(uid ?? undefined).catch(() => 0);
     const message = pending > 0
       ? `${pending} ${pending === 1 ? "change hasn't" : "changes haven't"} uploaded yet. They'll stay on this device and upload the next time you sign in here.\n\nSign out anyway?`
       : "Are you sure you want to sign out?";

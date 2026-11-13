@@ -29,7 +29,7 @@ const chain: any = new Proxy({}, {
   },
 });
 const mockSupabase = {
-  auth: {},
+  auth: { getSession: async () => ({ data: { session: { user: { id: "u1" } } }, error: null }) },
   from: jest.fn((table: string) => { touched.push(table); return chain; }),
 };
 
