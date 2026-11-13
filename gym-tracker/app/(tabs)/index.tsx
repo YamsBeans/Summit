@@ -1,20 +1,94 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { db, isOnline } from "@/backend/db";
+import { db } from "@/backend/db";
+import { useConnectionMode } from "@/utils/useConnectionMode";
+import { formatLastDone, lastDoneByRoutine, nextUpRoutineId } from "@/utils/lastDone";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { useGuardedPress } from "@/utils/pressGuard";
 import ConfirmModal from "@/components/ConfirmModal";
+import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
+import { duplicateRoutine } from "@/utils/repeatWorkout";
+import { defaultWorkoutName } from "@/utils/workoutName";
+
+
+// Move Up / Move Down persist routine_order, but the list was rendered in
+// whatever order the server returned, so a reorder was lost on the next load.
+function sortRoutines(list: any[]) {
+  return [...list].sort((a, b) => {
+    const ao = a.routine_order ?? Number.MAX_SAFE_INTEGER;
+    const bo = b.routine_order ?? Number.MAX_SAFE_INTEGER;
+    return ao !== bo ? ao - bo : a.routine_id - b.routine_id;
+  });
+}
+
+// Each card lists its exercises, like Strong's templates. Reading them also
+// keeps every routine's offline copy fresh, so any routine (not just ones
+// opened before) can be started with no signal.
+async function loadRoutinePreviews(list: any[]): Promise<Record<number, string[]>> {
+  const results = await Promise.all(list.map((r) =>
+    db.getRoutineExercises(r.routine_id).then((res: any) => [r.routine_id, res.data ?? []] as const).catch(() => null)
+  ));
+  const next: Record<number, string[]> = {};
+  for (const entry of results) {
+    if (!entry) continue;
+    const [id, exs] = entry;
+    next[id] = [...exs].sort((a: any, b: any) => a.exercise_order - b.exercise_order).map((e: any) => e.exercise_name);
+    warmRoutineSets(exs);
+  }
+  return next;
+}
+
+// "Bench Press · Squat · Row +2 more"
+// When each routine was last finished, from workout history (cached offline).
+async function loadLastDone(): Promise<Record<number, string>> {
+  const { data: { user } } = await db.getUser();
+  if (!user) return {};
+  const { data } = await db.getWorkoutSessions(user.id);
+  return lastDoneByRoutine(data ?? []);
+}
+
+function exercisePreview(names: string[], shown = 3): string {
+  const head = names.slice(0, shown).join(" · ");
+  return names.length > shown ? `${head} +${names.length - shown} more` : head;
+}
+
+// Template sets are fetched once per app run per exercise, in the background,
+// purely to warm the offline cache used when starting a routine offline.
+const warmedRoutineExercises = new Set<number>();
+async function warmRoutineSets(exercises: any[]) {
+  for (const ex of exercises) {
+    if (warmedRoutineExercises.has(ex.routine_exercise_id)) continue;
+    warmedRoutineExercises.add(ex.routine_exercise_id);
+    try {
+      await db.getRoutineExerciseSets(ex.routine_exercise_id);
+    } catch {
+      warmedRoutineExercises.delete(ex.routine_exercise_id);
+    }
+  }
+}
 
 export default function WorkoutsScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
   const hasLoadedRef = useRef(false);
   const { colors } = useTheme();
+  const connection = useConnectionMode();
+  const { activeWorkout } = useActiveWorkout();
+  const [showInProgress, setShowInProgress] = useState(false);
+  const [startingEmpty, setStartingEmpty] = useState(false);
+
+  const resumeActive = useCallback(() => {
+    setShowInProgress(false);
+    if (!activeWorkout) return;
+    router.push({ pathname: "/workout", params: { sessionId: String(activeWorkout.sessionId) } });
+  }, [activeWorkout, router]);
 
   const [routines, setRoutines] = useState<any[]>([]);
   const [loadingRoutines, setLoadingRoutines] = useState(false);
@@ -31,14 +105,35 @@ export default function WorkoutsScreen() {
   // Delete confirm
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
 
-  const loadRoutines = async (showSpinner = true) => {
+  const [routinePreviews, setRoutinePreviews] = useState<Record<number, string[]>>({});
+  const [lastDone, setLastDone] = useState<Record<number, string>>({});
+  // Highlight the routine that's next in the user's rotation (e.g. Pull
+  // after Push), so a split's next day is one glance away.
+  const nextUpId = useMemo(
+    () => nextUpRoutineId(routines.map((r) => r.routine_id), lastDone),
+    [routines, lastDone],
+  );
+  const previewRun = useRef(0);
+
+  const loadRoutines = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoadingRoutines(true);
     setError(null);
     const { data, error: err } = await db.getRoutines();
     if (err) setError(err.message);
-    else setRoutines(data ?? []);
+    else {
+      const sorted = sortRoutines(data ?? []);
+      setRoutines(sorted);
+      // Only the newest load wins, so a slow earlier one can't overwrite it.
+      const run = ++previewRun.current;
+      loadRoutinePreviews(sorted)
+        .then((p) => { if (run === previewRun.current) setRoutinePreviews(p); })
+        .catch(() => {});
+      loadLastDone()
+        .then((l) => { if (run === previewRun.current) setLastDone(l); })
+        .catch(() => {});
+    }
     setLoadingRoutines(false);
-  };
+  }, []);
 
   const insertRoutine = useGuardedPress(async () => {
     if (!routineName.trim()) { setError("Routine name is required"); return; }
@@ -55,7 +150,29 @@ export default function WorkoutsScreen() {
     loadRoutines();
   });
 
+  // Quick start: an empty workout you add exercises to as you go.
+  const handleStartEmpty = useGuardedPress(async () => {
+    if (activeWorkout) { setShowInProgress(true); return; }
+    setError(null);
+    setStartingEmpty(true);
+    try {
+      const { data: { user } } = await db.getUser();
+      if (!user) { setError("Not authenticated"); return; }
+      const { data: session, error: err } = await db.startWorkoutSession({
+        routine_id: null,
+        session_name: defaultWorkoutName(),
+        user_id: user.id,
+      });
+      if (err || !session) { setError(err?.message ?? "Could not start workout"); return; }
+      router.push({ pathname: "/workout", params: { sessionId: String(session.session_id) } });
+    } finally {
+      setStartingEmpty(false);
+    }
+  }, 1000);
+
   const handleStartWorkout = useGuardedPress(async (routineId: number) => {
+    // Only one workout at a time — starting another would strand the first.
+    if (activeWorkout) { setShowInProgress(true); return; }
     setStartingId(routineId);
     const { data: { user } } = await db.getUser();
     if (!user) { setError("Not authenticated"); setStartingId(null); return; }
@@ -107,26 +224,42 @@ export default function WorkoutsScreen() {
   // ── Reorder (move up / move down) ──
 
   const moveRoutine = useCallback(async (routineId: number, direction: "up" | "down") => {
-    setRoutines((prev) => {
-      const idx = prev.findIndex((r) => r.routine_id === routineId);
-      if (idx === -1) return prev;
-      const swapIdx = direction === "up" ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= prev.length) return prev;
-      const next = [...prev];
-      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
-      // Persist new order in background
-      next.forEach((r, i) => {
-        db.updateRoutine(r.routine_id, { routine_order: i + 1 });
-      });
-      return next;
-    });
     closeRoutineOptions();
-  }, [closeRoutineOptions]);
+    const prev = routines;
+    const idx = prev.findIndex((r) => r.routine_id === routineId);
+    if (idx === -1) return;
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= prev.length) return;
+    const next = [...prev];
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+    setRoutines(next);
+    // Persist in the background; if it didn't stick (e.g. offline), say so
+    // and show the saved order again instead of one that reverts later.
+    const results = await Promise.all(next.map((r, i) =>
+      db.updateRoutine(r.routine_id, { routine_order: i + 1 }).catch((e: any) => ({ error: e }))));
+    const failed = results.find((r: any) => r?.error);
+    if (failed) {
+      setError((failed as any).error?.message ?? "Couldn't save the new order.");
+      loadRoutines(false);
+    }
+  }, [closeRoutineOptions, routines, loadRoutines]);
 
   useFocusEffect(useCallback(() => {
     loadRoutines(!hasLoadedRef.current);
     hasLoadedRef.current = true;
-  }, []));
+  }, [loadRoutines]));
+
+  // Copy a routine (e.g. to make a "heavy" and "light" version).
+  const handleDuplicateRoutine = useGuardedPress(async () => {
+    const source = selectedRoutine;
+    closeRoutineOptions();
+    if (!source) return;
+    const { data: { user } } = await db.getUser();
+    if (!user) { setError("Not authenticated"); return; }
+    const res = await duplicateRoutine(db, source, user.id);
+    if ("error" in res) setError(res.error);
+    loadRoutines(false);
+  });
 
   const selectedIdx = routines.findIndex((r) => r.routine_id === selectedRoutine?.routine_id);
 
@@ -143,12 +276,19 @@ export default function WorkoutsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Page header ── */}
-        <View style={[styles.pageHeader, { borderBottomColor: colors.border }]}>
+        <View style={[styles.pageHeader, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
           <Text style={[styles.pageTitle, { color: colors.text }]}>Workout</Text>
           <View style={styles.headerRight}>
-            {!isOnline && (
-              <View style={[styles.offlineBadge, { backgroundColor: colors.warningLight }]}>
+            {connection === "offline" && (
+              <View style={[styles.offlineBadge, { backgroundColor: colors.warningLight }]} accessibilityLabel="Offline. Workouts sync when you reconnect.">
+                <Ionicons name="cloud-offline-outline" size={13} color={colors.warning} />
                 <Text style={[styles.offlineText, { color: colors.warning }]}>Offline</Text>
+              </View>
+            )}
+            {connection === "local" && (
+              <View style={[styles.offlineBadge, { backgroundColor: colors.surfaceSecondary }]} accessibilityLabel="Local mode. Data is saved on this device only.">
+                <Ionicons name="phone-portrait-outline" size={13} color={colors.textSecondary} />
+                <Text style={[styles.offlineText, { color: colors.textSecondary }]}>Local</Text>
               </View>
             )}
           </View>
@@ -159,6 +299,29 @@ export default function WorkoutsScreen() {
             <Text style={[styles.errorText, { color: colors.danger }]}>{error}</Text>
           </View>
         )}
+
+        {/* ── Quick start ── */}
+        <View style={styles.quickStart}>
+          <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 10, marginLeft: 4 }]}>Quick Start</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.quickStartBtn,
+              { backgroundColor: activeWorkout ? colors.success : colors.primary },
+              (pressed || startingEmpty) && { opacity: 0.75 },
+            ]}
+            disabled={startingEmpty}
+            onPress={activeWorkout ? resumeActive : handleStartEmpty}
+            accessibilityRole="button"
+            accessibilityLabel={activeWorkout ? `Resume ${activeWorkout.sessionName}` : "Start an empty workout"}
+          >
+            <Ionicons name={activeWorkout ? "play-forward" : "add"} size={18} color="#fff" />
+            <Text style={styles.quickStartText} numberOfLines={1}>
+              {activeWorkout
+                ? `Resume ${activeWorkout.sessionName}`
+                : startingEmpty ? "Starting…" : "Start Empty Workout"}
+            </Text>
+          </Pressable>
+        </View>
 
         {/* ── Create routine form ── */}
         {showForm && (
@@ -238,7 +401,11 @@ export default function WorkoutsScreen() {
             {routines.map((item) => (
               <Pressable
                 key={String(item.routine_id)}
-                style={[styles.routineCard, { backgroundColor: colors.surface }]}
+                style={[
+                  styles.routineCard,
+                  { backgroundColor: colors.surface },
+                  item.routine_id === nextUpId && { borderColor: colors.primary },
+                ]}
                 onPress={() =>
                   router.push({
                     pathname: "/routine/[routineId]",
@@ -255,10 +422,35 @@ export default function WorkoutsScreen() {
                     <Ionicons name="barbell-outline" size={18} color={colors.primary} />
                   </View>
                   <View style={styles.routineText}>
-                    <Text style={[styles.routineName, { color: colors.text }]}>{item.routine_name}</Text>
+                    <View style={styles.routineNameRow}>
+                      <Text style={[styles.routineName, { color: colors.text, flexShrink: 1 }]} numberOfLines={1}>{item.routine_name}</Text>
+                      {item.routine_id === nextUpId ? (
+                        <View
+                          style={[styles.upNextPill, { backgroundColor: colors.primary }]}
+                          accessibilityLabel="Up next in your rotation"
+                        >
+                          <Text style={styles.upNextText}>UP NEXT</Text>
+                        </View>
+                      ) : null}
+                    </View>
                     {item.description ? (
                       <Text style={[styles.routineDesc, { color: colors.textSecondary }]} numberOfLines={1}>
                         {item.description}
+                      </Text>
+                    ) : null}
+                    {lastDone[item.routine_id] ? (
+                      <View style={styles.lastDoneRow}>
+                        <Ionicons name="time-outline" size={12} color={colors.textTertiary} />
+                        <Text style={[styles.lastDoneText, { color: colors.textTertiary }]}>
+                          Last done {formatLastDone(lastDone[item.routine_id])}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {routinePreviews[item.routine_id] ? (
+                      <Text style={[styles.routineDesc, { color: colors.textTertiary }]} numberOfLines={2}>
+                        {routinePreviews[item.routine_id].length > 0
+                          ? exercisePreview(routinePreviews[item.routine_id])
+                          : "No exercises yet — tap to add some"}
                       </Text>
                     ) : null}
                   </View>
@@ -310,6 +502,15 @@ export default function WorkoutsScreen() {
                 <Ionicons name="pencil-outline" size={16} color={colors.primary} />
               </View>
               <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Edit Routine</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+            </Pressable>
+
+            {/* Duplicate */}
+            <Pressable style={[modalStyles.option, { borderBottomColor: colors.border }]} onPress={handleDuplicateRoutine}>
+              <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="copy-outline" size={16} color={colors.primary} />
+              </View>
+              <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Duplicate Routine</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
             </Pressable>
 
@@ -367,6 +568,19 @@ export default function WorkoutsScreen() {
         </Pressable>
       </Modal>
 
+      {/* ── Workout already in progress ── */}
+      <ConfirmModal
+        visible={showInProgress}
+        title="Workout in Progress"
+        message={`"${activeWorkout?.sessionName ?? "Your workout"}" is still running. Finish or discard it before starting another.`}
+        confirmText="Resume"
+        cancelText="Cancel"
+        confirmStyle="primary"
+        icon="barbell-outline"
+        onConfirm={resumeActive}
+        onCancel={() => setShowInProgress(false)}
+      />
+
       {/* ── Delete confirm ── */}
       <ConfirmModal
         visible={deleteConfirmVisible}
@@ -394,7 +608,7 @@ const styles = StyleSheet.create({
   },
   pageTitle: { flex: 1, fontSize: 28, fontWeight: "800", letterSpacing: -0.5 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 8 },
-  offlineBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  offlineBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   offlineText: { fontSize: 12, fontWeight: "700" },
   createBtn: {
     width: 36, height: 36, borderRadius: 10,
@@ -414,6 +628,17 @@ const styles = StyleSheet.create({
   formCancelText: { fontSize: 15, fontWeight: "600" },
   formSaveBtn: { flex: 2, paddingVertical: 12, borderRadius: 10, alignItems: "center" },
   formSaveText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+
+  quickStart: { paddingHorizontal: 16, paddingTop: 20 },
+  quickStartBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 14,
+  },
+  quickStartText: { color: "#fff", fontSize: 16, fontWeight: "700" },
 
   sectionRow: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 },
   sectionTitle: { fontSize: 17, fontWeight: "700" },
@@ -442,7 +667,11 @@ const styles = StyleSheet.create({
   emptySubText: { fontSize: 14, textAlign: "center" },
 
   routineList: { paddingHorizontal: 16, gap: 10 },
-  routineCard: { borderRadius: 16, overflow: "hidden" },
+  // Transparent border so the Up next card's outline doesn't shift it.
+  routineCard: { borderRadius: 16, overflow: "hidden", borderWidth: 1.5, borderColor: "transparent" },
+  routineNameRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  upNextPill: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  upNextText: { color: "#fff", fontSize: 10, fontWeight: "800", letterSpacing: 0.5 },
 
   routineInfo: {
     flexDirection: "row",
@@ -458,6 +687,8 @@ const styles = StyleSheet.create({
   },
   routineText: { flex: 1 },
   routineName: { fontSize: 16, fontWeight: "700" },
+  lastDoneRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 },
+  lastDoneText: { fontSize: 12, fontWeight: "600" },
   routineDesc: { fontSize: 13, marginTop: 2 },
   ellipsisBtn: { padding: 4 },
 

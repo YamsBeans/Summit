@@ -4,89 +4,20 @@ import { APP_NAME, APP_VERSION, SUPPORT_EMAIL } from "@/utils/appInfo";
 import * as ImagePicker from "expo-image-picker";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits, UnitSystem } from "@/utils/units";
+import { useUnits, useDistanceUnit, UnitSystem } from "@/utils/units";
 import { useRestTimer } from "@/utils/useRestTimer";
+import { formatRest } from "@/utils/exerciseRest";
 import { requestNotificationPermissions } from "@/utils/notifications";
+import { ModalShell, SettingItem, SettingSection } from "@/components/SettingsUI";
+import { useConnectionMode } from "@/utils/useConnectionMode";
+import { useKeepAwakeSetting } from "@/utils/keepAwake";
 
 const NOTIF_KEY = "@gym_tracker_notifications";
-
-// ─── Reusable primitives ──────────────────────────────────────────────────────
-
-type SettingItemProps = {
-  icon: string;
-  label: string;
-  onPress?: () => void;
-  rightElement?: React.ReactNode;
-  destructive?: boolean;
-  value?: string;
-};
-
-function SettingItem({ icon, label, onPress, rightElement, destructive, value }: SettingItemProps) {
-  const { colors } = useTheme();
-  return (
-    <Pressable
-      style={({ pressed }) => [
-        {
-          flexDirection: "row" as const, alignItems: "center" as const,
-          paddingVertical: 13, paddingHorizontal: 16,
-          borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
-        },
-        pressed && onPress && { backgroundColor: colors.surfaceSecondary },
-      ]}
-      onPress={onPress}
-      disabled={!onPress && !rightElement}
-    >
-      <View style={{ width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: destructive ? colors.dangerLight : colors.surfaceSecondary, marginRight: 12 }}>
-        <Ionicons name={icon as any} size={18} color={destructive ? colors.danger : colors.textSecondary} />
-      </View>
-      <Text style={[{ flex: 1, fontSize: 16, fontWeight: "500", color: colors.text }, destructive && { color: colors.danger }]}>
-        {label}
-      </Text>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        {value && <Text style={{ fontSize: 14, color: colors.textSecondary }}>{value}</Text>}
-        {rightElement ?? (onPress ? <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} /> : null)}
-      </View>
-    </Pressable>
-  );
-}
-
-function SettingSection({ title, children }: { title: string; children: React.ReactNode }) {
-  const { colors } = useTheme();
-  return (
-    <View style={{ marginTop: 28, paddingHorizontal: 16 }}>
-      <Text style={{ fontSize: 13, fontWeight: "600", color: colors.textSecondary, marginBottom: 8, marginLeft: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>
-        {title}
-      </Text>
-      <View style={{ backgroundColor: colors.surface, borderRadius: 14, overflow: "hidden" }}>
-        {children}
-      </View>
-    </View>
-  );
-}
-
-function ModalShell({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
-  const { colors } = useTheme();
-  return (
-    <Modal visible={visible} transparent animationType="fade">
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", padding: 20 }} onPress={onClose}>
-          <Pressable
-            style={{ backgroundColor: colors.surface, borderRadius: 16, padding: 24, width: "100%", maxWidth: 340, elevation: 8, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 }}
-            onPress={() => {}}
-          >
-            <Text style={{ fontSize: 20, fontWeight: "700", color: colors.text, textAlign: "center", marginBottom: 20 }}>{title}</Text>
-            {children}
-          </Pressable>
-        </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
 
@@ -123,20 +54,7 @@ function AppearanceModal({ visible, onClose }: { visible: boolean; onClose: () =
 function UnitsModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { colors } = useTheme();
   const { unit, saveUnit } = useUnits();
-  const [distanceUnit, setDistanceUnit] = useState<"km" | "mi">("km");
-
-  useEffect(() => {
-    if (visible) {
-      AsyncStorage.getItem("@gym_tracker_distance_unit").then((val) => {
-        setDistanceUnit(val === "mi" ? "mi" : "km");
-      });
-    }
-  }, [visible]);
-
-  const saveDistanceUnit = async (u: "km" | "mi") => {
-    setDistanceUnit(u);
-    await AsyncStorage.setItem("@gym_tracker_distance_unit", u);
-  };
+  const { distanceUnit, saveDistanceUnit } = useDistanceUnit();
 
   const weightOptions: { label: string; value: UnitSystem; icon: string }[] = [
     { label: "Pounds (lbs)", value: "lbs", icon: "🇺🇸" },
@@ -184,7 +102,14 @@ function RestTimerModal({ visible, onClose }: { visible: boolean; onClose: () =>
   const { colors } = useTheme();
   const { duration, saveDuration } = useRestTimer();
   const [inputVal, setInputVal] = useState(String(duration));
+  // The stored duration loads after the first render; keep the field in step.
+  useEffect(() => { setInputVal(String(duration)); }, [duration, visible]);
   const presets = [60, 90, 120, 180, 300];
+  // Done commits too: on native the input may not blur before the modal closes.
+  const commitCustom = () => {
+    const n = parseInt(inputVal, 10);
+    if (n > 0 && n !== duration) saveDuration(Math.min(n, 3600));
+  };
   return (
     <ModalShell visible={visible} onClose={onClose} title="Rest Timer">
       <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 12, textAlign: "center" }}>Auto-starts after each completed set</Text>
@@ -195,7 +120,7 @@ function RestTimerModal({ visible, onClose }: { visible: boolean; onClose: () =>
             style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 2, borderColor: duration === s ? colors.primary : colors.border, backgroundColor: duration === s ? colors.primaryLight : "transparent" }}
             onPress={() => { setInputVal(String(s)); saveDuration(s); }}
           >
-            <Text style={{ fontWeight: "700", color: duration === s ? colors.primary : colors.textSecondary }}>{s < 60 ? `${s}s` : `${s / 60}m`}</Text>
+            <Text style={{ fontWeight: "700", color: duration === s ? colors.primary : colors.textSecondary }}>{formatRest(s)}</Text>
           </Pressable>
         ))}
       </View>
@@ -206,16 +131,17 @@ function RestTimerModal({ visible, onClose }: { visible: boolean; onClose: () =>
         keyboardType="numeric"
         placeholder="Seconds"
         placeholderTextColor={colors.textTertiary}
-        onBlur={() => { const n = parseInt(inputVal, 10); if (n > 0) saveDuration(n); }}
+        onBlur={commitCustom}
       />
-      <Pressable style={{ paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center" }} onPress={onClose}>
+      <Pressable style={{ paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center" }} onPress={() => { commitCustom(); onClose(); }}>
         <Text style={{ fontSize: 16, fontWeight: "600", color: "#fff" }}>Done</Text>
       </Pressable>
     </ModalShell>
   );
 }
 
-const AVATAR_LOCAL_KEY = "@gym_tracker_avatar_uri";
+// Per user, so a second account on the device never sees the first one's photo.
+const avatarKey = (userId: string) => `@gym_tracker_avatar_uri:${userId}`;
 
 function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { colors } = useTheme();
@@ -223,26 +149,33 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
   const [username, setUsername] = useState("");
   const [bio, setBio] = useState("");
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  // A photo picked in this sheet; only uploaded when Save is tapped.
+  const [pickedUri, setPickedUri] = useState<string | null>(null);
+  // An upload that worked while the profile save failed; reused on retry.
+  const uploadedRef = useRef<{ uri: string; url: string | null } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Local-only builds have nowhere to upload a photo, so picking one could
+  // only ever end in an "upload failed" warning that keeps the sheet open.
+  const canChangePhoto = useConnectionMode() !== "local";
 
   useEffect(() => {
     if (!visible) return;
     setError(null);
+    setPickedUri(null);
     db.getUser().then(({ data }) => {
       const uid = data?.user?.id;
       if (!uid) return;
       setUserId(uid);
       Promise.all([
         db.getUserProfile(uid),
-        // Load last-known local avatar URI as a quick display while we check profile
-        AsyncStorage.getItem(AVATAR_LOCAL_KEY),
-      ]).then(([{ data: profile }, localUri]) => {
+        // Last uploaded avatar URL for this user, in case the profile read is stale
+        AsyncStorage.getItem(avatarKey(uid)).catch(() => null),
+      ]).then(([{ data: profile }, cachedUrl]) => {
         if (profile?.username) setUsername(profile.username);
         if (profile?.bio) setBio(profile.bio);
-        // Prefer remote avatar_url, fall back to cached local URI
-        setAvatarUri(profile?.avatar_url ?? localUri ?? null);
+        setAvatarUri(profile?.avatar_url ?? cachedUrl ?? null);
       });
     });
   }, [visible]);
@@ -262,8 +195,7 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     if (result.canceled || !result.assets[0]) return;
     const uri = result.assets[0].uri;
     setAvatarUri(uri);
-    // Cache locally so it shows even before Save is tapped
-    await AsyncStorage.setItem(AVATAR_LOCAL_KEY, uri);
+    setPickedUri(uri);
   };
 
   const handleSave = async () => {
@@ -272,18 +204,21 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     setLoading(true); setError(null);
 
     let avatarUrl: string | null | undefined = undefined; // undefined = don't update
+    // Tracked locally: `error` state would still hold the previous render's value here.
+    let warning: string | null = null;
 
-    // Upload avatar if the current URI looks like a local file (not already a remote URL)
-    if (avatarUri && !avatarUri.startsWith("http")) {
+    if (pickedUri && uploadedRef.current?.uri === pickedUri) {
+      avatarUrl = uploadedRef.current.url;
+    } else if (pickedUri) {
       setUploading(true);
-      const { url, error: uploadErr } = await db.uploadAvatar(userId, avatarUri);
+      const { url, error: uploadErr } = await db.uploadAvatar(userId, pickedUri);
       setUploading(false);
       if (uploadErr) {
         // Non-fatal: warn but still save the rest
-        setError(`Avatar upload failed: ${uploadErr}. Other changes will still be saved.`);
+        warning = `Avatar upload failed: ${uploadErr}. Your other changes were saved.`;
       } else {
         avatarUrl = url;
-        if (url) await AsyncStorage.setItem(AVATAR_LOCAL_KEY, url);
+        uploadedRef.current = { uri: pickedUri, url };
       }
     }
 
@@ -296,7 +231,15 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
     const { error: err } = await db.updateUserProfile(userId, updates);
     setLoading(false);
     if (err) { setError(err.message); return; }
-    if (!error) onClose(); // only close if no avatar warning
+    if (avatarUrl !== undefined) {
+      // Cached only once the profile holds it: caching right after the upload
+      // showed a photo on reopen that the profile never saved.
+      if (avatarUrl) await AsyncStorage.setItem(avatarKey(userId), avatarUrl).catch(() => {});
+      setPickedUri(null);
+      uploadedRef.current = null;
+    }
+    if (warning) { setError(warning); return; } // stay open so the warning is seen
+    onClose();
   };
 
   const initials = username ? username.slice(0, 2).toUpperCase() : "?";
@@ -312,7 +255,7 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
 
           {/* ── Avatar ── */}
           <View style={profileStyles.avatarRow}>
-            <Pressable style={profileStyles.avatarWrap} onPress={handlePickImage}>
+            <Pressable style={profileStyles.avatarWrap} onPress={handlePickImage} disabled={!canChangePhoto}>
               {avatarUri ? (
                 <Image source={{ uri: avatarUri }} style={profileStyles.avatarImg} />
               ) : (
@@ -320,12 +263,14 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
                   <Text style={[profileStyles.avatarInitials, { color: colors.primary }]}>{initials}</Text>
                 </View>
               )}
-              <View style={[profileStyles.cameraBtn, { backgroundColor: colors.primary }]}>
-                <Text style={{ fontSize: 14 }}>📷</Text>
-              </View>
+              {canChangePhoto && (
+                <View style={[profileStyles.cameraBtn, { backgroundColor: colors.primary }]}>
+                  <Text style={{ fontSize: 14 }}>📷</Text>
+                </View>
+              )}
             </Pressable>
             <Text style={[profileStyles.avatarHint, { color: colors.textTertiary }]}>
-              Tap to change photo
+              {canChangePhoto ? "Tap to change photo" : "Profile photos need an online account"}
             </Text>
           </View>
 
@@ -394,73 +339,6 @@ const profileStyles = StyleSheet.create({
   saveBtn: { flex: 2, paddingVertical: 13, borderRadius: 12, alignItems: "center" },
 });
 
-function ChangePasswordModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { colors } = useTheme();
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-
-  const reset = () => { setNewPassword(""); setConfirmPassword(""); setError(null); setSuccess(false); };
-
-  const handleChange = async () => {
-    if (newPassword.length < 6) { setError("Password must be at least 6 characters."); return; }
-    if (newPassword !== confirmPassword) { setError("Passwords do not match."); return; }
-    setLoading(true); setError(null);
-    const { error: err } = await db.changePassword(newPassword);
-    setLoading(false);
-    if (err) { setError(err.message); return; }
-    setSuccess(true);
-  };
-
-  const handleClose = () => { reset(); onClose(); };
-
-  return (
-    <ModalShell visible={visible} onClose={handleClose} title="Change Password">
-      {success ? (
-        <View style={{ alignItems: "center", gap: 12 }}>
-          <Text style={{ fontSize: 40 }}>✅</Text>
-          <Text style={{ fontSize: 16, fontWeight: "600", color: colors.success, textAlign: "center" }}>Password updated successfully!</Text>
-          <Pressable style={{ marginTop: 8, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center", width: "100%" }} onPress={handleClose}>
-            <Text style={{ fontSize: 16, fontWeight: "600", color: "#fff" }}>Done</Text>
-          </Pressable>
-        </View>
-      ) : (
-        <>
-          {error && <Text style={{ color: colors.danger, fontSize: 13, marginBottom: 10, textAlign: "center" }}>{error}</Text>}
-          <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 6 }}>New Password</Text>
-          <TextInput
-            style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, fontSize: 16, color: colors.text, backgroundColor: colors.inputBackground, marginBottom: 14 }}
-            value={newPassword}
-            onChangeText={setNewPassword}
-            placeholder="At least 6 characters"
-            placeholderTextColor={colors.textTertiary}
-            secureTextEntry
-          />
-          <Text style={{ fontSize: 13, color: colors.textSecondary, marginBottom: 6 }}>Confirm Password</Text>
-          <TextInput
-            style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, fontSize: 16, color: colors.text, backgroundColor: colors.inputBackground, marginBottom: 20 }}
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            placeholder="Re-enter new password"
-            placeholderTextColor={colors.textTertiary}
-            secureTextEntry
-          />
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            <Pressable style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.surfaceSecondary, alignItems: "center" }} onPress={handleClose}>
-              <Text style={{ fontSize: 16, fontWeight: "600", color: colors.textSecondary }}>Cancel</Text>
-            </Pressable>
-            <Pressable style={{ flex: 2, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: "center", opacity: loading ? 0.6 : 1 }} onPress={handleChange} disabled={loading}>
-              <Text style={{ fontSize: 16, fontWeight: "700", color: "#fff" }}>{loading ? "Updating…" : "Update Password"}</Text>
-            </Pressable>
-          </View>
-        </>
-      )}
-    </ModalShell>
-  );
-}
-
 function ContentModal({ visible, onClose, title, sections }: { visible: boolean; onClose: () => void; title: string; sections: { heading?: string; body: string }[] }) {
   const { colors } = useTheme();
   return (
@@ -524,12 +402,12 @@ export default function SettingsScreen() {
   const { unit } = useUnits();
   const { duration } = useRestTimer();
 
+  const [keepAwake, setKeepAwake] = useKeepAwakeSetting();
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showAppearance, setShowAppearance] = useState(false);
   const [showUnits, setShowUnits] = useState(false);
   const [showRestTimer, setShowRestTimer] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
   const [showGettingStarted, setShowGettingStarted] = useState(false);
   const [showRoutineHelp, setShowRoutineHelp] = useState(false);
   const [showFAQ, setShowFAQ] = useState(false);
@@ -559,41 +437,18 @@ export default function SettingsScreen() {
 
   const appearanceLabel = mode === "light" ? "Light" : mode === "dark" ? "Dark" : "System";
 
-  const handleSignOut = () => {
-    showAlert("Sign Out", "Are you sure you want to sign out?", [
+  const handleSignOut = async () => {
+    // Say so when changes haven't uploaded yet: they wait on this device until
+    // this account signs in here again.
+    const uid = (await db.getUser().catch(() => null))?.data?.user?.id;
+    const pending = await db.getPendingSessionCount(uid ?? undefined).catch(() => 0);
+    const message = pending > 0
+      ? `${pending} ${pending === 1 ? "change hasn't" : "changes haven't"} uploaded yet. They'll stay on this device and upload the next time you sign in here.\n\nSign out anyway?`
+      : "Are you sure you want to sign out?";
+    showAlert("Sign Out", message, [
       { text: "Cancel", style: "cancel" },
       { text: "Sign Out", style: "destructive", onPress: async () => { await db.signOut(); } },
     ]);
-  };
-
-  const handleDeleteAccount = () => {
-    showAlert(
-      "Delete Account",
-      "This will permanently delete your account and all workout data. This cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => showAlert(
-            "Are you absolutely sure?",
-            "All your routines, workouts, and progress will be lost forever.",
-            [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Yes, Delete",
-                style: "destructive",
-                onPress: async () => {
-                  const { error } = await db.deleteAccount();
-                  if (error) showAlert("Couldn't delete account", error);
-                  // On success the auth listener sees the sign-out and routes to /auth.
-                },
-              },
-            ]
-          ),
-        },
-      ]
-    );
   };
 
   const handleContactUs = () => {
@@ -653,7 +508,7 @@ export default function SettingsScreen() {
         {/* Account */}
         <SettingSection title="Account">
           <SettingItem icon="person-outline" label="Edit Profile" onPress={() => setShowProfile(true)} />
-          <SettingItem icon="lock-closed-outline" label="Change Password" onPress={() => setShowPassword(true)} />
+          <SettingItem icon="lock-closed-outline" label="Account" onPress={() => router.push("/account")} />
           <SettingItem
             icon="notifications-outline"
             label="Notifications"
@@ -670,9 +525,22 @@ export default function SettingsScreen() {
 
         {/* Preferences */}
         <SettingSection title="Preferences">
-          <SettingItem icon="timer-outline" label="Rest Timer" onPress={() => setShowRestTimer(true)} value={duration < 60 ? `${duration}s` : `${duration / 60}m`} />
+          <SettingItem icon="timer-outline" label="Rest Timer" onPress={() => setShowRestTimer(true)} value={formatRest(duration)} />
           <SettingItem icon="scale-outline" label="Units" onPress={() => setShowUnits(true)} value={unit} />
           <SettingItem icon="moon-outline" label="Appearance" onPress={() => setShowAppearance(true)} value={appearanceLabel} />
+          <SettingItem
+            icon="sunny-outline"
+            label="Keep Screen On in Workouts"
+            rightElement={
+              <Switch
+                value={keepAwake}
+                onValueChange={setKeepAwake}
+                trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor="#fff"
+                accessibilityLabel="Keep screen on during workouts"
+              />
+            }
+          />
         </SettingSection>
 
         {/* Guides */}
@@ -687,11 +555,6 @@ export default function SettingsScreen() {
           <SettingItem icon="mail-outline" label="Contact Us" onPress={handleContactUs} />
           <SettingItem icon="star-outline" label="Rate the App" onPress={handleRateApp} />
           <SettingItem icon="information-circle-outline" label="About" onPress={() => setShowAbout(true)} />
-        </SettingSection>
-
-        {/* Danger Zone */}
-        <SettingSection title="Danger Zone">
-          <SettingItem icon="trash-outline" label="Delete Account" onPress={handleDeleteAccount} destructive />
         </SettingSection>
 
         {/* Sign Out */}
@@ -716,7 +579,6 @@ export default function SettingsScreen() {
       <UnitsModal visible={showUnits} onClose={() => setShowUnits(false)} />
       <RestTimerModal visible={showRestTimer} onClose={() => setShowRestTimer(false)} />
       <ProfileEditModal visible={showProfile} onClose={() => setShowProfile(false)} />
-      <ChangePasswordModal visible={showPassword} onClose={() => setShowPassword(false)} />
       <ContentModal visible={showGettingStarted} onClose={() => setShowGettingStarted(false)} title="Getting Started" sections={gettingStartedSections} />
       <ContentModal visible={showRoutineHelp} onClose={() => setShowRoutineHelp(false)} title="Routine Help" sections={routineHelpSections} />
       <ContentModal visible={showFAQ} onClose={() => setShowFAQ(false)} title="FAQ" sections={faqSections} />

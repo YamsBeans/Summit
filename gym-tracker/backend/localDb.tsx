@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import type {
   User,
   Routine,
@@ -18,20 +19,34 @@ let localRoutineExerciseSets: RoutineExerciseSet[] = [];
 let localWorkoutSessions: WorkoutSession[] = [];
 let localSessionExercises: SessionExercise[] = [];
 let localSessionExerciseSets: SessionExerciseSet[] = [];
-let localSession: { user: { id: string; email: string } } | null = null;
+type LocalAuthSession = { user: { id: string; email: string } };
+let localSession: LocalAuthSession | null = null;
+
+// Offline auth listeners — without these, signing in/out offline updated
+// localSession but the root layout never heard about it and stayed put.
+const authListeners = new Set<(event: string, session: any) => void>();
+const emitAuth = (event: string) => authListeners.forEach((fn) => fn(event, localSession));
 
 let localPersonalRecords: PersonalRecord[] = [];
 let localCustomExercises: CustomExercise[] = [];
-let nextPrId = 1;
+// Local IDs start far above anything a Supabase serial column will reach, so
+// a row created offline can never be mistaken for (or collide with) a server
+// row. db.tsx uses isLocalId() to route a workout that was started offline to
+// this store even after the signal comes back.
+export const LOCAL_ID_BASE = 1_000_000_000_000;
+export const isLocalId = (id: number | null | undefined): boolean =>
+  typeof id === "number" && id >= LOCAL_ID_BASE;
 
-let nextRoutineId = 1;
-let nextRoutineExerciseId = 1;
-let nextRoutineSetId = 1;
-let nextSessionId = 1;
-let nextSessionExerciseId = 1;
-let nextSessionSetId = 1;
+let nextPrId = LOCAL_ID_BASE + 1;
 
-export const localDb = {
+let nextRoutineId = LOCAL_ID_BASE + 1;
+let nextRoutineExerciseId = LOCAL_ID_BASE + 1;
+let nextRoutineSetId = LOCAL_ID_BASE + 1;
+let nextSessionId = LOCAL_ID_BASE + 1;
+let nextSessionExerciseId = LOCAL_ID_BASE + 1;
+let nextSessionSetId = LOCAL_ID_BASE + 1;
+
+const rawLocalDb = {
   // Auth
   signUp: async (email: string, password: string, username: string) => {
     const userId = `local-${Date.now()}`;
@@ -43,6 +58,7 @@ export const localDb = {
     };
     localUsers.push(user);
     localSession = { user: { id: userId, email } };
+    emitAuth("SIGNED_IN");
     return { data: { user: { id: userId } }, error: null };
   },
 
@@ -52,11 +68,13 @@ export const localDb = {
       return { data: null, error: { message: "User not found" } };
     }
     localSession = { user: { id: user.user_id, email } };
+    emitAuth("SIGNED_IN");
     return { data: { user: { id: user.user_id } }, error: null };
   },
 
   signOut: async () => {
     localSession = null;
+    emitAuth("SIGNED_OUT");
   },
 
   getSession: async () => {
@@ -84,10 +102,11 @@ export const localDb = {
   },
 
   onAuthStateChange: (callback: (event: string, session: any) => void) => {
+    authListeners.add(callback);
     return {
       data: {
         subscription: {
-          unsubscribe: () => {},
+          unsubscribe: () => { authListeners.delete(callback); },
         },
       },
     };
@@ -170,7 +189,7 @@ export const localDb = {
     return { error: null };
   },
 
-  updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string }) => {
+  updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string; exercise_type?: 'strength' | 'cardio' | 'stretching' }) => {
     localRoutineExercises = localRoutineExercises.map((e) =>
       e.routine_exercise_id === routineExerciseId ? { ...e, ...updates } : e
     );
@@ -215,7 +234,7 @@ export const localDb = {
 
   updateRoutineExerciseSet: async (
     routineSetId: number,
-    updates: { target_reps?: number | null; target_weight?: number | null; is_warmup?: boolean; target_duration_seconds?: number | null; target_distance_meters?: number | null; target_effort_level?: number | null }
+    updates: { set_number?: number; target_reps?: number | null; target_weight?: number | null; is_warmup?: boolean; target_duration_seconds?: number | null; target_distance_meters?: number | null; target_effort_level?: number | null }
   ) => {
     localRoutineExerciseSets = localRoutineExerciseSets.map((s) =>
       s.routine_set_id === routineSetId ? { ...s, ...updates } : s
@@ -261,8 +280,9 @@ export const localDb = {
 
   // Get all completed sessions for the user (history)
   getWorkoutSessions: async (userId: string) => {
+    // Finished only, like the Supabase query: the one in progress isn't history.
     const data = localWorkoutSessions
-      .filter((s) => s.user_id === userId)
+      .filter((s) => s.user_id === userId && s.end_time !== null)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     return { data, error: null };
   },
@@ -275,9 +295,9 @@ export const localDb = {
 
   // Get the active (unfinished) session
   getActiveSession: async (userId: string) => {
-    const session = localWorkoutSessions.find(
-      (s) => s.user_id === userId && s.end_time === null
-    ) ?? null;
+    const session = localWorkoutSessions
+      .filter((s) => s.user_id === userId && s.end_time === null)
+      .sort((a, b) => b.session_id - a.session_id)[0] ?? null;
     return { data: session, error: null };
   },
 
@@ -336,7 +356,7 @@ export const localDb = {
     return { data: newExercise, error: null };
   },
 
-  updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string }) => {
+  updateSessionExercise: async (sessionExerciseId: number, updates: { notes?: string; exercise_id?: string; exercise_name?: string; exercise_type?: ExerciseType; exercise_order?: number }) => {
     localSessionExercises = localSessionExercises.map((e) =>
       e.session_exercise_id === sessionExerciseId ? { ...e, ...updates } : e
     );
@@ -391,7 +411,7 @@ export const localDb = {
 
   updateSessionExerciseSet: async (
     sessionSetId: number,
-    updates: { reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean; duration_seconds?: number | null; distance_meters?: number | null; pace_sec_per_km?: number | null; calories?: number | null; effort_level?: number | null }
+    updates: { set_number?: number; reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean; duration_seconds?: number | null; distance_meters?: number | null; pace_sec_per_km?: number | null; calories?: number | null; effort_level?: number | null }
   ) => {
     localSessionExerciseSets = localSessionExerciseSets.map((s) =>
       s.session_set_id === sessionSetId ? { ...s, ...updates } : s
@@ -474,16 +494,22 @@ export const localDb = {
 
   // Previous performance hints
   getPreviousSessionSets: async (exerciseId: string, userId: string, excludeSessionId: number) => {
-    const prevSession = localWorkoutSessions
+    // The newest finished session that has this exercise (not just the newest
+    // session: Mon legs, Wed push, Fri legs should show Monday's squats).
+    const sessions = localWorkoutSessions
       .filter((s) => s.user_id === userId && s.end_time !== null && s.session_id !== excludeSessionId)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-    if (!prevSession) return { data: [], error: null };
-    const prevEx = localSessionExercises.find(
-      (e) => e.session_id === prevSession.session_id && e.exercise_id === exerciseId
-    );
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    let prevEx: any;
+    for (const session of sessions) {
+      prevEx = localSessionExercises.find(
+        (e) => e.session_id === session.session_id && e.exercise_id === exerciseId
+      );
+      if (prevEx) break;
+    }
     if (!prevEx) return { data: [], error: null };
+    // Sets left unticked were never done; don't offer them as last time's numbers.
     const data = localSessionExerciseSets
-      .filter((s) => s.session_exercise_id === prevEx.session_exercise_id)
+      .filter((s) => s.session_exercise_id === prevEx.session_exercise_id && s.completed !== false)
       .sort((a, b) => a.set_number - b.set_number);
     return { data, error: null };
   },
@@ -503,6 +529,8 @@ export const localDb = {
     best_distance_meters?: number | null;
     best_pace_sec_per_km?: number | null;
     best_duration_seconds?: number | null;
+    // Rebuilt records pass the day the record was set; new PRs are today.
+    achieved_at?: string | null;
   }) => {
     const prType = record.pr_type ?? 'strength';
     const existing = localPersonalRecords.findIndex(
@@ -516,7 +544,7 @@ export const localDb = {
         best_distance_meters: record.best_distance_meters ?? null,
         best_pace_sec_per_km: record.best_pace_sec_per_km ?? null,
         best_duration_seconds: record.best_duration_seconds ?? null,
-        achieved_at: new Date().toISOString(),
+        achieved_at: record.achieved_at ?? new Date().toISOString(),
       };
     } else {
       localPersonalRecords.push({
@@ -526,7 +554,7 @@ export const localDb = {
         best_pace_sec_per_km: record.best_pace_sec_per_km ?? null,
         best_duration_seconds: record.best_duration_seconds ?? null,
         ...record,
-        achieved_at: new Date().toISOString(),
+        achieved_at: record.achieved_at ?? new Date().toISOString(),
       });
     }
     return { error: null };
@@ -570,7 +598,7 @@ export const localDb = {
 
     const cardioSets = localSessionExerciseSets.filter(
       (s) => cardioExerciseIds.has(s.session_exercise_id) && s.completed &&
-        (s.duration_seconds != null || s.distance_meters != null)
+        (!!s.duration_seconds || !!s.distance_meters)
     );
 
     let totalDistanceMeters = 0;
@@ -588,11 +616,12 @@ export const localDb = {
       }
     }
 
-    // Count distinct sessions that contain at least one cardio exercise
+    // Count distinct sessions where cardio was actually logged (matches db.tsx)
+    const sessionOfExercise = new Map(
+      localSessionExercises.map((e) => [e.session_exercise_id, e.session_id] as const)
+    );
     const cardioSessionIds = new Set(
-      localSessionExercises
-        .filter((e) => sessionIds.has(e.session_id) && e.exercise_type === 'cardio')
-        .map((e) => e.session_id)
+      cardioSets.map((s) => sessionOfExercise.get(s.session_exercise_id))
     );
 
     return {
@@ -613,19 +642,218 @@ export const localDb = {
       .filter((s) => s.user_id === userId && s.end_time !== null)
       .sort((a, b) => new Date(a.session_date).getTime() - new Date(b.session_date).getTime());
 
-    const history = completedSessions
-      .map((s) => {
-        const se = localSessionExercises.find(
-          (e) => e.session_id === s.session_id && e.exercise_id === exerciseId
-        );
-        if (!se) return null;
-        const sets = localSessionExerciseSets.filter(
-          (set) => set.session_exercise_id === se.session_exercise_id && set.completed
-        );
-        return { session_date: s.session_date, sets };
-      })
-      .filter(Boolean);
+    // One entry per time the exercise was done (twice in a workout = two),
+    // like the Supabase query.
+    const history = completedSessions.flatMap((s) =>
+      localSessionExercises
+        .filter((e) => e.session_id === s.session_id && e.exercise_id === exerciseId)
+        .map((se) => ({
+          session_id: s.session_id,
+          session_date: s.session_date,
+          sets: localSessionExerciseSets.filter(
+            (set) => set.session_exercise_id === se.session_exercise_id && set.completed !== false
+          ),
+        })));
 
     return { data: history, error: null };
   },
 };
+
+// ─── Persistence ─────────────────────────────────────────────────────────────
+// The store used to live only in memory, so a page reload or an app kill
+// wiped a local-mode user's data, and lost a workout logged with no signal
+// before it was finished and queued. It is now saved to AsyncStorage after
+// every write and loaded back before the first read.
+
+const STORAGE_KEY = "@gym_tracker_local_db_v1";
+
+type Snapshot = {
+  users: User[];
+  routines: Routine[];
+  routineExercises: RoutineExercise[];
+  routineExerciseSets: RoutineExerciseSet[];
+  workoutSessions: WorkoutSession[];
+  sessionExercises: SessionExercise[];
+  sessionExerciseSets: SessionExerciseSet[];
+  personalRecords: PersonalRecord[];
+  customExercises: CustomExercise[];
+  session: LocalAuthSession | null;
+  ids: Record<string, number>;
+};
+
+function snapshot(): Snapshot {
+  return {
+    users: localUsers,
+    routines: localRoutines,
+    routineExercises: localRoutineExercises,
+    routineExerciseSets: localRoutineExerciseSets,
+    workoutSessions: localWorkoutSessions,
+    sessionExercises: localSessionExercises,
+    sessionExerciseSets: localSessionExerciseSets,
+    personalRecords: localPersonalRecords,
+    customExercises: localCustomExercises,
+    session: localSession,
+    ids: {
+      pr: nextPrId,
+      routine: nextRoutineId,
+      routineExercise: nextRoutineExerciseId,
+      routineSet: nextRoutineSetId,
+      session: nextSessionId,
+      sessionExercise: nextSessionExerciseId,
+      sessionSet: nextSessionSetId,
+    },
+  };
+}
+
+// Never hand out an ID at or below one already stored (and never below the
+// local base), even if the saved counters are missing or stale.
+function nextAfter(saved: number | undefined, rows: any[], key: string): number {
+  let max = LOCAL_ID_BASE;
+  for (const r of rows) if (typeof r?.[key] === "number" && r[key] > max) max = r[key];
+  return Math.max(typeof saved === "number" ? saved : 0, max + 1);
+}
+
+function restore(s: Partial<Snapshot>) {
+  localUsers = s.users ?? [];
+  localRoutines = s.routines ?? [];
+  localRoutineExercises = s.routineExercises ?? [];
+  localRoutineExerciseSets = s.routineExerciseSets ?? [];
+  localWorkoutSessions = s.workoutSessions ?? [];
+  localSessionExercises = s.sessionExercises ?? [];
+  localSessionExerciseSets = s.sessionExerciseSets ?? [];
+  localPersonalRecords = s.personalRecords ?? [];
+  localCustomExercises = s.customExercises ?? [];
+  localSession = s.session ?? null;
+  const ids = s.ids ?? {};
+  nextPrId = nextAfter(ids.pr, localPersonalRecords, "pr_id");
+  nextRoutineId = nextAfter(ids.routine, localRoutines, "routine_id");
+  nextRoutineExerciseId = nextAfter(ids.routineExercise, localRoutineExercises, "routine_exercise_id");
+  nextRoutineSetId = nextAfter(ids.routineSet, localRoutineExerciseSets, "routine_set_id");
+  nextSessionId = nextAfter(ids.session, localWorkoutSessions, "session_id");
+  nextSessionExerciseId = nextAfter(ids.sessionExercise, localSessionExercises, "session_exercise_id");
+  nextSessionSetId = nextAfter(ids.sessionSet, localSessionExerciseSets, "session_set_id");
+}
+
+function removeSessions(ids: number[]) {
+  const finished = new Set(ids);
+  if (finished.size === 0) return;
+  const exIds = new Set(
+    localSessionExercises.filter((e) => finished.has(e.session_id)).map((e) => e.session_exercise_id)
+  );
+  localWorkoutSessions = localWorkoutSessions.filter((s) => !finished.has(s.session_id));
+  localSessionExercises = localSessionExercises.filter((e) => !finished.has(e.session_id));
+  localSessionExerciseSets = localSessionExerciseSets.filter((x) => !exIds.has(x.session_exercise_id));
+}
+
+let loadPromise: Promise<void> | null = null;
+// False when storage couldn't be read: saving the (empty) in-memory store
+// then would overwrite the user's real data, which may well read fine on the
+// next launch.
+let canSave = true;
+
+function ensureLoaded(): Promise<void> {
+  if (!loadPromise) {
+    loadPromise = (async () => {
+      let raw: string | null;
+      try {
+        raw = await AsyncStorage.getItem(STORAGE_KEY);
+      } catch {
+        canSave = false;
+        return;
+      }
+      if (!raw) return;
+      try {
+        restore(JSON.parse(raw));
+      } catch {
+        // Corrupt: keep a copy for recovery, then start fresh.
+        try {
+          await AsyncStorage.setItem(`${STORAGE_KEY}_corrupt_${Date.now()}`, raw);
+        } catch {
+          canSave = false;
+        }
+      }
+    })();
+  }
+  return loadPromise;
+}
+
+// Coalesced saves: one write in flight at a time, and a write requested while
+// one is running is done right after it, so the last change always lands.
+let saving: Promise<void> | null = null;
+let saveAgain = false;
+
+function save(): Promise<void> {
+  if (!canSave) return Promise.resolve();
+  if (saving) {
+    saveAgain = true;
+    return saving;
+  }
+  saving = (async () => {
+    do {
+      saveAgain = false;
+      try {
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot()));
+      } catch {
+        // Best-effort: keep working from memory if storage is full/unavailable.
+      }
+    } while (saveAgain);
+    saving = null;
+  })();
+  return saving;
+}
+
+const MUTATING = /^(sign|insert|update|delete|start|finish|upsert)/;
+
+type RawLocalDb = typeof rawLocalDb;
+
+function withPersistence(raw: RawLocalDb): RawLocalDb {
+  const wrapped: any = {};
+  for (const [name, fn] of Object.entries(raw)) {
+    if (name === "onAuthStateChange") {
+      // Synchronous subscription API — nothing to load or save.
+      wrapped[name] = fn;
+      continue;
+    }
+    wrapped[name] = async (...args: any[]) => {
+      await ensureLoaded();
+      const result = await (fn as (...a: any[]) => any)(...args);
+      if (MUTATING.test(name)) await save();
+      return result;
+    };
+  }
+  return wrapped as RawLocalDb;
+}
+
+export const localDb = withPersistence(rawLocalDb);
+
+/** Load the saved store now (e.g. at start-up). Safe to call repeatedly. */
+export function loadLocalDb(): Promise<void> {
+  return ensureLoaded();
+}
+
+/** IDs of finished workouts in the store. */
+export async function finishedLocalSessionIds(): Promise<number[]> {
+  await ensureLoaded();
+  return localWorkoutSessions.filter((s) => s.end_time !== null).map((s) => s.session_id);
+}
+
+/**
+ * Drop workouts (with their exercises and sets) from the store. Supabase
+ * builds use this once a finished offline workout is safely in the sync
+ * queue, so storage doesn't grow forever.
+ */
+export async function removeLocalSessions(ids: number[]): Promise<void> {
+  await ensureLoaded();
+  if (ids.length === 0) return;
+  removeSessions(ids);
+  await save();
+}
+
+/** Test helper: forget everything in memory so the next call reloads from storage. */
+export function __resetLocalDbForTests() {
+  restore({});
+  loadPromise = null;
+  saving = null;
+  saveAgain = false;
+  canSave = true;
+}

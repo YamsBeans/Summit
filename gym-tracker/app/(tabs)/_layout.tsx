@@ -3,6 +3,7 @@ import { Tabs } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
+import { TAB_BAR_HEIGHT } from "@/components/MinimizedWorkoutBar";
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
@@ -15,14 +16,18 @@ export default function TabsLayout() {
       backgroundColor: colors.tabBar,
       borderTopWidth: 1,
       borderTopColor: colors.tabBarBorder,
-      height: 60 + insets.bottom,
-      paddingBottom: insets.bottom + 8,
-      paddingTop: 8,
+      // Each tab item needs ~54px (5px padding + 28px icon box + 16px label +
+      // 5px padding). The old 60px bar with 8px padding top and bottom left 44px
+      // and squashed/clipped the labels.
+      height: TAB_BAR_HEIGHT + insets.bottom,
+      paddingBottom: Math.max(insets.bottom, 4),
+      paddingTop: 4,
     },
     tabBarActiveTintColor: colors.primary,
     tabBarInactiveTintColor: colors.textTertiary,
     tabBarLabelStyle: {
       fontSize: 12,
+      lineHeight: 16,
       fontWeight: "600" as const,
     },
   }), [colors, insets.bottom]);

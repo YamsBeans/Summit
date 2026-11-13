@@ -1,16 +1,29 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Image, Modal, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db, isOnline } from "@/backend/db";
+import { db } from "@/backend/db";
+import { useConnectionMode } from "@/utils/useConnectionMode";
+import MuscleSplitCard from "@/components/MuscleSplitCard";
+import TopLiftsCard from "@/components/TopLiftsCard";
+import { prCountsBySession } from "@/utils/sessionPRs";
+import type { LiftEntry } from "@/utils/topLifts";
+import type { SplitEntry } from "@/utils/muscleSplit";
+import exercisesData from "@/assets/data/exercises.json";
 import { useTheme } from "@/theme/ThemeContext";
-import { useUnits } from "@/utils/units";
+import { useHeaderTop } from "@/utils/useHeaderTop";
+import { useUnits, useDistanceUnit, formatCompact } from "@/utils/units";
 import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
+import WorkoutCalendarModal from "@/components/WorkoutCalendarModal";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
+import { buildExerciseLine } from "@/utils/historyLines";
 import WorkoutChart from "@/components/WorkoutChart";
-import { formatDistance, formatDurationShort, formatPace } from "@/utils/cardioUtils";
+import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardioUtils";
+import { sessionDurationMins } from "@/utils/duration";
+import { GOAL_CHOICES, useWeeklyGoal, weeklyStreaks, workoutsThisWeek } from "@/utils/streaks";
+import { ModalShell } from "@/components/SettingsUI";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 
@@ -46,46 +59,6 @@ function localDateStr(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-function calcStreaks(sessions: SessionWithMeta[]) {
-  if (sessions.length === 0) return { current: 0, longest: 0 };
-  const dates = new Set(sessions.map((s) => s.session_date.slice(0, 10)));
-  const sorted = [...dates].sort();
-
-  let longest = 1;
-  let run = 1;
-  for (let i = 1; i < sorted.length; i++) {
-    const diff = (new Date(sorted[i]).getTime() - new Date(sorted[i - 1]).getTime()) / 86400000;
-    if (diff === 1) { run++; longest = Math.max(longest, run); }
-    else run = 1;
-  }
-  if (sorted.length === 1) longest = 1;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  let current = 0;
-  let d = new Date(today);
-  while (dates.has(localDateStr(d))) { current++; d.setDate(d.getDate() - 1); }
-  if (current === 0) {
-    d = new Date(today);
-    d.setDate(d.getDate() - 1);
-    while (dates.has(localDateStr(d))) { current++; d.setDate(d.getDate() - 1); }
-  }
-
-  return { current, longest };
-}
-
-function getDurationMins(sessionDate: string, startTime: string, endTime: string | null): number | null {
-  if (!endTime) return null;
-  const toDate = (t: string) =>
-    t.includes("T") || t.length > 10 ? new Date(t) : new Date(`${sessionDate}T${t}`);
-  const start = toDate(startTime);
-  const end = toDate(endTime);
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
-  const ms = end.getTime() - start.getTime();
-  if (ms < 0) return null;
-  return Math.floor(ms / 60000);
-}
-
 function formatMinutes(mins: number): string {
   if (mins === 0) return "—";
   const h = Math.floor(mins / 60);
@@ -107,9 +80,16 @@ type AllStats = {
   avgDuration: number;
 };
 
+// exercise id → primary muscles, for the muscle split card.
+const LIBRARY_MUSCLES = new Map<string, string[]>(
+  (exercisesData as { id: string; primaryMuscles?: string[] }[]).map((e) => [e.id, e.primaryMuscles ?? []]),
+);
+
 export default function ProfileScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
   const { colors } = useTheme();
+  const connection = useConnectionMode();
   const { toDisplay, label: unitLabel } = useUnits();
 
   const [loading, setLoading] = useState(true);
@@ -117,6 +97,15 @@ export default function ProfileScreen() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<any>(null);
   const [sessions, setSessions] = useState<SessionWithMeta[]>([]);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [weeklyGoal, setWeeklyGoal] = useWeeklyGoal();
+  const [goalOpen, setGoalOpen] = useState(false);
+  const [splitEntries, setSplitEntries] = useState<(SplitEntry & LiftEntry)[]>([]);
+  const [customMuscles, setCustomMuscles] = useState<Record<string, string[]>>({});
+  const musclesOf = useCallback(
+    (id: string) => customMuscles[id] ?? LIBRARY_MUSCLES.get(id),
+    [customMuscles],
+  );
   const [stats, setStats] = useState<AllStats>({
     totalWorkouts: 0, totalVolume: 0, totalExercises: 0, totalSets: 0,
     totalReps: 0, heaviestWeight: 0, longestSession: 0, avgDuration: 0,
@@ -124,7 +113,7 @@ export default function ProfileScreen() {
   const [selectedStats, setSelectedStats] = useState<StatId[]>(DEFAULT_STATS);
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'strength' | 'cardio'>('all');
-  const [distanceUnit, setDistanceUnit] = useState<'km' | 'mi'>('km');
+  const { distanceUnit } = useDistanceUnit();
   const [cardioStats, setCardioStats] = useState<{
     totalDistanceMeters: number;
     totalDurationSeconds: number;
@@ -135,12 +124,19 @@ export default function ProfileScreen() {
 
   const hasDataRef = useRef(false);
   const lastFetchedRef = useRef(0);
+  // Loads overlap (focus, pull-to-refresh, a delete right after another);
+  // only the newest one may write state, or an older one finishing last
+  // brings back a workout that was just deleted.
+  const loadSeqRef = useRef(0);
+  useEffect(() => () => { loadSeqRef.current++; }, []);
 
   const loadProfile = useCallback(async (isRefresh = false) => {
     const now = Date.now();
     const isStale = now - lastFetchedRef.current > 30_000;
 
     if (hasDataRef.current && !isStale && !isRefresh) return;
+    const seq = ++loadSeqRef.current;
+    const superseded = () => seq !== loadSeqRef.current;
 
     if (isRefresh) {
       setRefreshing(true);
@@ -148,11 +144,6 @@ export default function ProfileScreen() {
       setLoading(true);
     }
     setError(null);
-
-    // Load distance unit preference
-    AsyncStorage.getItem('@gym_tracker_distance_unit').then((val) => {
-      if (val === 'mi') setDistanceUnit('mi');
-    });
 
     // Load saved stat selection in parallel with the DB fetch
     const savedStatsPromise = AsyncStorage.getItem(STATS_STORAGE_KEY).then((val) => {
@@ -168,12 +159,20 @@ export default function ProfileScreen() {
       const { data: { user } } = await db.getUser();
       if (!user) { setError("Not authenticated"); return; }
 
-      const [profileResult, sessionsResult, savedStatIds, cardioStatsResult] = await Promise.all([
+      const [profileResult, sessionsResult, savedStatIds, cardioStatsResult, customResult] = await Promise.all([
         db.getUserProfile(user.id),
         db.getWorkoutSessions(user.id),
         savedStatsPromise,
         db.getCardioStats(user.id),
+        db.getCustomExercises(user.id),
       ]);
+      if (superseded()) return;
+
+      const custom: Record<string, string[]> = {};
+      for (const c of customResult?.data ?? []) {
+        if (c.primary_muscle) custom[c.exercise_id] = [c.primary_muscle];
+      }
+      setCustomMuscles(custom);
 
       if (cardioStatsResult.data) setCardioStats(cardioStatsResult.data);
 
@@ -186,10 +185,15 @@ export default function ProfileScreen() {
       const sessionsData = sessionsResult.data ?? [];
 
       const sessionIds = sessionsData.map((s: any) => s.session_id);
-      const { data: allExercisesFlat } = await db.getBatchSessionExercises(sessionIds);
+      const { data: allExercisesFlat, error: exercisesError } = await db.getBatchSessionExercises(sessionIds);
+      if (superseded()) return;
+      // Totals built from a failed read would all show 0.
+      if (exercisesError) { setError(exercisesError.message ?? "Couldn't load your workouts"); return; }
 
       const exerciseIds = (allExercisesFlat ?? []).map((ex: any) => ex.session_exercise_id);
-      const { data: allSetsFlat } = await db.getBatchSessionExerciseSets(exerciseIds);
+      const { data: allSetsFlat, error: setsError } = await db.getBatchSessionExerciseSets(exerciseIds);
+      if (superseded()) return;
+      if (setsError) { setError(setsError.message ?? "Couldn't load your workouts"); return; }
 
       const exercisesBySession: Record<number, any[]> = {};
       for (const ex of allExercisesFlat ?? []) {
@@ -206,6 +210,7 @@ export default function ProfileScreen() {
       let heaviestWeight = 0;
       const uniqueExercises = new Set<string>();
 
+      const prCounts = prCountsBySession(sessionsData, exercisesBySession, setsByExercise);
       const enriched: SessionWithMeta[] = sessionsData.map((s: any) => {
         const exs = exercisesBySession[s.session_id] ?? [];
         let sessionVolume = 0;
@@ -218,7 +223,7 @@ export default function ProfileScreen() {
           const isCardio = ex.exercise_type === 'cardio';
           if (isCardio) sessionHasCardio = true;
           for (const set of setsByExercise[ex.session_exercise_id] ?? []) {
-            if (set.completed) {
+            if (set.completed !== false) { // null on older rows counts as done, as in history
               overallSets++;
               if (!isCardio) {
                 if (set.weight != null && set.reps != null) {
@@ -247,9 +252,11 @@ export default function ProfileScreen() {
           totalVolume: sessionVolume,
           totalReps: sessionReps,
           exerciseNames: exs.map((ex: any) => ex.exercise_name),
+          exerciseLines: exs.map((ex: any) => buildExerciseLine(ex, setsByExercise[ex.session_exercise_id] ?? [])),
           totalCardioDistanceMeters: sessionCardioDistance,
           totalCardioDurationSeconds: sessionCardioDuration,
           hasCardio: sessionHasCardio,
+          prCount: prCounts[s.session_id] ?? 0,
         };
       });
 
@@ -260,7 +267,7 @@ export default function ProfileScreen() {
       let totalDurationMins = 0;
       let durationCount = 0;
       for (const s of sessionsData) {
-        const mins = getDurationMins(s.session_date, s.start_time, s.end_time);
+        const mins = sessionDurationMins(s.session_date, s.start_time, s.end_time);
         if (mins !== null) {
           longestSession = Math.max(longestSession, mins);
           totalDurationMins += mins;
@@ -269,6 +276,14 @@ export default function ProfileScreen() {
       }
       const avgDuration = durationCount > 0 ? Math.round(totalDurationMins / durationCount) : 0;
 
+      setSplitEntries(sessionsData.flatMap((s: any) =>
+        (exercisesBySession[s.session_id] ?? []).map((ex: any) => ({
+          date: s.session_date,
+          exerciseId: ex.exercise_id,
+          exerciseName: ex.exercise_name,
+          exerciseType: ex.exercise_type,
+          sets: setsByExercise[ex.session_exercise_id] ?? [],
+        }))));
       setSessions(enriched);
       setStats({
         totalWorkouts: enriched.length,
@@ -283,10 +298,12 @@ export default function ProfileScreen() {
       hasDataRef.current = true;
       lastFetchedRef.current = Date.now();
     } catch (e: any) {
-      setError(e.message ?? "Something went wrong");
+      if (!superseded()) setError(e.message ?? "Something went wrong");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!superseded()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -294,10 +311,16 @@ export default function ProfileScreen() {
 
   const handleDeleteSession = useCallback((sessionId: number) => {
     setSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
-  }, []);
+    // Totals (workouts, volume, cardio) come from the full load; redo it
+    // quietly so they don't keep counting the deleted workout.
+    lastFetchedRef.current = 0;
+    loadProfile();
+  }, [loadProfile]);
 
   const handleEditWorkout = useCallback((sessionId: number) => {
-    hasDataRef.current = false;
+    // Reload quietly on return; dropping hasData showed the full-screen
+    // spinner and lost the scroll position, even after a cancelled edit.
+    lastFetchedRef.current = 0;
     router.push(`/workout-edit/${sessionId}` as any);
   }, [router]);
 
@@ -326,9 +349,9 @@ export default function ProfileScreen() {
   function getStatDisplay(id: StatId): { value: string; label: string } {
     switch (id) {
       case "totalWorkouts":   return { value: String(stats.totalWorkouts), label: "Workouts" };
-      case "totalSets":       return { value: String(stats.totalSets), label: "Sets" };
-      case "totalVolume":     return { value: (toDisplay(stats.totalVolume) ?? stats.totalVolume).toLocaleString(), label: `Vol (${unitLabel})` };
-      case "totalReps":       return { value: stats.totalReps.toLocaleString(), label: "Reps" };
+      case "totalSets":       return { value: formatCompact(stats.totalSets), label: "Sets" };
+      case "totalVolume":     return { value: formatCompact(toDisplay(stats.totalVolume)), label: `Vol (${unitLabel})` };
+      case "totalReps":       return { value: formatCompact(stats.totalReps), label: "Reps" };
       case "uniqueExercises": return { value: String(stats.totalExercises), label: "Exercises" };
       case "heaviestWeight":  return { value: (toDisplay(stats.heaviestWeight) ?? stats.heaviestWeight).toLocaleString(), label: `Best (${unitLabel})` };
       case "longestSession":  return { value: formatMinutes(stats.longestSession), label: "Longest" };
@@ -348,7 +371,10 @@ export default function ProfileScreen() {
     return { dateStr: localDateStr(d), label: d.toLocaleDateString("en-US", { weekday: "short" }).slice(0, 1) };
   });
   const workoutDates = new Set(sessions.map((s) => s.session_date.slice(0, 10)));
-  const { current: currentStreak, longest: longestStreak } = calcStreaks(sessions);
+  const sessionDates = sessions.map((s) => s.session_date.slice(0, 10));
+  const { current: currentStreak, longest: longestStreak } = weeklyStreaks(sessionDates);
+  const thisWeekCount = workoutsThisWeek(sessionDates);
+  const weeks = (n: number) => `${n} ${n === 1 ? "week" : "weeks"}`;
   const initials = profile?.username ? profile.username.slice(0, 2).toUpperCase() : "?";
 
   if (loading) {
@@ -363,7 +389,7 @@ export default function ProfileScreen() {
   const listHeader = (
     <>
       {/* ── Top bar ── */}
-      <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
+      <View style={[styles.topBar, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Text style={[styles.username, { color: colors.text }]}>
           {profile?.username ?? "Profile"}
         </Text>
@@ -379,9 +405,9 @@ export default function ProfileScreen() {
         </Pressable>
       </View>
 
-      {!isOnline && (
+      {connection === "offline" && (
         <View style={[styles.offlineBanner, { backgroundColor: colors.warningLight }]}>
-          <Text style={[styles.offlineText, { color: colors.warning }]}>⚡ Offline Mode</Text>
+          <Text style={[styles.offlineText, { color: colors.warning }]}>Offline. Showing saved data; workouts sync when you reconnect.</Text>
         </View>
       )}
       {error && (
@@ -408,7 +434,7 @@ export default function ProfileScreen() {
             <View style={styles.streakRow}>
               <Ionicons name="flame" size={16} color="#ff9f0a" />
               <Text style={[styles.streakText, { color: colors.textSecondary }]}>
-                {currentStreak} day streak
+                {currentStreak} week streak
               </Text>
             </View>
           )}
@@ -433,7 +459,7 @@ export default function ProfileScreen() {
                 <View key={id} style={{ flexDirection: "row", flex: 1 }}>
                   {i > 0 && <View style={[styles.statDivider, { backgroundColor: colors.border }]} />}
                   <View style={styles.statCell}>
-                    <Text style={[styles.statNum, { color: colors.text }]}>{value}</Text>
+                    <Text style={[styles.statNum, { color: colors.text }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
                     <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{label}</Text>
                   </View>
                 </View>
@@ -447,12 +473,24 @@ export default function ProfileScreen() {
       <View style={[styles.card, { backgroundColor: colors.surface, marginHorizontal: 16, marginBottom: 12 }]}>
         <View style={styles.cardHeader}>
           <Text style={[styles.cardTitle, { color: colors.textSecondary }]}>THIS WEEK</Text>
-          {longestStreak > 0 && (
-            <View style={styles.bestStreakRow}>
-              <Ionicons name="trophy-outline" size={14} color={colors.primary} />
-              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {longestStreak} days</Text>
-            </View>
-          )}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            {longestStreak > 0 && (
+              <View style={styles.bestStreakRow}>
+                <Ionicons name="trophy-outline" size={14} color={colors.primary} />
+                <Text style={[styles.bestStreakText, { color: colors.primary }]}>Best: {weeks(longestStreak)}</Text>
+              </View>
+            )}
+            <Pressable
+              onPress={() => setCalendarOpen(true)}
+              hitSlop={8}
+              style={styles.bestStreakRow}
+              accessibilityRole="button"
+              accessibilityLabel="Open workout calendar"
+            >
+              <Ionicons name="calendar-outline" size={14} color={colors.primary} />
+              <Text style={[styles.bestStreakText, { color: colors.primary }]}>Calendar</Text>
+            </Pressable>
+          </View>
         </View>
         <View style={styles.dotsRow}>
           {last7.map(({ dateStr, label }, i) => {
@@ -472,7 +510,88 @@ export default function ProfileScreen() {
             );
           })}
         </View>
+        {/* Weekly goal (like Hevy/Strong): progress toward N workouts this week */}
+        <Pressable
+          onPress={() => setGoalOpen(true)}
+          style={[styles.goalRow, { borderTopColor: colors.border }]}
+          accessibilityRole="button"
+          accessibilityLabel={weeklyGoal ? `Weekly goal: ${thisWeekCount} of ${weeklyGoal} workouts. Change goal` : "Set a weekly workout goal"}
+        >
+          {weeklyGoal ? (
+            <>
+              <View style={[styles.goalTrack, { backgroundColor: colors.surfaceSecondary }]}>
+                <View style={[styles.goalFill, {
+                  backgroundColor: thisWeekCount >= weeklyGoal ? colors.success : colors.primary,
+                  width: `${Math.min(100, (thisWeekCount / weeklyGoal) * 100)}%`,
+                }]} />
+              </View>
+              <Text style={[styles.goalText, { color: thisWeekCount >= weeklyGoal ? colors.text : colors.textSecondary }]}>
+                {thisWeekCount >= weeklyGoal ? "Goal hit! " : ""}{thisWeekCount}/{weeklyGoal} workouts
+              </Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="flag-outline" size={14} color={colors.primary} />
+              <Text style={[styles.goalText, { color: colors.primary, flex: 1 }]}>Set a weekly goal</Text>
+              <Text style={[styles.goalText, { color: colors.textSecondary }]}>
+                {thisWeekCount} {thisWeekCount === 1 ? "workout" : "workouts"} this week
+              </Text>
+            </>
+          )}
+        </Pressable>
       </View>
+
+      <ModalShell visible={goalOpen} onClose={() => setGoalOpen(false)} title="Weekly Goal">
+        <Text style={{ color: colors.textSecondary, fontSize: 14, textAlign: "center", marginBottom: 16 }}>
+          Workouts per week
+        </Text>
+        <View style={styles.goalChips}>
+          {GOAL_CHOICES.map((n) => {
+            const sel = n === weeklyGoal;
+            return (
+              <Pressable
+                key={n}
+                onPress={() => { setWeeklyGoal(n); setGoalOpen(false); }}
+                style={[styles.goalChip, { backgroundColor: sel ? colors.primary : colors.surfaceSecondary }]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: sel }}
+                accessibilityLabel={`${n} per week`}
+              >
+                <Text style={{ fontSize: 16, fontWeight: "700", color: sel ? "#fff" : colors.text }}>{n}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {weeklyGoal != null && (
+          <Pressable onPress={() => { setWeeklyGoal(null); setGoalOpen(false); }} style={{ alignSelf: "center", marginTop: 16, padding: 6 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 14, fontWeight: "600" }}>No goal</Text>
+          </Pressable>
+        )}
+      </ModalShell>
+
+      {/* ── Personal records ── */}
+      <Pressable
+        onPress={() => router.push("/records" as any)}
+        style={({ pressed }) => [styles.card, {
+          backgroundColor: pressed ? colors.surfaceSecondary : colors.surface,
+          marginHorizontal: 16, marginBottom: 12, flexDirection: "row", alignItems: "center", gap: 12,
+        }]}
+        accessibilityRole="button"
+      >
+        <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: colors.warningLight }}>
+          <Ionicons name="trophy-outline" size={17} color={colors.warning} />
+        </View>
+        <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>Personal Records</Text>
+        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+      </Pressable>
+
+      {/* ── Muscle split ── */}
+      {sessions.length > 0 && <MuscleSplitCard entries={splitEntries} musclesOf={musclesOf} />}
+
+      {/* ── Top lifts (est. 1RM trends) ── */}
+      {sessions.length > 0 && <TopLiftsCard entries={splitEntries} />}
+
+      <WorkoutCalendarModal visible={calendarOpen} onClose={() => setCalendarOpen(false)} sessions={sessions} />
 
       {/* ── Progress chart ── */}
       {sessions.length > 0 && <WorkoutChart sessions={sessions} />}
@@ -513,7 +632,7 @@ export default function ProfileScreen() {
             {cardioStats.fastestPaceSecPerKm != null && (
               <View>
                 <Text style={[styles.statNum, { color: colors.text, fontSize: 17 }]}>
-                  {formatPace(cardioStats.fastestPaceSecPerKm)}
+                  {formatPaceIn(cardioStats.fastestPaceSecPerKm, distanceUnit)}
                 </Text>
                 <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Best Pace</Text>
               </View>
@@ -589,11 +708,13 @@ export default function ProfileScreen() {
               notes={item.notes}
               photo_url={item.photo_url}
               exerciseNames={item.exerciseNames}
+              exerciseLines={item.exerciseLines}
               onDelete={handleDeleteSession}
               onEditWorkout={handleEditWorkout}
               totalCardioDistanceMeters={item.totalCardioDistanceMeters ?? 0}
               totalCardioDurationSeconds={item.totalCardioDurationSeconds ?? 0}
               distanceUnit={distanceUnit}
+              prCount={item.prCount ?? 0}
             />
           </View>
         )}
@@ -774,6 +895,12 @@ const styles = StyleSheet.create({
   dotCell: { alignItems: "center", gap: 6 },
   dot: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   dotLabel: { fontSize: 11, fontWeight: "600" },
+  goalRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  goalTrack: { flex: 1, height: 6, borderRadius: 3, overflow: "hidden" },
+  goalFill: { height: 6, borderRadius: 3 },
+  goalText: { fontSize: 13, fontWeight: "600" },
+  goalChips: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 6 },
+  goalChip: { width: 34, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
 
   sectionHeader: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 },
   sectionTitle: { fontSize: 20, fontWeight: "700" },
