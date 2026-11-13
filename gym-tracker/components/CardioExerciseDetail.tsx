@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LineChart } from "react-native-gifted-charts";
 import { useTheme } from "@/theme/ThemeContext";
@@ -29,6 +29,7 @@ export default function CardioExerciseDetail({ history }: { history: Point[] }) 
   const { colors } = useTheme();
   const { distanceUnit } = useDistanceUnit();
   const [metric, setMetric] = useState<Metric>("distance");
+  const [chartBoxWidth, setChartBoxWidth] = useState(320);
 
   const sessions = useMemo(
     () => history.map((h) => ({ date: h.session_date, sets: h.sets, ...computeCardioSummary(h.sets) })),
@@ -105,11 +106,16 @@ export default function CardioExerciseDetail({ history }: { history: Point[] }) 
             </View>
           </View>
           {chartData.length >= 2 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            // The chart scrolls itself and opens on the newest sessions, with
+            // the y-axis pinned (it used to scroll away with the line).
+            <View onLayout={(e) => setChartBoxWidth(e.nativeEvent.layout.width)}>
               <LineChart
                 key={metric}
                 data={chartData}
-                width={Math.max(300, chartData.length * 60)}
+                width={Math.max(200, chartBoxWidth - 48)}
+                yAxisLabelWidth={38}
+                scrollToEnd
+                endSpacing={0}
                 height={180}
                 color={colors.primary}
                 dataPointsColor={colors.primary}
@@ -136,7 +142,7 @@ export default function CardioExerciseDetail({ history }: { history: Point[] }) 
                 spacing={60}
                 initialSpacing={20}
               />
-            </ScrollView>
+            </View>
           ) : (
             <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: "center", paddingVertical: 24 }}>
               {metric === "distance" ? "Log a distance in two workouts to chart it." : "Log a time in two workouts to chart it."}

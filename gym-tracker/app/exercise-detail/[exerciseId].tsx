@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -51,6 +51,8 @@ function displayName(exerciseId: string | undefined, exerciseName: string | unde
   return lib?.name ?? exerciseId.replace(/_/g, " ");
 }
 
+const Y_LABEL_WIDTH = 38;
+
 export default function ExerciseDetailScreen() {
   const headerTop = useHeaderTop();
   const { exerciseId, exerciseName, exerciseType } = useLocalSearchParams<{ exerciseId: string; exerciseName: string; exerciseType?: string }>();
@@ -63,7 +65,7 @@ export default function ExerciseDetailScreen() {
   const [metric, setMetric] = useState<ChartMetric>("weight");
   // Long histories scroll sideways; open on the newest sessions (like
   // Strong) instead of the oldest.
-  const chartScrollRef = useRef<ScrollView>(null);
+  const [chartBoxWidth, setChartBoxWidth] = useState(320);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,16 +229,17 @@ export default function ExerciseDetailScreen() {
                 </View>
               </View>
               {chartData.length >= 2 ? (
-                <ScrollView
-                  ref={chartScrollRef}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  onContentSizeChange={() => chartScrollRef.current?.scrollToEnd({ animated: false })}
-                >
+                // The chart scrolls itself, so the y-axis stays put. It was
+                // inside a horizontal ScrollView that opened scrolled to the
+                // newest session, which pushed the axis labels off screen.
+                <View onLayout={(e) => setChartBoxWidth(e.nativeEvent.layout.width)}>
                   <LineChart
                     key={metric}
                     data={chartData}
-                    width={Math.max(300, chartData.length * 60)}
+                    width={Math.max(200, chartBoxWidth - Y_LABEL_WIDTH - 10)}
+                    yAxisLabelWidth={Y_LABEL_WIDTH}
+                    scrollToEnd
+                    endSpacing={0}
                     height={180}
                     color={colors.primary}
                     dataPointsColor={colors.primary}
@@ -264,7 +267,7 @@ export default function ExerciseDetailScreen() {
                     spacing={60}
                     initialSpacing={20}
                   />
-                </ScrollView>
+                </View>
               ) : (
                 <Text style={{ color: colors.textSecondary, fontSize: 13, textAlign: "center", paddingVertical: 24 }}>
                   {metric === "e1rm"
