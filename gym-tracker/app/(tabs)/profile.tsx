@@ -18,6 +18,7 @@ import { logError } from "@/utils/log";
 import WorkoutHistoryCard from "@/components/WorkoutHistoryCard";
 import WorkoutCalendarModal from "@/components/WorkoutCalendarModal";
 import { SessionWithMeta } from "@/components/WorkoutHistoryList";
+import { buildExerciseLine } from "@/utils/historyLines";
 import WorkoutChart from "@/components/WorkoutChart";
 import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardioUtils";
 import { sessionDurationMins } from "@/utils/duration";
@@ -251,6 +252,7 @@ export default function ProfileScreen() {
           totalVolume: sessionVolume,
           totalReps: sessionReps,
           exerciseNames: exs.map((ex: any) => ex.exercise_name),
+          exerciseLines: exs.map((ex: any) => buildExerciseLine(ex, setsByExercise[ex.session_exercise_id] ?? [])),
           totalCardioDistanceMeters: sessionCardioDistance,
           totalCardioDurationSeconds: sessionCardioDuration,
           hasCardio: sessionHasCardio,
@@ -706,6 +708,7 @@ export default function ProfileScreen() {
               notes={item.notes}
               photo_url={item.photo_url}
               exerciseNames={item.exerciseNames}
+              exerciseLines={item.exerciseLines}
               onDelete={handleDeleteSession}
               onEditWorkout={handleEditWorkout}
               totalCardioDistanceMeters={item.totalCardioDistanceMeters ?? 0}

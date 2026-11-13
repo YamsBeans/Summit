@@ -13,6 +13,7 @@ import { useProgressPhotoUrl } from "@/utils/useProgressPhotoUrl";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import { repeatWorkout, saveWorkoutAsRoutine } from "@/utils/repeatWorkout";
 import { sessionDurationMins } from "@/utils/duration";
+import type { ExerciseLine } from "@/utils/historyLines";
 
 type WorkoutHistoryCardProps = {
   session_id: number;
@@ -25,6 +26,7 @@ type WorkoutHistoryCardProps = {
   notes: string | null;
   photo_url?: string | null;
   exerciseNames?: string[];
+  exerciseLines?: ExerciseLine[];
   onDelete?: (sessionId: number) => void;
   onEditWorkout?: (sessionId: number) => void;
   totalCardioDistanceMeters?: number;
@@ -82,6 +84,7 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   notes,
   photo_url,
   exerciseNames = [],
+  exerciseLines,
   onDelete,
   onEditWorkout,
   totalCardioDistanceMeters = 0,
@@ -107,6 +110,21 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
   const volumeDisplay = formatVolume(toDisplay(totalVolume));
   const shown = exerciseNames.slice(0, 3);
   const extra = exerciseNames.length - shown.length;
+  const shownLines = exerciseLines?.slice(0, 3);
+
+  const bestText = (l: ExerciseLine): string | null => {
+    if (l.cardio) {
+      const c = l.bestCardio;
+      if (!c) return null;
+      if (c.distance_meters) return formatDistance(c.distance_meters, distanceUnit);
+      return c.duration_seconds ? formatDurationShort(c.duration_seconds) : null;
+    }
+    const b = l.best;
+    if (!b) return null;
+    const w = toDisplay(b.weight);
+    if (w != null && w > 0) return b.reps != null ? `${w} ${unitLabel} × ${b.reps}` : `${w} ${unitLabel}`;
+    return b.reps != null ? `${b.reps} reps` : null;
+  };
 
   const handleShare = async () => {
     setMenuOpen(false);
@@ -120,7 +138,12 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
         totalCardioDistanceMeters ? formatDistance(totalCardioDistanceMeters, distanceUnit) : null,
       ].filter(Boolean).join("  •  "),
     ];
-    if (exerciseNames.length > 0) {
+    if (exerciseLines && exerciseLines.length > 0) {
+      lines.push("", ...exerciseLines.map((l) => {
+        const best = bestText(l);
+        return `• ${l.sets > 0 ? `${l.sets} × ` : ""}${l.name}${best ? ` — ${best}` : ""}`;
+      }));
+    } else if (exerciseNames.length > 0) {
       lines.push("", ...exerciseNames.map((n) => `• ${n}`));
     }
     if (notes) lines.push("", `📝 ${notes}`);
@@ -299,11 +322,25 @@ const WorkoutHistoryCard = memo(function WorkoutHistoryCard({
       {/* Exercise list */}
       {shown.length > 0 && (
         <View style={styles.exerciseList}>
-          {shown.map((name, i) => (
-            <Text key={i} style={[styles.exerciseName, { color: colors.textSecondary }]} numberOfLines={1}>
-              {name}
-            </Text>
-          ))}
+          {shownLines
+            ? shownLines.map((l, i) => {
+              const best = bestText(l);
+              return (
+                <View key={i} style={styles.exerciseRow}>
+                  <Text style={[styles.exerciseName, styles.exerciseRowName, { color: colors.textSecondary }]} numberOfLines={1}>
+                    {l.sets > 0 ? `${l.sets} × ` : ""}{l.name}
+                  </Text>
+                  {best && (
+                    <Text style={[styles.exerciseBest, { color: colors.textTertiary }]} numberOfLines={1}>{best}</Text>
+                  )}
+                </View>
+              );
+            })
+            : shown.map((name, i) => (
+              <Text key={i} style={[styles.exerciseName, { color: colors.textSecondary }]} numberOfLines={1}>
+                {name}
+              </Text>
+            ))}
           {extra > 0 && (
             <Text style={[styles.moreText, { color: colors.textTertiary }]}>
               +{extra} more exercise{extra > 1 ? "s" : ""}
@@ -467,6 +504,9 @@ const styles = StyleSheet.create({
 
   exerciseList: { gap: 3 },
   exerciseName: { fontSize: 13 },
+  exerciseRow: { flexDirection: "row", alignItems: "baseline", gap: 10 },
+  exerciseRowName: { flex: 1 },
+  exerciseBest: { fontSize: 12, fontVariant: ["tabular-nums"] },
   moreText: { fontSize: 12, marginTop: 2 },
   notes: { fontSize: 12, fontStyle: "italic", marginTop: 6 },
   progressPhotoContainer: {

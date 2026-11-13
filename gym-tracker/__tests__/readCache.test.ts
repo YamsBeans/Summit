@@ -177,3 +177,17 @@ describe("isNetworkError", () => {
     expect(isNetworkError({ message: "duplicate key value violates unique constraint" })).toBe(false);
   });
 });
+
+describe("sign-out during a read", () => {
+  it("doesn't write the old account's result into the cleared cache", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const rc = require("../backend/readCache");
+    let release: (v: any) => void = () => {};
+    const pending = rc.cachedRead(true, "routines", () => new Promise((r) => { release = r; }), async () => ({ data: null, error: null }));
+    await rc.clearReadCache();
+    release({ data: [{ routine_id: 1 }], error: null });
+    const res = await pending;
+    expect(res.data).toEqual([{ routine_id: 1 }]); // the caller still gets it
+    expect(await rc.readCache("routines")).toBeNull();
+  });
+});

@@ -41,8 +41,13 @@ export async function readCache<T = any>(key: string): Promise<T | null> {
   }
 }
 
+// Bumped by clearReadCache. A read that started before a sign-out must not
+// write the previous account's data back into the fresh cache when it lands.
+let generation = 0;
+
 /** Remove every cached read. Call on sign-out so users never see each other's data. */
 export async function clearReadCache(): Promise<void> {
+  generation++;
   try {
     const keys = await AsyncStorage.getAllKeys();
     const ours = keys.filter((k) => k.startsWith(PREFIX));
@@ -80,6 +85,7 @@ export async function cachedRead(
   offlineFn: () => PromiseLike<DbReadResult>,
 ): Promise<DbReadResult> {
   if (online) {
+    const startedIn = generation;
     let res: DbReadResult;
     try {
       res = await onlineFn();
@@ -87,7 +93,7 @@ export async function cachedRead(
       res = { data: null, error: e };
     }
     if (!res.error && res.data != null) {
-      await writeCache(cacheKey, res.data);
+      if (startedIn === generation) await writeCache(cacheKey, res.data);
       return res;
     }
     if (isNetworkError(res.error)) {
