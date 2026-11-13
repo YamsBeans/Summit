@@ -336,3 +336,55 @@ Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jes
 - A share image for Workout Complete (needs `react-native-view-shot`).
 - Supersets, set types and RPE (schema columns).
 - `routine_exercise_id` on session exercises, so routine finish doesn't have to guess.
+
+## 2026-11-13 (Fri)
+
+Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 365 tests in 44 suites (up from 350 in 43), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode with about 3 months of seeded workouts. Two read-only subagents audited the data layer and the routine/Edit Workout screens. A third reviewed this run's diff, and I fixed what it found.
+
+### Bugs fixed
+- **Signing out could send one account's workouts to the next account.**
+  - Workouts queued offline were uploaded under whoever signed in next (the queue rewrote `user_id`). They now wait for their own account.
+  - Queued changes to server workouts (the outbox) were replayed under the next login, refused by row-level security, and lost. On sign-out they're now set aside per account (`parkOps`) and put back when that account signs in again (`unparkOps`). A change that's mid-upload isn't set aside, so it can't upload twice.
+  - A sync that repeats after its account signed out does nothing now.
+  - Settings → Sign Out says when changes haven't uploaded yet.
+- **Workouts logged offline sorted by upload time.** Monday's offline workout uploaded on Friday showed as the newest, and PREVIOUS used its numbers. They now upload with `created_at` = when they happened.
+- **A workout could upload twice** if the app closed after the upload but before the queue was trimmed.
+- **Sync stalled in "lie-fi".** If the server couldn't be reached while NetInfo said "connected", queued changes waited for the next offline→online change. The sync now retries on a 30 s → 5 min backoff and when the app comes back to the foreground.
+- **Starting a routine:**
+  - Read errors were ignored: a failed read started an empty workout, and a failed template read also wiped the offline copy of every template.
+  - On lie-fi it now starts from the cached routine instead of "Routine not found".
+- **Routine targets after an offline finish** were read from the server while changes were still queued, so the queued sets were missed. It now uses the offline view and the outbox, and checks errors.
+- **Edit Workout:**
+  - A number still being typed was lost when tapping Done or Back on iOS/Android (the header doesn't blur the input). It's now saved, including cardio fields, before the PR rebuild.
+  - Remove Photo while offline looked done but went to the empty device store, so the photo came back. It's now queued. Photo save errors are shown.
+  - A failed set read showed exercises with no sets, and Add Set then reused set 1. It now shows an error.
+  - Replacing strength ↔ cardio kept the old numbers (the logger already fixed this).
+  - An added exercise could share an order with another and swap on reload.
+- **Routine editor:**
+  - The name and description came only from the URL, so a web reload showed an old name, and saving the name wrote the stale description back. It now loads the saved routine and saves only changed fields. Done stays in edit mode if the save fails.
+  - Add Set on a second exercise was dropped while the first was saving (one shared guard).
+  - A failed set read now shows an error.
+- **Read cache:** a read that started before sign-out could write the old account's data into the fresh cache.
+- **Exercise charts** scrolled the y-axis labels out of view (they opened on the newest sessions inside a horizontal ScrollView). The chart now scrolls itself with the axis pinned, without the blank gap after the last point. Strength and cardio.
+- Accessibility labels on Edit Workout and routine editor inputs, remove-set, options and the warm-up toggle.
+
+### New / UX
+- **RPE per set (like Strong/Hevy).** Tap a set number → RPE 6–10. The row shows an `@8` pill, and PREVIOUS shows last time's RPE (`135 × 8 @8`). It's stored in the existing `session_exercise_sets.effort_level` column, so no schema change.
+- **History cards show sets and the best set** per exercise: "3 × Bench Press   180 lbs × 6" (like Strong). Share uses the same lines.
+- **Empty workout:** a "Get started" hint and a filled Add Exercise button.
+
+### Needs Yams's decision or check
+- **RPE is whole numbers only** (6–10), because `effort_level` is `int4`. If you want 7.5 / 8.5 / 9.5, change the column to `numeric(3,1)` and I'll add the half steps.
+- **Routine editor "Cancel"** only reverts the name and description; set edits are saved as you go. Should it be relabelled "Back", or should Cancel undo set edits too?
+- **Schedule:** from now on this runs once a week on Wednesday (changed at your request).
+- **Still open from earlier runs:**
+  - Should warm-ups count toward PRs?
+  - `completed = null` counts as done.
+  - `routines.routine_order` isn't in `supabaseSchema.md`.
+  - Offline routine edits are refused rather than queued.
+
+### Not done / ideas for next run
+- Inserts still aren't idempotent: if an insert reaches the server but the reply is lost, the retry adds a duplicate row. A client-generated UUID column with upsert would fix it (schema change).
+- A photo added on the summary screen while the offline workout is uploading can miss the server copy (narrow race).
+- RPE in Edit Workout and on exercise detail.
+- Swipe-to-delete set rows, share image for Workout Complete, supersets.
