@@ -121,7 +121,7 @@ const StrengthSetRow = memo(function StrengthSetRow({
 
   const prevWeight = toDisplay(prevSet?.weight);
   const prevText = prevWeight != null && prevSet?.reps != null
-    ? `${prevWeight} × ${prevSet.reps}`
+    ? `${prevWeight} × ${prevSet.reps}${prevSet.effort_level != null ? ` @${prevSet.effort_level}` : ""}`
     : prevWeight != null
     ? `${prevWeight} ${unit}`
     : prevSet?.reps != null
@@ -176,6 +176,19 @@ const StrengthSetRow = memo(function StrengthSetRow({
           {prevText}
         </Text>
       </Pressable>
+
+      {/* This set's RPE, set from the set number's menu */}
+      {set.effort_level != null && (
+        <Pressable
+          onPress={() => onSetNumberPress(set, sessionExerciseId)}
+          hitSlop={4}
+          accessibilityRole="button"
+          accessibilityLabel={`RPE ${set.effort_level}. Change`}
+          style={[rowStyles.rpePill, { backgroundColor: colors.primaryLight }]}
+        >
+          <Text style={[rowStyles.rpeText, { color: colors.primary }]}>@{set.effort_level}</Text>
+        </Pressable>
+      )}
 
       {/* Weight input */}
       <TextInput
@@ -291,6 +304,14 @@ const rowStyles = StyleSheet.create({
     fontSize: 13,
     paddingLeft: 4,
   },
+  rpePill: {
+    paddingHorizontal: 6,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rpeText: { fontSize: 12, fontWeight: "700" },
   input: {
     width: 68,
     height: 40,

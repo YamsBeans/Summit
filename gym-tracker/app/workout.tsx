@@ -36,6 +36,8 @@ import ExerciseNote from "@/components/ExerciseNote";
 import ElapsedTime from "@/components/ElapsedTime";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
+const RPE_VALUES = [6, 7, 8, 9, 10];
+
 export default function WorkoutScreen() {
   const headerTop = useHeaderTop();
   const router = useRouter();
@@ -324,7 +326,7 @@ export default function WorkoutScreen() {
     sessionExerciseId: number,
     updates: {
       reps?: number | null; weight?: number | null; is_warmup?: boolean; completed?: boolean;
-      distance_meters?: number | null; duration_seconds?: number | null; pace_sec_per_km?: number | null;
+      distance_meters?: number | null; duration_seconds?: number | null; pace_sec_per_km?: number | null; effort_level?: number | null;
     }
   ) => {
     // These values are being saved now; they're no longer drafts. Ticking a
@@ -462,6 +464,16 @@ export default function WorkoutScreen() {
     if (!selectedSet || !selectedExerciseId) return;
     await updateSet(selectedSet.session_set_id, selectedExerciseId, {
       is_warmup: !selectedSet.is_warmup,
+    });
+    closeSetOptions();
+  });
+
+  // RPE (rate of perceived exertion, like Strong/Hevy), saved in the sets
+  // table's existing effort_level column. Tapping the current value clears it.
+  const handleSetRpe = useGuardedPress(async (rpe: number) => {
+    if (!selectedSet || !selectedExerciseId) return;
+    await updateSet(selectedSet.session_set_id, selectedExerciseId, {
+      effort_level: selectedSet.effort_level === rpe ? null : rpe,
     });
     closeSetOptions();
   });
@@ -1063,13 +1075,26 @@ export default function WorkoutScreen() {
           );
         })}
 
+        {/* Empty workout: say what to do next (like Hevy's "Get started") */}
+        {!loading && exercises.length === 0 && (
+          <View style={styles.emptyState}>
+            <View style={[styles.emptyIcon, { backgroundColor: colors.primaryLight }]}>
+              <Ionicons name="barbell-outline" size={28} color={colors.primary} />
+            </View>
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>Get started</Text>
+            <Text style={[styles.emptyBody, { color: colors.textSecondary }]}>
+              Add an exercise to start logging sets.
+            </Text>
+          </View>
+        )}
+
         {/* Add Exercise */}
         <Pressable
-          style={[styles.addExerciseBtn, { backgroundColor: colors.surface }]}
+          style={[styles.addExerciseBtn, { backgroundColor: exercises.length === 0 ? colors.primary : colors.surface }]}
           onPress={() => setShowAddExercise(true)}
         >
-          <Ionicons name="add" size={20} color={colors.primary} />
-          <Text style={[styles.addExerciseText, { color: colors.primary }]}>Add Exercise</Text>
+          <Ionicons name="add" size={20} color={exercises.length === 0 ? "#fff" : colors.primary} />
+          <Text style={[styles.addExerciseText, { color: exercises.length === 0 ? "#fff" : colors.primary }]}>Add Exercise</Text>
         </Pressable>
 
         {/* Notes */}
@@ -1137,6 +1162,30 @@ export default function WorkoutScreen() {
               setTimeout(() => setPlateWeight(w), Platform.OS === "ios" ? 400 : 0);
             }}
           />
+        )}
+        {exercises.find((e) => e.session_exercise_id === selectedExerciseId)?.exercise_type !== "cardio" && (
+          <SheetOption icon="speedometer-outline" label="RPE" style={{ gap: 10 }}>
+            {RPE_VALUES.map((v) => {
+              const on = selectedSet?.effort_level === v;
+              return (
+                <Pressable
+                  key={v}
+                  onPress={() => handleSetRpe(v)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={on ? `RPE ${v}, selected. Tap to clear` : `RPE ${v}`}
+                  hitSlop={4}
+                  style={({ pressed }) => [
+                    styles.rpeChip,
+                    { backgroundColor: on ? colors.primary : colors.surfaceSecondary, borderColor: on ? colors.primary : colors.border },
+                    pressed && { opacity: 0.6 },
+                  ]}
+                >
+                  <Text style={[styles.rpeChipText, { color: on ? "#fff" : colors.text }]}>{v}</Text>
+                </Pressable>
+              );
+            })}
+          </SheetOption>
         )}
         <SheetOption icon="trash-outline" tone="danger" label="Remove Set" onPress={handleRemoveSet} last />
       </ActionSheet>
@@ -1300,6 +1349,19 @@ export default function WorkoutScreen() {
 }
 
 const styles = StyleSheet.create({
+  emptyState: { alignItems: "center", paddingTop: 40, paddingBottom: 24, paddingHorizontal: 24, gap: 6 },
+  emptyIcon: { width: 60, height: 60, borderRadius: 30, alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  emptyTitle: { fontSize: 18, fontWeight: "700" },
+  emptyBody: { fontSize: 14, textAlign: "center" },
+  rpeChip: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rpeChipText: { fontSize: 14, fontWeight: "700" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
   // Header
