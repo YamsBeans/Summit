@@ -12,7 +12,7 @@ import { useTheme } from "@/theme/ThemeContext";
 import { useUnits, useDistanceUnit, UnitSystem } from "@/utils/units";
 import { useRestTimer } from "@/utils/useRestTimer";
 import { formatRest } from "@/utils/exerciseRest";
-import { requestNotificationPermissions } from "@/utils/notifications";
+import { cancelRestDoneNotification, NOTIFICATIONS_SUPPORTED, requestNotificationPermissions } from "@/utils/notifications";
 import { ModalShell, SettingItem, SettingSection } from "@/components/SettingsUI";
 import { useConnectionMode } from "@/utils/useConnectionMode";
 import { useKeepAwakeSetting } from "@/utils/keepAwake";
@@ -173,8 +173,12 @@ function ProfileEditModal({ visible, onClose }: { visible: boolean; onClose: () 
         // Last uploaded avatar URL for this user, in case the profile read is stale
         AsyncStorage.getItem(avatarKey(uid)).catch(() => null),
       ]).then(([{ data: profile }, cachedUrl]) => {
-        if (profile?.username) setUsername(profile.username);
-        if (profile?.bio) setBio(profile.bio);
+        // Always reset to what's saved, so text typed before a Cancel
+        // doesn't come back looking saved.
+        if (profile) {
+          setUsername(profile.username ?? "");
+          setBio(profile.bio ?? "");
+        }
         setAvatarUri(profile?.avatar_url ?? cachedUrl ?? null);
       });
     });
@@ -342,7 +346,7 @@ const profileStyles = StyleSheet.create({
 function ContentModal({ visible, onClose, title, sections }: { visible: boolean; onClose: () => void; title: string; sections: { heading?: string; body: string }[] }) {
   const { colors } = useTheme();
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
         <Pressable style={{ ...StyleSheet.absoluteFillObject }} onPress={onClose} />
         <View style={{ backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, maxHeight: "80%", elevation: 8 }}>
@@ -372,8 +376,8 @@ function AboutModal({ visible, onClose }: { visible: boolean; onClose: () => voi
     <ModalShell visible={visible} onClose={onClose} title="About">
       <View style={{ alignItems: "center", gap: 6, marginBottom: 20 }}>
         <Text style={{ fontSize: 48 }}>🏋️</Text>
-        <Text style={{ fontSize: 22, fontWeight: "800", color: colors.text }}>Summit</Text>
-        <Text style={{ fontSize: 13, color: colors.textTertiary }}>Version 1.0.0</Text>
+        <Text style={{ fontSize: 22, fontWeight: "800", color: colors.text }}>{APP_NAME}</Text>
+        <Text style={{ fontSize: 13, color: colors.textTertiary }}>Version {APP_VERSION}</Text>
       </View>
       <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: "center", lineHeight: 22, marginBottom: 20 }}>
         A personal workout tracker built to help you log, track, and improve your training — no social feed, just your progress.
@@ -433,6 +437,8 @@ export default function SettingsScreen() {
     }
     setNotificationsEnabled(val);
     AsyncStorage.setItem(NOTIF_KEY, String(val));
+    // Turning alerts off mid-rest shouldn't still buzz when that rest ends.
+    if (!val) cancelRestDoneNotification();
   };
 
   const appearanceLabel = mode === "light" ? "Light" : mode === "dark" ? "Dark" : "System";
@@ -458,9 +464,11 @@ export default function SettingsScreen() {
   };
 
   const handleRateApp = () => {
-    showAlert(`Rate ${APP_NAME}`, "Enjoying the app? We'd love your feedback!\n\nLeave us a review on the App Store to help others find us.", [
+    // Summit isn't in the stores yet, so there's no review page to open;
+    // send feedback by email instead of a "Rate Now" button that did nothing.
+    showAlert(`Rate ${APP_NAME}`, "Enjoying the app? We'd love your feedback!", [
       { text: "Not Now", style: "cancel" },
-      { text: "Rate Now", onPress: () => {} },
+      { text: "Send Feedback", onPress: handleContactUs },
     ]);
   };
 
@@ -509,11 +517,13 @@ export default function SettingsScreen() {
         <SettingSection title="Account">
           <SettingItem icon="person-outline" label="Edit Profile" onPress={() => setShowProfile(true)} />
           <SettingItem icon="lock-closed-outline" label="Account" onPress={() => router.push("/account")} />
+          {NOTIFICATIONS_SUPPORTED && (
           <SettingItem
             icon="notifications-outline"
             label="Notifications"
             rightElement={
               <Switch
+                accessibilityLabel="Rest timer notifications"
                 value={notificationsEnabled}
                 onValueChange={toggleNotifications}
                 trackColor={{ false: colors.border, true: colors.primary }}
@@ -521,6 +531,7 @@ export default function SettingsScreen() {
               />
             }
           />
+          )}
         </SettingSection>
 
         {/* Preferences */}

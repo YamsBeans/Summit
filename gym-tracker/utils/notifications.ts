@@ -1,22 +1,32 @@
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 
-// Notification shown when received in foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+/** Rest notifications are phone-only: expo-notifications can't schedule on web. */
+export const NOTIFICATIONS_SUPPORTED = Platform.OS !== "web";
+
+// The rest notification is for when the app is in the background. With the
+// app open the in-app banner and haptics already signal the end of rest, so
+// don't add a system banner and sound on top; just keep it in the list.
+if (NOTIFICATIONS_SUPPORTED) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => {
+      const foreground = AppState.currentState === "active";
+      return {
+        shouldShowAlert: !foreground,
+        shouldPlaySound: !foreground,
+        shouldSetBadge: false,
+        shouldShowBanner: !foreground,
+        shouldShowList: true,
+      };
+    },
+  });
+}
 
 let scheduledNotifId: string | null = null;
 
 export async function requestNotificationPermissions(): Promise<boolean> {
-  if (!Device.isDevice) return false;
+  if (!NOTIFICATIONS_SUPPORTED || !Device.isDevice) return false;
 
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync("rest-timer", {
@@ -52,7 +62,7 @@ export function beginRestNotification(): number {
 
 export function scheduleRestDoneNotification(seconds: number, token: number = beginRestNotification()): Promise<void> {
   return serial(async () => {
-    if (token !== generation) return;
+    if (token !== generation || !NOTIFICATIONS_SUPPORTED) return;
     await cancelScheduled();
     if (!(seconds >= 1)) return;
     const id = await Notifications.scheduleNotificationAsync({
@@ -75,7 +85,9 @@ export function scheduleRestDoneNotification(seconds: number, token: number = be
       return;
     }
     scheduledNotifId = id;
-  });
+    // Best-effort: a refused permission or a missing native module must not
+    // surface as an unhandled rejection on every completed set.
+  }).catch(() => {});
 }
 
 async function cancelScheduled() {

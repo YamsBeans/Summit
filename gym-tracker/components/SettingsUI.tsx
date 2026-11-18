@@ -27,6 +27,8 @@ export function SettingItem({ icon, label, onPress, rightElement, destructive, v
       ]}
       onPress={onPress}
       disabled={!onPress && !rightElement}
+      accessibilityRole={onPress ? "button" : undefined}
+      accessibilityLabel={onPress ? (value ? `${label}, ${value}` : label) : undefined}
     >
       <View style={{ width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: destructive ? colors.dangerLight : colors.surfaceSecondary, marginRight: 12 }}>
         <Ionicons name={icon as any} size={18} color={destructive ? colors.danger : colors.textSecondary} />
@@ -59,7 +61,7 @@ export function SettingSection({ title, children }: { title: string; children: R
 export function ModalShell({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
   const { colors } = useTheme();
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", padding: 20 }} onPress={onClose}>
           <Pressable
