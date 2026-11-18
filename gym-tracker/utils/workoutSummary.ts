@@ -145,7 +145,11 @@ export function buildWorkoutSummary(
   // "Last time" is one session-exercise; an exercise done twice today (top
   // set + back-offs) has no like-for-like comparison, so it gets none.
   const timesToday = new Map<string, number>();
-  for (const ex of exercises) timesToday.set(ex.exercise_id, (timesToday.get(ex.exercise_id) ?? 0) + 1);
+  for (const ex of exercises) {
+    // An empty duplicate (added twice by mistake) doesn't count.
+    if (!(exerciseSets[ex.session_exercise_id] ?? []).some((st) => st.completed)) continue;
+    timesToday.set(ex.exercise_id, (timesToday.get(ex.exercise_id) ?? 0) + 1);
+  }
   let volNow = 0;
   let volLast = 0;
 

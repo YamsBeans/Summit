@@ -31,13 +31,17 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
   const hasPRs = summary.prCount > 0;
   // Up is green; down is plain grey (a lighter day isn't a failure).
   const changeColor = (n: number) => (n > 0 ? colors.success : colors.textTertiary);
-  const pctText = (pct: number) => (pct === 0 ? "Same as last time" : `${pct > 0 ? "▲" : "▼"} ${Math.abs(pct)}% vs last time`);
+  const pctText = (pct: number) => (pct === 0 ? "About the same as last time" : `${pct > 0 ? "▲" : "▼"} ${Math.abs(pct)}% vs last time`);
+  // "Same" is decided on the number as shown, so a sliver that rounds to
+  // 0 doesn't read "+0 kg vol" (or contradict a "+20 lbs" row).
+  const shownDiff = (c: ExerciseChange) => (c.kind === "volume" ? Math.round(toDisplay(Math.abs(c.diff)) ?? 0) * Math.sign(c.diff) : c.diff);
   const changeText = (c: ExerciseChange) => {
-    if (c.diff === 0) return "Same as last";
-    const sign = c.diff > 0 ? "+" : "−";
+    const d = shownDiff(c);
+    if (d === 0) return "Same as last";
+    const sign = d > 0 ? "+" : "−";
     return c.kind === "volume"
-      ? `${sign}${formatVolume(toDisplay(Math.abs(c.diff)))} ${unitLabel} vol`
-      : `${sign}${Math.abs(c.diff)} rep${Math.abs(c.diff) === 1 ? "" : "s"}`;
+      ? `${sign}${formatVolume(Math.abs(d))} ${unitLabel} vol`
+      : `${sign}${Math.abs(d)} rep${Math.abs(d) === 1 ? "" : "s"}`;
   };
   const volumePct = summary.volumeChangePct;
 
@@ -83,7 +87,7 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
       ].filter(Boolean).join("  •  "),
       "",
       ...summary.exercises.map((ex) =>
-        `• ${ex.completedSets} × ${ex.name}: ${bestSetText(ex)}${ex.pr ? " 🏆" : ""}${ex.change && ex.change.diff > 0 ? ` (${changeText(ex.change)})` : ""}`),
+        `• ${ex.completedSets} × ${ex.name}: ${bestSetText(ex)}${ex.pr ? " 🏆" : ""}${ex.change && shownDiff(ex.change) > 0 ? ` (${changeText(ex.change)})` : ""}`),
     ];
     if (hasPRs) lines.push("", `🏆 ${summary.prCount} new PR${summary.prCount === 1 ? "" : "s"}`);
     try {
@@ -166,7 +170,7 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
                     <Text style={[styles.best, { color: colors.textSecondary }]} numberOfLines={1}>{bestSetText(ex)}</Text>
                     {ex.change && (
                       <Text
-                        style={[styles.change, { color: changeColor(ex.change.diff) }]}
+                        style={[styles.change, { color: changeColor(shownDiff(ex.change)) }]}
                         numberOfLines={1}
                         accessibilityLabel={`${changeText(ex.change)} compared with last time`}
                       >

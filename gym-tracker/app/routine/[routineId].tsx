@@ -215,8 +215,12 @@ export default function RoutineScreen() {
 
   // Move an exercise up or down the routine (the logger has the same).
   // Renumbers 1..n so orders stay distinct even if two collided before.
-  const moveExercise = async (routineExerciseId: number, dir: -1 | 1) => {
-    const prev = exercises;
+  // Moves run one at a time from the latest order, so two quick moves on a
+  // slow network can't land out of order and leave duplicate positions.
+  const exercisesRef = useRef(exercises);
+  exercisesRef.current = exercises;
+  const moveExercise = (routineExerciseId: number, dir: -1 | 1) => setJobs("order", async () => {
+    const prev = exercisesRef.current;
     const idx = prev.findIndex((e) => e.routine_exercise_id === routineExerciseId);
     const other = prev[idx + dir];
     if (idx < 0 || !other) return;
@@ -226,16 +230,21 @@ export default function RoutineScreen() {
     const next = swapped.map((e, i) => ({ ...e, exercise_order: i + 1 }));
     const changed = next.filter((e) =>
       prev.find((o) => o.routine_exercise_id === e.routine_exercise_id)?.exercise_order !== e.exercise_order);
+    exercisesRef.current = next;
     setExercises(next);
     const results = await Promise.all(changed.map((e) =>
       db.updateRoutineExercise(e.routine_exercise_id, { exercise_order: e.exercise_order })));
     const err = results.find((r: any) => r?.error)?.error;
     if (err) {
-      // Offline (routine edits need a connection) or refused: put it back.
-      setExercises(prev);
+      // Offline (routine edits need a connection) or refused, maybe after
+      // part of it saved: show what's really stored.
       setError(err.message);
+      loadData();
+      return;
     }
-  };
+    // Re-read so the offline copy used to start this routine has the new order.
+    db.getRoutineExercises(routineId).catch(() => {});
+  });
 
   const handleReplaceExercise = useGuardedPress(async (exercise: any) => {
     const target = replaceTargetRef.current;

@@ -161,3 +161,11 @@ describe("vs last time", () => {
     expect(buildWorkoutSummary([benchA], sets, [], 60).volumeChangePct).toBeNull();
   });
 });
+
+it("an empty duplicate entry doesn't block the comparison", () => {
+  const b1 = { session_exercise_id: 20, exercise_id: "bench", exercise_name: "Bench", exercise_type: "strength" };
+  const b2 = { ...b1, session_exercise_id: 21 };
+  const s = buildWorkoutSummary([b1, b2], { 20: [{ weight: 100, reps: 10, completed: true }], 21: [{ weight: 100, reps: 10, completed: false }] }, [], 60,
+    { bench: [{ weight: 100, reps: 8 }] });
+  expect(s.exercises[0].change).toEqual({ kind: "volume", diff: 200, pct: 25 });
+});
