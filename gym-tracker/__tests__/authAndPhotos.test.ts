@@ -11,7 +11,7 @@ jest.mock("../backend/supabaseClient", () => ({
   },
 }));
 jest.mock("../backend/networkStatus", () => ({ networkStatus: { isConnected: true } }));
-jest.mock("../backend/localDb", () => ({ localDb: {} }));
+jest.mock("../backend/localDb", () => ({ localDb: {}, isLocalId: () => false, loadLocalDb: async () => {} }));
 jest.mock("@react-native-async-storage/async-storage", () => ({
   getItem: jest.fn(),
   setItem: jest.fn(),

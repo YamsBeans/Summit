@@ -208,7 +208,7 @@ export const PROGRAMS: Program[] = [
   {
     id: 'beginner_home',
     name: 'Beginner Full-Body (Equipment-Free)',
-    description: 'No gym, no problem. Build strength and endurance using only your bodyweight. Great for beginners training at home.',
+    description: 'No gym, no problem. Build strength and endurance using only your bodyweight and a pull-up bar. Great for beginners training at home.',
     level: 'beginner',
     goal: 'weight_loss',
     equipment: 'home',
@@ -219,10 +219,10 @@ export const PROGRAMS: Program[] = [
         name: 'Bodyweight A',
         exercises: [
           { exercise_id: 'Bodyweight_Squat', exercise_name: 'Bodyweight Squat', sets: 3, reps: 15 },
-          { exercise_id: 'Incline_Push-Up', exercise_name: 'Push-Up', sets: 3, reps: 10 },
+          { exercise_id: 'Pushups', exercise_name: 'Push-Up', sets: 3, reps: 10 },
           { exercise_id: 'Chin-Up', exercise_name: 'Chin-Up', sets: 3, reps: 6 },
-          { exercise_id: 'Single_Leg_Glute_Bridge', exercise_name: 'Glute Bridge', sets: 3, reps: 15 },
-          { exercise_id: 'Plank', exercise_name: 'Plank', sets: 3, reps: 30 },
+          { exercise_id: 'Butt_Lift_Bridge', exercise_name: 'Glute Bridge', sets: 3, reps: 15 },
+          { exercise_id: 'Dead_Bug', exercise_name: 'Dead Bug', sets: 3, reps: 10 },
         ],
       },
       {
@@ -232,17 +232,17 @@ export const PROGRAMS: Program[] = [
           { exercise_id: 'Decline_Push-Up', exercise_name: 'Decline Push-Up', sets: 3, reps: 10 },
           { exercise_id: 'Wide-Grip_Rear_Pull-Up', exercise_name: 'Wide-Grip Pull-Up', sets: 3, reps: 5 },
           { exercise_id: 'Bench_Dips', exercise_name: 'Tricep Dip', sets: 3, reps: 12 },
-          { exercise_id: 'Barbell_Glute_Bridge', exercise_name: 'Glute Bridge', sets: 3, reps: 15 },
+          { exercise_id: 'Butt_Lift_Bridge', exercise_name: 'Glute Bridge', sets: 3, reps: 15 },
         ],
       },
       {
         name: 'Bodyweight C',
         exercises: [
           { exercise_id: 'Bodyweight_Squat', exercise_name: 'Bodyweight Squat', sets: 4, reps: 20 },
-          { exercise_id: 'Incline_Push-Up', exercise_name: 'Push-Up', sets: 4, reps: 12 },
+          { exercise_id: 'Pushups', exercise_name: 'Push-Up', sets: 4, reps: 12 },
           { exercise_id: 'Chin-Up', exercise_name: 'Chin-Up', sets: 3, reps: 8 },
           { exercise_id: 'Bodyweight_Walking_Lunge', exercise_name: 'Walking Lunge', sets: 3, reps: 15 },
-          { exercise_id: 'Plank', exercise_name: 'Plank', sets: 3, reps: 45 },
+          { exercise_id: 'Hanging_Leg_Raise', exercise_name: 'Hanging Leg Raise', sets: 3, reps: 10 },
         ],
       },
     ],

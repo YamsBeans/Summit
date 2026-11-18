@@ -2,6 +2,7 @@ import { memo } from "react";
 import { Text, View } from "react-native";
 import { useTheme } from "@/theme/ThemeContext";
 import WorkoutHistoryCard from "./WorkoutHistoryCard";
+import type { ExerciseLine } from "@/utils/historyLines";
 
 export type SessionWithMeta = {
   session_id: number;
@@ -15,9 +16,13 @@ export type SessionWithMeta = {
   totalVolume: number;
   totalReps: number;
   exerciseNames: string[];
+  /** Set count and best set per exercise, for the card. */
+  exerciseLines?: ExerciseLine[];
   totalCardioDistanceMeters?: number;
   totalCardioDurationSeconds?: number;
   hasCardio?: boolean;
+  /** Exercises that beat their best weight from every earlier workout. */
+  prCount?: number;
 };
 
 type Props = {
@@ -65,11 +70,13 @@ const WorkoutHistoryList = memo(function WorkoutHistoryList({ sessions, onDelete
           notes={session.notes}
           photo_url={session.photo_url}
           exerciseNames={session.exerciseNames}
+          exerciseLines={session.exerciseLines}
           onDelete={onDelete}
           onEditWorkout={onEditWorkout}
           totalCardioDistanceMeters={session.totalCardioDistanceMeters ?? 0}
           totalCardioDurationSeconds={session.totalCardioDurationSeconds ?? 0}
           distanceUnit={distanceUnit}
+          prCount={session.prCount ?? 0}
         />
       ))}
     </View>

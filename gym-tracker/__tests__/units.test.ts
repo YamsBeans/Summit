@@ -147,3 +147,29 @@ describe("useUnits", () => {
     expect(result.current.toDisplay(100)).toBe(100);
   });
 });
+
+describe("kg round trip", () => {
+  const { lbsToUnit, unitToLbs } = require("@/utils/units");
+  it("keeps 0.05 kg steps exact", () => {
+    for (const kg of [61.25, 102.5, 20, 100, 142.75, 0.5]) {
+      expect(lbsToUnit(unitToLbs(kg, "kg"), "kg")).toBe(kg);
+    }
+  });
+  it("still shows lbs-logged weights to one decimal in kg", () => {
+    expect(lbsToUnit(100, "kg")).toBe(45.4);
+    expect(lbsToUnit(45, "kg")).toBe(20.4);
+  });
+});
+
+describe("formatCompact", () => {
+  const { formatCompact } = jest.requireActual("../utils/units");
+  it("keeps small numbers exact and shortens big ones", () => {
+    expect(formatCompact(98765)).toBe((98765).toLocaleString());
+    expect(formatCompact(456789)).toBe("457K");
+    expect(formatCompact(1_234_567)).toBe("1.23M");
+    expect(formatCompact(2_000_000)).toBe("2M");
+    expect(formatCompact(999_700)).toBe("1M");
+    expect(formatCompact(null)).toBe("0");
+    expect(formatCompact(NaN)).toBe("0");
+  });
+});

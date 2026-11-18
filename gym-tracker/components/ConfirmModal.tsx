@@ -32,7 +32,7 @@ export default function ConfirmModal({
   const iconColor = confirmStyle === "danger" ? colors.danger : colors.primary;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onCancel}>
       <Pressable style={styles.backdrop} onPress={onCancel}>
         <Pressable
           style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
