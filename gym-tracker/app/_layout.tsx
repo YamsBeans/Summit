@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { db, initLocalStore } from "@/backend/db";
@@ -136,10 +137,13 @@ function RootNav() {
 
 export default function RootLayout() {
   return (
-    <ThemeProvider>
-      <ActiveWorkoutProvider>
-        <RootNav />
-      </ActiveWorkoutProvider>
-    </ThemeProvider>
+    // Needed for swipe gestures (swipe a set row to delete it).
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <ActiveWorkoutProvider>
+          <RootNav />
+        </ActiveWorkoutProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }

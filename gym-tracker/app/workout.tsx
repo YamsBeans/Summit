@@ -10,6 +10,7 @@ import WorkoutSummaryModal from "@/components/WorkoutSummaryModal";
 import PlateCalculatorModal from "@/components/PlateCalculatorModal";
 import { ActionSheet, SheetOption } from "@/components/ActionSheet";
 import { RpeOption } from "@/components/RpeOption";
+import { SwipeToDelete } from "@/components/SwipeToDelete";
 import { useExerciseRest, resolveRest, formatRest, REST_CHOICES } from "@/utils/exerciseRest";
 import { buildWorkoutSummary, workoutNumberFrom, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
@@ -1032,8 +1033,8 @@ export default function WorkoutScreen() {
               {/* Set rows — cardio or strength */}
               {sets.map((set, idx) => (
                 ex.exercise_type === 'cardio' ? (
+                  <SwipeToDelete key={set.session_set_id} label={`Delete set ${idx + 1}`} onDelete={() => deleteSet(set.session_set_id, ex.session_exercise_id)}>
                   <CardioSetRow
-                    key={set.session_set_id}
                     set={set}
                     sessionExerciseId={ex.session_exercise_id}
                     onUpdate={updateSet}
@@ -1044,9 +1045,10 @@ export default function WorkoutScreen() {
                     distanceUnit={distanceUnit}
                     workingNumber={workingSetNumber(sets, idx) ?? undefined}
                   />
+                  </SwipeToDelete>
                 ) : (
+                  <SwipeToDelete key={set.session_set_id} label={`Delete set ${idx + 1}`} onDelete={() => deleteSet(set.session_set_id, ex.session_exercise_id)}>
                   <StrengthSetRow
-                    key={set.session_set_id}
                     set={set}
                     // Working sets count 1, 2, 3 after any warm-ups (W), like Strong.
                     workingNumber={workingSetNumber(sets, idx) ?? undefined}
@@ -1058,6 +1060,7 @@ export default function WorkoutScreen() {
                     onDraft={setDraft}
                     isPR={prSetIds.has(set.session_set_id)}
                   />
+                  </SwipeToDelete>
                 )
               ))}
 
