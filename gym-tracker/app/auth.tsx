@@ -38,8 +38,12 @@ export default function Auth() {
     setSuccess(null);
 
     if (mode === "signup") {
-      const { error } = await db.signUp(email.trim(), password, username.trim());
+      const { data, error } = await db.signUp(email.trim(), password, username.trim());
       if (error) setError(error.message);
+      // With email confirmation on, Supabase returns no session: signing in
+      // now would fail with "Email not confirmed". (With a session, the auth
+      // listener moves on to the app by itself.)
+      else if (!(data as any)?.session) setSuccess("Account created! Check your email to confirm it, then sign in.");
       else setSuccess("Account created! You can now sign in.");
     } else if (mode === "signin") {
       const { error } = await db.signIn(email.trim(), password);

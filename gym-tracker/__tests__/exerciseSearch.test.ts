@@ -105,3 +105,16 @@ describe("popularExercises", () => {
     expect(popularExercises(pool, ["Barbell_Squat"], 1).map((e) => e.id)).toEqual(["Barbell_Bench_Press_-_Medium_Grip"]);
   });
 });
+
+describe("gym shorthand", () => {
+  const all = require("../assets/data/exercises.json");
+  it("ohp finds the barbell shoulder press first", () => {
+    const names = searchExercises(all, "ohp").map((e: any) => e.name);
+    expect(names[0]).toBe("Barbell Shoulder Press");
+  });
+  it("bw finds bodyweight moves like Pushups", () => {
+    const ids = searchExercises(all, "bw").map((e: any) => e.id);
+    expect(ids).toContain("Pushups");
+    expect(ids).toContain("Pullups");
+  });
+});

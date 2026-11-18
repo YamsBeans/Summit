@@ -18,6 +18,8 @@ type Props = {
 
 // Bumper-plate colours, heaviest first, so a 45/25 kg plate looks like one.
 const PLATE_COLORS = ["#dc2626", "#2563eb", "#eab308", "#16a34a", "#e5e7eb", "#374151", "#9ca3af"];
+// Past this the bar is fiction (the deadlift record is ~1100 lbs).
+const MAX_TARGET = { lbs: 1500, kg: 700 } as const;
 
 export default function PlateCalculatorModal({ visible, initialWeight, onClose }: Props) {
   const { colors } = useTheme();
@@ -41,7 +43,12 @@ export default function PlateCalculatorModal({ visible, initialWeight, onClose }
 
   const plates = PLATES[unit];
   const target = parseDecimalInput(text);
-  const result = useMemo(() => (target != null ? calculatePlates(target, bar, plates) : null), [target, bar, plates]);
+  // A typo like 100000 would mean thousands of plates (and a frozen screen).
+  const tooHeavy = target != null && target > MAX_TARGET[unit];
+  const result = useMemo(
+    () => (target != null && !tooHeavy ? calculatePlates(target, bar, plates) : null),
+    [target, tooHeavy, bar, plates],
+  );
   const groups = result ? groupPlates(result.perSide) : [];
   const maxPlate = plates[0];
 
@@ -110,6 +117,10 @@ export default function PlateCalculatorModal({ visible, initialWeight, onClose }
           <View style={styles.summary}>
             {target == null ? (
               <Text style={[styles.summaryText, { color: colors.textSecondary }]}>Enter a weight to see the plates.</Text>
+            ) : tooHeavy ? (
+              <Text style={[styles.summaryText, { color: colors.textSecondary }]}>
+                {`That's more than a bar holds (max ${MAX_TARGET[unit]} ${unit}).`}
+              </Text>
             ) : groups.length === 0 ? (
               <Text style={[styles.summaryText, { color: colors.textSecondary }]}>
                 {target <= bar ? `That's just the bar (${bar} ${unit}).` : "No plates needed."}

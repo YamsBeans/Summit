@@ -4,7 +4,7 @@ import {
   StyleSheet, Text, View,
 } from "react-native";
 import { showAlert } from "@/utils/alert";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
@@ -42,7 +42,12 @@ export default function ExploreScreen() {
   const [levelFilter, setLevelFilter] = useState<LevelFilter>('all');
   const [goalFilter, setGoalFilter] = useState<GoalFilter>('all');
   const [equipFilter, setEquipFilter] = useState<EquipFilter>('all');
-  const [selectedProgram, setSelectedProgram] = useState<Program | null>(null);
+  // The detail view is its own history entry (/explore?program=<id>), so
+  // Android back, iOS swipe-back and the browser's Back return to the list
+  // instead of leaving Explore.
+  const { program: programParam } = useLocalSearchParams<{ program?: string }>();
+  const selectedProgram = programParam ? PROGRAMS.find((p) => p.id === programParam) ?? null : null;
+  const openProgram = (program: Program) => router.push({ pathname: "/explore", params: { program: program.id } });
   const [importing, setImporting] = useState(false);
 
   const filtered = PROGRAMS.filter((p) => {
@@ -112,7 +117,8 @@ export default function ExploreScreen() {
       showAlert(
         "Program Added!",
         `${program.routines.length} routine${program.routines.length > 1 ? 's' : ''} from "${program.name}" have been added to My Routines.`,
-        [{ text: "Got it", onPress: () => router.back() }]
+        // Back past the program list too, to My Routines.
+        [{ text: "Got it", onPress: () => router.dismissTo("/(tabs)") }]
       );
     } catch (e: any) {
       await fail(e?.message ?? "Something went wrong.");
@@ -124,7 +130,7 @@ export default function ExploreScreen() {
       <ProgramDetail
         program={selectedProgram}
         importing={importing}
-        onBack={() => setSelectedProgram(null)}
+        onBack={() => (router.canGoBack() ? router.back() : router.replace("/explore"))}
         onImport={() => importProgram(selectedProgram)}
         colors={colors}
       />
@@ -194,7 +200,7 @@ export default function ExploreScreen() {
               <Pressable
                 key={program.id}
                 style={[styles.card, { backgroundColor: colors.surface }]}
-                onPress={() => setSelectedProgram(program)}
+                onPress={() => openProgram(program)}
               >
                 {/* Colored label box */}
                 <View style={[styles.labelBox, { backgroundColor: program.labelColor + '22' }]}>

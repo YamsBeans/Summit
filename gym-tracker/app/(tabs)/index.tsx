@@ -118,7 +118,15 @@ export default function WorkoutsScreen() {
   const loadRoutines = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoadingRoutines(true);
     setError(null);
-    const { data, error: err } = await db.getRoutines();
+    let result: Awaited<ReturnType<typeof db.getRoutines>>;
+    try {
+      result = await db.getRoutines();
+    } catch (e: any) {
+      setError(e?.message ?? "Couldn't load your routines.");
+      setLoadingRoutines(false);
+      return;
+    }
+    const { data, error: err } = result;
     if (err) setError(err.message);
     else {
       const sorted = sortRoutines(data ?? []);
@@ -173,13 +181,20 @@ export default function WorkoutsScreen() {
   const handleStartWorkout = useGuardedPress(async (routineId: number) => {
     // Only one workout at a time — starting another would strand the first.
     if (activeWorkout) { setShowInProgress(true); return; }
+    setError(null);
     setStartingId(routineId);
-    const { data: { user } } = await db.getUser();
-    if (!user) { setError("Not authenticated"); setStartingId(null); return; }
-    const { data: session, error: err } = await db.startWorkoutFromRoutine(routineId, user.id);
-    if (err) { setError(err.message); setStartingId(null); return; }
-    setStartingId(null);
-    router.push({ pathname: "/workout", params: { sessionId: String(session.session_id) } });
+    // try/finally: a thrown read must not leave every Start button disabled.
+    try {
+      const { data: { user } } = await db.getUser();
+      if (!user) { setError("Not authenticated"); return; }
+      const { data: session, error: err } = await db.startWorkoutFromRoutine(routineId, user.id);
+      if (err || !session) { setError(err?.message ?? "Could not start workout"); return; }
+      router.push({ pathname: "/workout", params: { sessionId: String(session.session_id) } });
+    } catch (e: any) {
+      setError(e?.message ?? "Could not start workout");
+    } finally {
+      setStartingId(null);
+    }
   }, 1000);
 
   // ── Options menu ──

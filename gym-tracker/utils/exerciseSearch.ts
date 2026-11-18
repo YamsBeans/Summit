@@ -56,9 +56,11 @@ const ALIASES: Record<string, string> = {
   dbs: "dumbbell",
   bb: "barbell",
   kb: "kettlebell",
-  ohp: "overhead press",
+  // The list has no "Overhead Press"; its OHPs are Barbell/Dumbbell Shoulder Press.
+  ohp: "shoulder press",
   rdl: "romanian deadlift",
-  bw: "bodyweight",
+  // Bodyweight moves (Pushups, Pullups...) have equipment "body only".
+  bw: "body only",
   abs: "abdominals",
   lat: "lats",
   tri: "triceps",

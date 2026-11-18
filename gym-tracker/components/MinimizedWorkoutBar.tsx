@@ -91,6 +91,8 @@ export default function MinimizedWorkoutBar() {
           },
         ]}
         onPress={handleResume}
+        accessibilityRole="button"
+        accessibilityLabel={`Resume ${activeWorkout.sessionName}, ${formatTime(elapsed)} elapsed`}
       >
         {/* Live pulse dot */}
         <View style={styles.dotContainer}>
@@ -123,6 +125,8 @@ export default function MinimizedWorkoutBar() {
             onPress={(e) => { e.stopPropagation(); setShowDiscard(true); }}
             hitSlop={10}
             style={styles.trashBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Discard workout"
           >
             <Ionicons name="trash-outline" size={18} color={colors.textTertiary} />
           </Pressable>

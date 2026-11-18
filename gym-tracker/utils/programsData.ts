@@ -222,7 +222,7 @@ export const PROGRAMS: Program[] = [
           { exercise_id: 'Pushups', exercise_name: 'Push-Up', sets: 3, reps: 10 },
           { exercise_id: 'Chin-Up', exercise_name: 'Chin-Up', sets: 3, reps: 6 },
           { exercise_id: 'Butt_Lift_Bridge', exercise_name: 'Glute Bridge', sets: 3, reps: 15 },
-          { exercise_id: 'Plank', exercise_name: 'Plank', sets: 3, reps: 30 },
+          { exercise_id: 'Dead_Bug', exercise_name: 'Dead Bug', sets: 3, reps: 10 },
         ],
       },
       {
@@ -242,7 +242,7 @@ export const PROGRAMS: Program[] = [
           { exercise_id: 'Pushups', exercise_name: 'Push-Up', sets: 4, reps: 12 },
           { exercise_id: 'Chin-Up', exercise_name: 'Chin-Up', sets: 3, reps: 8 },
           { exercise_id: 'Bodyweight_Walking_Lunge', exercise_name: 'Walking Lunge', sets: 3, reps: 15 },
-          { exercise_id: 'Plank', exercise_name: 'Plank', sets: 3, reps: 45 },
+          { exercise_id: 'Hanging_Leg_Raise', exercise_name: 'Hanging Leg Raise', sets: 3, reps: 10 },
         ],
       },
     ],
