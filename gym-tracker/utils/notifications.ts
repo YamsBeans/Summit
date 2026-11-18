@@ -5,13 +5,21 @@ import { AppState, Platform } from "react-native";
 /** Rest notifications are phone-only: expo-notifications can't schedule on web. */
 export const NOTIFICATIONS_SUPPORTED = Platform.OS !== "web";
 
-// The rest notification is for when the app is in the background. With the
-// app open the in-app banner and haptics already signal the end of rest, so
+// True while the workout screen (with its rest banner and haptic) is showing.
+let restUiVisible = false;
+/** The workout screen reports focus here, so the system alert isn't doubled up. */
+export function setRestUiVisible(visible: boolean) {
+  restUiVisible = visible;
+}
+
+// The rest notification is for when the workout screen isn't in view. With
+// it open, the in-app banner and haptic already signal the end of rest, so
 // don't add a system banner and sound on top; just keep it in the list.
+// (Minimized to Home or Records, the system banner is the only cue.)
 if (NOTIFICATIONS_SUPPORTED) {
   Notifications.setNotificationHandler({
     handleNotification: async () => {
-      const foreground = AppState.currentState === "active";
+      const foreground = AppState.currentState === "active" && restUiVisible;
       return {
         shouldShowAlert: !foreground,
         shouldPlaySound: !foreground,

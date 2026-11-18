@@ -18,8 +18,8 @@ const SWIPE_SUPPORTED =
 /**
  * Swipe a row left to reveal a red Delete button, like Strong's and Hevy's
  * set rows. Deleting takes the tap too, so a stray swipe can't lose a set.
- * The row keeps the page background so its tinted states (done, warm-up)
- * look the same while it slides.
+ * The row gets the card's surface colour so its tinted states (done,
+ * warm-up) look the same while it slides.
  */
 export function SwipeToDelete({ children, onDelete, label = "Delete", enabled = true }: {
   children: ReactNode;
@@ -47,7 +47,7 @@ export function SwipeToDelete({ children, onDelete, label = "Delete", enabled = 
       rightThreshold={ACTION_WIDTH / 2}
       overshootRight={false}
       dragOffsetFromRightEdge={12}
-      childrenContainerStyle={{ backgroundColor: colors.background }}
+      childrenContainerStyle={{ backgroundColor: colors.surface }}
       onSwipeableWillClose={() => { fired.current = false; }}
       renderRightActions={(_progress, translation) => (
         <DeleteAction translation={translation} label={label} color={colors.danger} onPress={fire} />

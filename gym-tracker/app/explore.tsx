@@ -4,7 +4,7 @@ import {
   StyleSheet, Text, View,
 } from "react-native";
 import { showAlert } from "@/utils/alert";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
 import { useHeaderTop } from "@/utils/useHeaderTop";
@@ -37,6 +37,7 @@ const EQUIP_LABELS: Record<EquipFilter, string> = {
 export default function ExploreScreen() {
   const headerTop = useHeaderTop();
   const router = useRouter();
+  const navigation = useNavigation();
   const { colors } = useTheme();
 
   const [levelFilter, setLevelFilter] = useState<LevelFilter>('all');
@@ -118,7 +119,16 @@ export default function ExploreScreen() {
         "Program Added!",
         `${program.routines.length} routine${program.routines.length > 1 ? 's' : ''} from "${program.name}" have been added to My Routines.`,
         // Back past the program list too, to My Routines.
-        [{ text: "Got it", onPress: () => router.dismissTo("/(tabs)") }]
+        [{
+          text: "Got it",
+          // After a web refresh/deep link there's no Home underneath to pop
+          // back to; dismissTo would push it on top of Explore instead.
+          onPress: () => {
+            const homeBelow = navigation.getState()?.routes.some((r) => r.name === "(tabs)");
+            if (homeBelow) router.dismissTo("/(tabs)");
+            else router.replace("/(tabs)");
+          },
+        }]
       );
     } catch (e: any) {
       await fail(e?.message ?? "Something went wrong.");

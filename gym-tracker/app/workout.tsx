@@ -13,7 +13,7 @@ import { RpeOption } from "@/components/RpeOption";
 import { SwipeToDelete } from "@/components/SwipeToDelete";
 import { useExerciseRest, resolveRest, formatRest, REST_CHOICES } from "@/utils/exerciseRest";
 import { buildWorkoutSummary, workoutNumberFrom, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useActiveWorkout } from "@/utils/ActiveWorkoutContext";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { db } from "@/backend/db";
@@ -26,7 +26,7 @@ import RestTimerBanner from "@/components/RestTimerBanner";
 import { useRestTimer } from "@/utils/useRestTimer";
 import { detectPRs, detectCardioPRs, mergeStrengthRecord, groupSetsByExercise, liveWeightPRSetIds } from "@/utils/prDetection";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { beginRestNotification, scheduleRestDoneNotification, cancelRestDoneNotification } from "@/utils/notifications";
+import { beginRestNotification, scheduleRestDoneNotification, cancelRestDoneNotification, setRestUiVisible } from "@/utils/notifications";
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import { createSerialQueue, nextSetNumber, previousSetFor, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
@@ -40,6 +40,12 @@ import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
 
 export default function WorkoutScreen() {
+  // While this screen shows, the rest banner + haptic signal rest's end, so
+  // the system notification stays quiet (utils/notifications.ts).
+  useFocusEffect(useCallback(() => {
+    setRestUiVisible(true);
+    return () => setRestUiVisible(false);
+  }, []));
   const headerTop = useHeaderTop();
   const router = useRouter();
   const navigation = useNavigation();
@@ -1033,7 +1039,7 @@ export default function WorkoutScreen() {
               {/* Set rows — cardio or strength */}
               {sets.map((set, idx) => (
                 ex.exercise_type === 'cardio' ? (
-                  <SwipeToDelete key={set.session_set_id} label={`Delete set ${idx + 1}`} onDelete={() => deleteSet(set.session_set_id, ex.session_exercise_id)}>
+                  <SwipeToDelete key={set.session_set_id} label={set.is_warmup ? "Delete warm-up set" : `Delete set ${workingSetNumber(sets, idx)}`} onDelete={() => deleteSet(set.session_set_id, ex.session_exercise_id)}>
                   <CardioSetRow
                     set={set}
                     sessionExerciseId={ex.session_exercise_id}
@@ -1047,7 +1053,7 @@ export default function WorkoutScreen() {
                   />
                   </SwipeToDelete>
                 ) : (
-                  <SwipeToDelete key={set.session_set_id} label={`Delete set ${idx + 1}`} onDelete={() => deleteSet(set.session_set_id, ex.session_exercise_id)}>
+                  <SwipeToDelete key={set.session_set_id} label={set.is_warmup ? "Delete warm-up set" : `Delete set ${workingSetNumber(sets, idx)}`} onDelete={() => deleteSet(set.session_set_id, ex.session_exercise_id)}>
                   <StrengthSetRow
                     set={set}
                     // Working sets count 1, 2, 3 after any warm-ups (W), like Strong.

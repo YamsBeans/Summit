@@ -37,6 +37,11 @@ export function consumeIncomingUrl(url: string) {
   consumed.add(url);
 }
 
+/** True when the newest link has already been handled (opened a second time). */
+export function latestIncomingUrlConsumed(): boolean {
+  return latest !== null && consumed.has(latest);
+}
+
 /** The newest incoming URL that hasn't been consumed, updating as links arrive. */
 export function useIncomingUrl(): string | null {
   startIncomingUrlTracking();
