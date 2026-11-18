@@ -213,6 +213,30 @@ export default function RoutineScreen() {
     handleRemoveExercise(selectedExerciseForOptions.routine_exercise_id);
   }, [selectedExerciseForOptions, closeExerciseOptions, handleRemoveExercise]);
 
+  // Move an exercise up or down the routine (the logger has the same).
+  // Renumbers 1..n so orders stay distinct even if two collided before.
+  const moveExercise = async (routineExerciseId: number, dir: -1 | 1) => {
+    const prev = exercises;
+    const idx = prev.findIndex((e) => e.routine_exercise_id === routineExerciseId);
+    const other = prev[idx + dir];
+    if (idx < 0 || !other) return;
+    const swapped = [...prev];
+    swapped[idx] = other;
+    swapped[idx + dir] = prev[idx];
+    const next = swapped.map((e, i) => ({ ...e, exercise_order: i + 1 }));
+    const changed = next.filter((e) =>
+      prev.find((o) => o.routine_exercise_id === e.routine_exercise_id)?.exercise_order !== e.exercise_order);
+    setExercises(next);
+    const results = await Promise.all(changed.map((e) =>
+      db.updateRoutineExercise(e.routine_exercise_id, { exercise_order: e.exercise_order })));
+    const err = results.find((r: any) => r?.error)?.error;
+    if (err) {
+      // Offline (routine edits need a connection) or refused: put it back.
+      setExercises(prev);
+      setError(err.message);
+    }
+  };
+
   const handleReplaceExercise = useGuardedPress(async (exercise: any) => {
     const target = replaceTargetRef.current;
     if (!target) return;
@@ -347,14 +371,14 @@ export default function RoutineScreen() {
         </View>
       ) : (
         <View style={[styles.header, { paddingTop: headerTop, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-          <Pressable onPress={() => router.back()} hitSlop={8} style={styles.headerBack}>
+          <Pressable onPress={() => router.back()} hitSlop={8} style={styles.headerBack} accessibilityRole="button" accessibilityLabel="Close">
             <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
           </Pressable>
           <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
             {displayName}
           </Text>
           <View style={styles.headerRight}>
-            <Pressable onPress={() => setViewMenuOpen(true)} hitSlop={8} style={styles.menuBtn}>
+            <Pressable onPress={() => setViewMenuOpen(true)} hitSlop={8} style={styles.menuBtn} accessibilityRole="button" accessibilityLabel="Routine options">
               <Ionicons name="ellipsis-vertical" size={20} color={colors.textSecondary} />
             </Pressable>
           </View>
@@ -584,11 +608,42 @@ export default function RoutineScreen() {
       {/* ── Exercise options bottom sheet (edit only) ── */}
       <Modal visible={exerciseOptionsVisible} transparent animationType="slide" onRequestClose={closeExerciseOptions}>
         <Pressable style={modalStyles.overlay} onPress={closeExerciseOptions}>
-          <View style={[modalStyles.sheet, { backgroundColor: colors.surface }]}>
+          {/* A Pressable so taps between the buttons don't reach the backdrop. */}
+          <Pressable style={[modalStyles.sheet, { backgroundColor: colors.surface }]} onPress={() => {}}>
             <View style={[modalStyles.handle, { backgroundColor: colors.border }]} />
             <Text style={[modalStyles.sheetTitle, { color: colors.textSecondary }]} numberOfLines={1}>
               {selectedExerciseForOptions?.exercise_name}
             </Text>
+            {(() => {
+              const idx = exercises.findIndex((e) => e.routine_exercise_id === selectedExerciseForOptions?.routine_exercise_id);
+              const btn = (dir: -1 | 1, icon: "arrow-up" | "arrow-down", label: string, disabled: boolean) => (
+                <Pressable
+                  disabled={disabled}
+                  onPress={() => {
+                    const ex = selectedExerciseForOptions;
+                    closeExerciseOptions();
+                    if (ex) moveExercise(ex.routine_exercise_id, dir);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={label}
+                  accessibilityState={{ disabled }}
+                  hitSlop={6}
+                  style={{ padding: 8, borderRadius: 8, backgroundColor: colors.surfaceSecondary, opacity: disabled ? 0.35 : 1 }}
+                >
+                  <Ionicons name={icon} size={16} color={colors.text} />
+                </Pressable>
+              );
+              return (
+                <View style={[modalStyles.option, { borderBottomColor: colors.border, gap: 10 }]}>
+                  <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                    <Ionicons name="reorder-three-outline" size={16} color={colors.primary} />
+                  </View>
+                  <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Reorder</Text>
+                  {btn(-1, "arrow-up", "Move up", idx <= 0)}
+                  {btn(1, "arrow-down", "Move down", idx < 0 || idx >= exercises.length - 1)}
+                </View>
+              );
+            })()}
             <Pressable
               style={[modalStyles.option, { borderBottomColor: colors.border }]}
               onPress={() => {
@@ -617,7 +672,7 @@ export default function RoutineScreen() {
             >
               <Text style={[modalStyles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
             </Pressable>
-          </View>
+          </Pressable>
         </Pressable>
       </Modal>
 

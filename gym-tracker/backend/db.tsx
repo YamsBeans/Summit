@@ -975,7 +975,7 @@ export const db = {
     return localDb.deleteRoutineExercise(routineExerciseId);
   },
 
-  updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string; exercise_type?: 'strength' | 'cardio' | 'stretching' }) => {
+  updateRoutineExercise: async (routineExerciseId: number, updates: { exercise_id?: string; exercise_name?: string; exercise_type?: 'strength' | 'cardio' | 'stretching'; exercise_order?: number }) => {
     const offline = offlineAccountWrite();
     if (offline) return offline;
     if (shouldUseSupabase()) {
