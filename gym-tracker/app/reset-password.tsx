@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from "react-native";
 import { useRouter } from "expo-router";
-import * as Linking from "expo-linking";
+import { consumeIncomingUrl, useIncomingUrl } from "@/utils/incomingUrl";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
 
@@ -11,7 +11,7 @@ import { useTheme } from "@/theme/ThemeContext";
 export default function ResetPassword() {
   const { colors } = useTheme();
   const router = useRouter();
-  const nativeUrl = Linking.useURL();
+  const nativeUrl = useIncomingUrl();
   const handledUrl = useRef<string | null>(null);
 
   const [status, setStatus] = useState<"verifying" | "ready" | "invalid" | "done">("verifying");
@@ -24,6 +24,7 @@ export default function ResetPassword() {
     const url = Platform.OS === "web" && typeof window !== "undefined" ? window.location.href : nativeUrl;
     if (!url || handledUrl.current === url) return;
     handledUrl.current = url;
+    consumeIncomingUrl(url);
 
     db.recoverSessionFromUrl(url).then(({ error: linkError }) => {
       if (linkError) {
@@ -38,6 +39,17 @@ export default function ResetPassword() {
       }
     });
   }, [nativeUrl]);
+
+  // Never leave the spinner up with no way out (no link arrived, or the
+  // request hangs): fall back to the "invalid" state with Back to Sign In.
+  useEffect(() => {
+    if (status !== "verifying") return;
+    const t = setTimeout(() => {
+      setError("Couldn't open the reset link. Request a new one, or try the link again.");
+      setStatus("invalid");
+    }, 15000);
+    return () => clearTimeout(t);
+  }, [status]);
 
   const handleSave = async () => {
     setError(null);

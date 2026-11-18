@@ -9,6 +9,10 @@ import { ActiveWorkoutProvider, useActiveWorkout } from "@/utils/ActiveWorkoutCo
 import MinimizedWorkoutBar from "@/components/MinimizedWorkoutBar";
 import { clearActiveRestTimer } from "@/utils/useRestTimer";
 import { cancelRestDoneNotification } from "@/utils/notifications";
+import { startIncomingUrlTracking } from "@/utils/incomingUrl";
+
+// Listen for deep links before any screen mounts (see utils/incomingUrl.ts).
+startIncomingUrlTracking();
 
 function RootNav() {
   const [session, setSession] = useState<any>(null);
