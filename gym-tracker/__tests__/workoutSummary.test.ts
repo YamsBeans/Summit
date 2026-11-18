@@ -118,3 +118,46 @@ describe("same exercise twice", () => {
     expect(s.exercises.map((e) => e.pr)).toEqual(["Weight", null]);
   });
 });
+
+describe("vs last time", () => {
+  const benchA = { session_exercise_id: 10, exercise_id: "bench", exercise_name: "Bench Press", exercise_type: "strength" };
+  const pull = { session_exercise_id: 11, exercise_id: "pullup", exercise_name: "Pull Up", exercise_type: "strength" };
+  const fresh = { session_exercise_id: 12, exercise_id: "new", exercise_name: "New Lift", exercise_type: "strength" };
+  const sets = {
+    10: [
+      { weight: 95, reps: 10, completed: true, is_warmup: true }, // warm-ups don't count
+      { weight: 185, reps: 5, completed: true },
+      { weight: 185, reps: 5, completed: true },
+    ],
+    11: [{ weight: null, reps: 10, completed: true }, { weight: null, reps: 8, completed: true }],
+    12: [{ weight: 50, reps: 10, completed: true }],
+  };
+  const last = {
+    bench: [{ weight: 135, reps: 8, is_warmup: true }, { weight: 175, reps: 5 }, { weight: 175, reps: 5 }],
+    pullup: [{ weight: null, reps: 8 }, { weight: null, reps: 8 }],
+  };
+  const s = buildWorkoutSummary([benchA, pull, fresh], sets, [], 60, last);
+
+  it("compares working-set volume per exercise", () => {
+    expect(s.exercises[0].change).toEqual({ kind: "volume", diff: 100, pct: 6 });
+  });
+  it("compares reps for bodyweight work", () => {
+    expect(s.exercises[1].change).toEqual({ kind: "reps", diff: 2, pct: 13 });
+  });
+  it("has no comparison for an exercise without a last time", () => {
+    expect(s.exercises[2].change).toBeNull();
+  });
+  it("totals volume change only over exercises with a last time", () => {
+    // 1850 vs 1750, ignoring New Lift's 500
+    expect(s.volumeChangePct).toBe(6);
+  });
+  it("skips an exercise done twice today (no like-for-like last time)", () => {
+    const again = { ...benchA, session_exercise_id: 13 };
+    const t = buildWorkoutSummary([benchA, again], { 10: sets[10], 13: [{ weight: 135, reps: 10, completed: true }] }, [], 60, last);
+    expect(t.exercises.map((e) => e.change)).toEqual([null, null]);
+    expect(t.volumeChangePct).toBeNull();
+  });
+  it("defaults to no comparison", () => {
+    expect(buildWorkoutSummary([benchA], sets, [], 60).volumeChangePct).toBeNull();
+  });
+});

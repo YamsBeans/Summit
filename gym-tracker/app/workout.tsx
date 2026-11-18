@@ -604,7 +604,7 @@ export default function WorkoutScreen() {
     // iOS won't present the summary while the "Finish Workout?" dialog is
     // still fading out, and the summary is the only way off this screen.
     if (Platform.OS === "ios") await new Promise((r) => setTimeout(r, 400));
-    setSummary({ ...buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds), workoutNumber });
+    setSummary({ ...buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds, prevSets), workoutNumber });
   }, 1000);
 
   const handleSummaryAddPhoto = useCallback(() => {

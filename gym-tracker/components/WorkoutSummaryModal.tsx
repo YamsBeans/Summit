@@ -5,7 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits, formatVolume } from "@/utils/units";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
-import { formatWorkoutDuration, ordinal, type WorkoutSummary } from "@/utils/workoutSummary";
+import { formatWorkoutDuration, ordinal, type ExerciseChange, type WorkoutSummary } from "@/utils/workoutSummary";
 
 type Props = {
   visible: boolean;
@@ -29,12 +29,29 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
   if (!summary) return null;
 
   const hasPRs = summary.prCount > 0;
-  const stats: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string }[] = [
+  // Up is green; down is plain grey (a lighter day isn't a failure).
+  const changeColor = (n: number) => (n > 0 ? colors.success : colors.textTertiary);
+  const pctText = (pct: number) => (pct === 0 ? "Same as last time" : `${pct > 0 ? "▲" : "▼"} ${Math.abs(pct)}% vs last time`);
+  const changeText = (c: ExerciseChange) => {
+    if (c.diff === 0) return "Same as last";
+    const sign = c.diff > 0 ? "+" : "−";
+    return c.kind === "volume"
+      ? `${sign}${formatVolume(toDisplay(Math.abs(c.diff)))} ${unitLabel} vol`
+      : `${sign}${Math.abs(c.diff)} rep${Math.abs(c.diff) === 1 ? "" : "s"}`;
+  };
+  const volumePct = summary.volumeChangePct;
+
+  const stats: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string; sub?: { text: string; color: string } }[] = [
     { icon: "time-outline", label: "Duration", value: formatWorkoutDuration(summary.durationSeconds) },
     // A cardio-only session has no volume; show its distance instead of "0".
     summary.totalVolumeLbs === 0 && summary.totalDistanceMeters > 0
       ? { icon: "walk-outline", label: "Distance", value: formatDistance(summary.totalDistanceMeters, distanceUnit) }
-      : { icon: "barbell-outline", label: `Volume (${unitLabel})`, value: formatVolume(toDisplay(summary.totalVolumeLbs)) },
+      : {
+        icon: "barbell-outline",
+        label: `Volume (${unitLabel})`,
+        value: formatVolume(toDisplay(summary.totalVolumeLbs)),
+        sub: volumePct != null ? { text: pctText(volumePct), color: changeColor(volumePct) } : undefined,
+      },
     { icon: "checkmark-done-outline", label: "Sets", value: String(summary.completedSets) },
     { icon: "trophy-outline", label: "PRs", value: String(summary.prCount) },
   ];
@@ -66,7 +83,7 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
       ].filter(Boolean).join("  •  "),
       "",
       ...summary.exercises.map((ex) =>
-        `• ${ex.completedSets} × ${ex.name}: ${bestSetText(ex)}${ex.pr ? " 🏆" : ""}`),
+        `• ${ex.completedSets} × ${ex.name}: ${bestSetText(ex)}${ex.pr ? " 🏆" : ""}${ex.change && ex.change.diff > 0 ? ` (${changeText(ex.change)})` : ""}`),
     ];
     if (hasPRs) lines.push("", `🏆 ${summary.prCount} new PR${summary.prCount === 1 ? "" : "s"}`);
     try {
@@ -111,6 +128,7 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
                 <Ionicons name={s.icon} size={18} color={colors.primary} />
                 <Text style={[styles.statValue, { color: colors.text }]} numberOfLines={1} adjustsFontSizeToFit>{s.value}</Text>
                 <Text style={[styles.statLabel, { color: colors.textTertiary }]}>{s.label}</Text>
+                {s.sub && <Text style={[styles.statSub, { color: s.sub.color }]} numberOfLines={1}>{s.sub.text}</Text>}
               </View>
             ))}
           </View>
@@ -144,7 +162,18 @@ export default function WorkoutSummaryModal({ visible, workoutName, summary, dis
                       </View>
                     )}
                   </View>
-                  <Text style={[styles.best, { color: colors.textSecondary }]} numberOfLines={1}>{bestSetText(ex)}</Text>
+                  <View style={styles.bestCol}>
+                    <Text style={[styles.best, { color: colors.textSecondary }]} numberOfLines={1}>{bestSetText(ex)}</Text>
+                    {ex.change && (
+                      <Text
+                        style={[styles.change, { color: changeColor(ex.change.diff) }]}
+                        numberOfLines={1}
+                        accessibilityLabel={`${changeText(ex.change)} compared with last time`}
+                      >
+                        {changeText(ex.change)}
+                      </Text>
+                    )}
+                  </View>
                 </View>
               ))
             )}
@@ -203,7 +232,10 @@ const styles = StyleSheet.create({
   cardHeaderText: { fontSize: 11, fontWeight: "700", letterSpacing: 0.6 },
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
   exName: { fontSize: 15, fontWeight: "600" },
-  best: { fontSize: 14, fontWeight: "600", flexShrink: 0 },
+  bestCol: { alignItems: "flex-end", flexShrink: 0, gap: 2 },
+  best: { fontSize: 14, fontWeight: "600" },
+  change: { fontSize: 12, fontWeight: "700" },
+  statSub: { fontSize: 11, fontWeight: "700", marginTop: 2 },
   prPill: {
     flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start",
     paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, marginTop: 4,

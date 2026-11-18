@@ -34,7 +34,15 @@ export type ExerciseSummary = {
   distanceMeters: number;
   durationSeconds: number;
   pr: string | null;
+  /**
+   * Change vs the last time this exercise was done (like Strong's "vs last
+   * time"): working-set volume, or total reps for bodyweight work. Null with
+   * no comparable last time.
+   */
+  change: ExerciseChange | null;
 };
+
+export type ExerciseChange = { kind: "volume" | "reps"; /** This time minus last time (lbs or reps). */ diff: number; pct: number };
 
 export type WorkoutSummary = {
   durationSeconds: number;
@@ -46,6 +54,11 @@ export type WorkoutSummary = {
   prCount: number;
   /** Lifetime workout count including this one ("your 12th workout"), if known. */
   workoutNumber?: number | null;
+  /**
+   * Working-set volume vs last time, over the weighted exercises that have a
+   * last time (so a new exercise doesn't count as "+100%"). Null if none.
+   */
+  volumeChangePct: number | null;
 };
 
 /** 1 → "1st", 12 → "12th", 22 → "22nd". */
@@ -62,6 +75,36 @@ export function workoutNumberFrom(
 ): number | null {
   if (!sessions) return null;
   return sessions.filter((s) => s.session_id !== currentSessionId && s.end_time).length + 1;
+}
+
+/** Working (non-warm-up) weight × reps, and reps, of completed sets. */
+function workTotals(sets: SummarySet[]) {
+  let volume = 0;
+  let reps = 0;
+  let weighted = false;
+  for (const s of sets) {
+    if (s.is_warmup || s.completed === false) continue;
+    if (s.reps != null) reps += s.reps;
+    if (s.weight != null && s.weight > 0 && s.reps != null) {
+      volume += s.weight * s.reps;
+      weighted = true;
+    }
+  }
+  return { volume, reps, weighted };
+}
+
+/** Compare this time's sets with last time's, or null if there's nothing to compare. */
+export function compareWithLastTime(now: SummarySet[], last: SummarySet[] | null | undefined): ExerciseChange | null {
+  if (!last || last.length === 0) return null;
+  const a = workTotals(now);
+  const b = workTotals(last);
+  if (a.weighted && b.weighted) {
+    return { kind: "volume", diff: a.volume - b.volume, pct: Math.round(((a.volume - b.volume) / b.volume) * 100) };
+  }
+  if (!a.weighted && !b.weighted && a.reps > 0 && b.reps > 0) {
+    return { kind: "reps", diff: a.reps - b.reps, pct: Math.round(((a.reps - b.reps) / b.reps) * 100) };
+  }
+  return null;
 }
 
 function setScore(s: SummarySet): [number, number, number] {
@@ -85,6 +128,8 @@ export function buildWorkoutSummary(
   exerciseSets: Record<string | number, SummarySet[] | undefined>,
   prs: SummaryPR[],
   durationSeconds: number,
+  /** Last session's completed sets per exercise_id (the logger's PREVIOUS column). */
+  lastTime: Record<string, SummarySet[] | undefined> = {},
 ): WorkoutSummary {
   const prByExercise = new Map<string, string>();
   for (const pr of prs) {
@@ -97,6 +142,12 @@ export function buildWorkoutSummary(
   let totalDistanceMeters = 0;
   const rows: ExerciseSummary[] = [];
   const prShown = new Set<string>();
+  // "Last time" is one session-exercise; an exercise done twice today (top
+  // set + back-offs) has no like-for-like comparison, so it gets none.
+  const timesToday = new Map<string, number>();
+  for (const ex of exercises) timesToday.set(ex.exercise_id, (timesToday.get(ex.exercise_id) ?? 0) + 1);
+  let volNow = 0;
+  let volLast = 0;
 
   for (const ex of exercises) {
     const sets = (exerciseSets[ex.session_exercise_id] ?? []).filter((s) => s.completed);
@@ -123,6 +174,15 @@ export function buildWorkoutSummary(
     // Exercises with nothing completed aren't part of what was done.
     if (sets.length === 0) continue;
 
+    const change = !isCardio && timesToday.get(ex.exercise_id) === 1
+      ? compareWithLastTime(sets, lastTime[ex.exercise_id])
+      : null;
+    if (change?.kind === "volume") {
+      const now = workTotals(sets).volume;
+      volNow += now;
+      volLast += now - change.diff;
+    }
+
     rows.push({
       exerciseId: ex.exercise_id,
       name: ex.exercise_name,
@@ -134,6 +194,7 @@ export function buildWorkoutSummary(
       // The same exercise twice (top set + back-offs) shares one PR: badge
       // the first row only, so the recap doesn't say "2 new PRs".
       pr: prShown.has(ex.exercise_id) ? null : prByExercise.get(ex.exercise_id) ?? null,
+      change,
     });
     if (prByExercise.has(ex.exercise_id)) prShown.add(ex.exercise_id);
   }
@@ -146,6 +207,7 @@ export function buildWorkoutSummary(
     totalDistanceMeters,
     exercises: rows,
     prCount: rows.filter((r) => r.pr != null).length,
+    volumeChangePct: volLast > 0 ? Math.round(((volNow - volLast) / volLast) * 100) : null,
   };
 }
 
