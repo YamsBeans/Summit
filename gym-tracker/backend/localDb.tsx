@@ -59,7 +59,8 @@ const rawLocalDb = {
     localUsers.push(user);
     localSession = { user: { id: userId, email } };
     emitAuth("SIGNED_IN");
-    return { data: { user: { id: userId } }, error: null };
+    // Signed in straight away (no email to confirm), like Supabase with a session.
+    return { data: { user: { id: userId }, session: localSession }, error: null };
   },
 
   signIn: async (email: string, _password: string) => {

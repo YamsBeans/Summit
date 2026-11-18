@@ -9,6 +9,7 @@ import ProgressPhotoModal from "@/components/ProgressPhotoModal";
 import WorkoutSummaryModal from "@/components/WorkoutSummaryModal";
 import PlateCalculatorModal from "@/components/PlateCalculatorModal";
 import { ActionSheet, SheetOption } from "@/components/ActionSheet";
+import { RpeOption } from "@/components/RpeOption";
 import { useExerciseRest, resolveRest, formatRest, REST_CHOICES } from "@/utils/exerciseRest";
 import { buildWorkoutSummary, workoutNumberFrom, type SummaryPR, type WorkoutSummary } from "@/utils/workoutSummary";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
@@ -36,7 +37,6 @@ import ExerciseNote from "@/components/ExerciseNote";
 import ElapsedTime from "@/components/ElapsedTime";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
-const RPE_VALUES = [6, 7, 8, 9, 10];
 
 export default function WorkoutScreen() {
   const headerTop = useHeaderTop();
@@ -470,11 +470,9 @@ export default function WorkoutScreen() {
 
   // RPE (rate of perceived exertion, like Strong/Hevy), saved in the sets
   // table's existing effort_level column. Tapping the current value clears it.
-  const handleSetRpe = useGuardedPress(async (rpe: number) => {
+  const handleSetRpe = useGuardedPress(async (rpe: number | null) => {
     if (!selectedSet || !selectedExerciseId) return;
-    await updateSet(selectedSet.session_set_id, selectedExerciseId, {
-      effort_level: selectedSet.effort_level === rpe ? null : rpe,
-    });
+    await updateSet(selectedSet.session_set_id, selectedExerciseId, { effort_level: rpe });
     closeSetOptions();
   });
 
@@ -1164,28 +1162,7 @@ export default function WorkoutScreen() {
           />
         )}
         {exercises.find((e) => e.session_exercise_id === selectedExerciseId)?.exercise_type !== "cardio" && (
-          <SheetOption icon="speedometer-outline" label="RPE" style={{ gap: 10 }}>
-            {RPE_VALUES.map((v) => {
-              const on = selectedSet?.effort_level === v;
-              return (
-                <Pressable
-                  key={v}
-                  onPress={() => handleSetRpe(v)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: on }}
-                  accessibilityLabel={on ? `RPE ${v}, selected. Tap to clear` : `RPE ${v}`}
-                  hitSlop={4}
-                  style={({ pressed }) => [
-                    styles.rpeChip,
-                    { backgroundColor: on ? colors.primary : colors.surfaceSecondary, borderColor: on ? colors.primary : colors.border },
-                    pressed && { opacity: 0.6 },
-                  ]}
-                >
-                  <Text style={[styles.rpeChipText, { color: on ? "#fff" : colors.text }]}>{v}</Text>
-                </Pressable>
-              );
-            })}
-          </SheetOption>
+          <RpeOption value={selectedSet?.effort_level} onPick={handleSetRpe} />
         )}
         <SheetOption icon="trash-outline" tone="danger" label="Remove Set" onPress={handleRemoveSet} last />
       </ActionSheet>
@@ -1353,15 +1330,6 @@ const styles = StyleSheet.create({
   emptyIcon: { width: 60, height: 60, borderRadius: 30, alignItems: "center", justifyContent: "center", marginBottom: 8 },
   emptyTitle: { fontSize: 18, fontWeight: "700" },
   emptyBody: { fontSize: 14, textAlign: "center" },
-  rpeChip: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  rpeChipText: { fontSize: 14, fontWeight: "700" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
   // Header

@@ -28,6 +28,8 @@ import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/num
 import { createSerialQueue, nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
 import { logError } from "@/utils/log";
 import { useCommitOnUnmount } from "@/utils/useCommitOnUnmount";
+import { ActionSheet, SheetOption } from "@/components/ActionSheet";
+import { RpeOption } from "@/components/RpeOption";
 
 type EditSet = {
   session_set_id: number;
@@ -42,6 +44,8 @@ type EditSet = {
   completed: boolean;
   distance_meters: number | null;
   duration_seconds: number | null;
+  /** RPE 6–10 (strength), stored in effort_level. */
+  effort_level: number | null;
 };
 
 type EditExercise = {
@@ -132,6 +136,8 @@ export default function WorkoutEditScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
   const [selectedExercise, setSelectedExercise] = useState<EditExercise | null>(null);
+  // Set menu (tap a set number): warm-up and RPE, like the logger's.
+  const [setMenu, setSetMenu] = useState<{ exerciseId: number; setId: number } | null>(null);
 
   const pickerModeRef = useRef<"add" | "replace">("add");
   const replaceTargetRef = useRef<EditExercise | null>(null);
@@ -190,6 +196,7 @@ export default function WorkoutEditScreen() {
           completed: s.completed !== false,
           distance_meters: s.distance_meters ?? null,
           duration_seconds: s.duration_seconds ?? null,
+          effort_level: s.effort_level ?? null,
         })),
     }));
 
@@ -356,6 +363,7 @@ export default function WorkoutEditScreen() {
       completed: true,
       distance_meters: null,
       duration_seconds: null,
+      effort_level: null,
     };
     setExercises((prev) =>
       prev.map((ex) =>
@@ -399,6 +407,17 @@ export default function WorkoutEditScreen() {
     const { error: err } = await edits.updateSessionExerciseSet(set.session_set_id, { completed });
     if (err) {
       patchSet(set.session_set_id, { completed: !completed });
+      setError((err as any)?.message ?? "Failed to save set");
+    }
+  }
+
+  // Warm-up / RPE from the set menu. Shown at once, put back if the save fails.
+  async function handleSetFlags(set: EditSet, patch: { is_warmup?: boolean; effort_level?: number | null }) {
+    const before = { is_warmup: set.is_warmup, effort_level: set.effort_level };
+    patchSet(set.session_set_id, patch);
+    const { error: err } = await edits.updateSessionExerciseSet(set.session_set_id, patch);
+    if (err) {
+      patchSet(set.session_set_id, before);
       setError((err as any)?.message ?? "Failed to save set");
     }
   }
@@ -638,11 +657,24 @@ export default function WorkoutEditScreen() {
             {/* Sets */}
             {ex.sets.map((set, idx) => (
               <View key={set.session_set_id} style={[styles.setRow, !set.completed && { opacity: 0.55 }]}>
-                <View style={[styles.setNumBadge, { backgroundColor: set.is_warmup ? colors.warningLight : colors.surfaceSecondary }]}>
+                <Pressable
+                  onPress={() => setSetMenu({ exerciseId: ex.session_exercise_id, setId: set.session_set_id })}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${set.is_warmup ? "Warm-up set" : `Set ${workingSetNumber(ex.sets, idx)}`}${set.effort_level != null ? `, RPE ${set.effort_level}` : ""}. Set options`}
+                  style={({ pressed }) => [
+                    styles.setNumBadge,
+                    { backgroundColor: set.is_warmup ? colors.warningLight : colors.surfaceSecondary },
+                    pressed && { opacity: 0.6 },
+                  ]}
+                >
                   <Text style={[styles.setNumText, { color: set.is_warmup ? colors.warning : colors.textSecondary }]}>
                     {set.is_warmup ? "W" : workingSetNumber(ex.sets, idx)}
                   </Text>
-                </View>
+                  {set.effort_level != null && ex.exercise_type !== "cardio" && (
+                    <Text style={[styles.setRpeText, { color: colors.primary }]}>@{set.effort_level}</Text>
+                  )}
+                </Pressable>
                 {ex.exercise_type === "cardio" ? (
                   <CardioEditInputs
                     set={set}
@@ -784,6 +816,45 @@ export default function WorkoutEditScreen() {
         </Pressable>
       </Modal>
 
+      {/* Set options (tap a set number) */}
+      {(() => {
+        const menuEx = setMenu ? exercises.find((e) => e.session_exercise_id === setMenu.exerciseId) : undefined;
+        const menuIdx = menuEx ? menuEx.sets.findIndex((x) => x.session_set_id === setMenu!.setId) : -1;
+        const menuSet = menuEx && menuIdx >= 0 ? menuEx.sets[menuIdx] : undefined;
+        const close = () => setSetMenu(null);
+        return (
+          <ActionSheet
+            visible={!!menuSet}
+            onClose={close}
+            title={menuSet && menuEx ? `${menuEx.exercise_name} · ${menuSet.is_warmup ? "Warm-up" : `Set ${workingSetNumber(menuEx.sets, menuIdx)}`}` : undefined}
+          >
+            {menuSet && (
+              <SheetOption
+                emoji="🔥"
+                tone="warning"
+                label={menuSet.is_warmup ? "Remove Warmup" : "Mark as Warmup"}
+                onPress={() => { close(); handleSetFlags(menuSet, { is_warmup: !menuSet.is_warmup }); }}
+              />
+            )}
+            {menuSet && menuEx?.exercise_type !== "cardio" && (
+              <RpeOption
+                value={menuSet.effort_level}
+                onPick={(rpe) => { close(); handleSetFlags(menuSet, { effort_level: rpe }); }}
+              />
+            )}
+            {menuSet && menuEx && (
+              <SheetOption
+                icon="trash-outline"
+                tone="danger"
+                label="Remove Set"
+                last
+                onPress={() => { close(); handleRemoveSet(menuEx, menuSet); }}
+              />
+            )}
+          </ActionSheet>
+        );
+      })()}
+
       {/* Progress Photo Modal */}
       <ProgressPhotoModal
         visible={showPhotoModal}
@@ -867,6 +938,7 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   setNumText: { fontSize: 12, fontWeight: "700" },
+  setRpeText: { fontSize: 9, fontWeight: "700", marginTop: -1 },
   setInput: {
     // minWidth 0 lets flex shrink web inputs below their intrinsic width.
     minWidth: 0,

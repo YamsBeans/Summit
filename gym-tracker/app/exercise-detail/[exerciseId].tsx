@@ -17,6 +17,7 @@ import exercisesData from "@/assets/data/exercises.json";
 
 type HistorySet = {
   weight: number | null; reps: number | null; completed: boolean; is_warmup?: boolean | null;
+  effort_level?: number | null;
   distance_meters?: number | null; duration_seconds?: number | null; pace_sec_per_km?: number | null;
 };
 type HistoryPoint = {
@@ -373,6 +374,7 @@ export default function ExerciseDetailScreen() {
                     {h.sets.map((s, si) => (
                       <Text key={si} style={{ fontSize: 12, color: si === bestIdx ? colors.text : colors.textTertiary, fontWeight: si === bestIdx ? "600" : "400" }}>
                         {s.is_warmup ? "W" : `Set ${workingSetNumber(h.sets, si)}`}: {s.weight ? `${toDisplay(s.weight)} ${unitLabel}` : "Bodyweight"} × {s.reps ?? "—"} {s.reps === 1 ? "rep" : "reps"}
+                        {s.effort_level != null ? ` @${s.effort_level}` : ""}
                         {si === bestIdx && h.sets.length > 1 ? "  ★" : ""}
                       </Text>
                     ))}
