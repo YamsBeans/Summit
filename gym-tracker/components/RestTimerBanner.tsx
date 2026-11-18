@@ -7,6 +7,8 @@ type Props = {
   remaining: number;
   /** Full length of the current rest period, used for the progress bar. */
   total?: number;
+  /** What's up after this rest ("Next: Bench Press · Set 2 · 135 lbs × 8"). */
+  next?: string;
   onSkip: () => void;
   onAddTime: (secs: number) => void;
 };
@@ -17,7 +19,7 @@ function fmt(s: number) {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
-export default function RestTimerBanner({ remaining, total, onSkip, onAddTime }: Props) {
+export default function RestTimerBanner({ remaining, total, next, onSkip, onAddTime }: Props) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   if (remaining <= 0) return null;
@@ -30,7 +32,7 @@ export default function RestTimerBanner({ remaining, total, onSkip, onAddTime }:
       <View
         style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, shadowColor: "#000" }]}
         accessibilityRole="timer"
-        accessibilityLabel={`Rest timer, ${fmt(remaining)} remaining`}
+        accessibilityLabel={`Rest timer, ${fmt(remaining)} remaining${next ? `. ${next}` : ""}`}
       >
         <View style={styles.row}>
           <Ionicons name="timer-outline" size={18} color={almostDone ? colors.warning : colors.primary} />
@@ -66,6 +68,10 @@ export default function RestTimerBanner({ remaining, total, onSkip, onAddTime }:
             </Pressable>
           </View>
         </View>
+
+        {!!next && (
+          <Text style={[styles.next, { color: colors.textSecondary }]} numberOfLines={1}>{next}</Text>
+        )}
 
         {/* Progress — shrinks as the rest period runs out */}
         <View style={[styles.track, { backgroundColor: colors.surfaceSecondary }]}>
@@ -126,6 +132,11 @@ const styles = StyleSheet.create({
   btnText: {
     fontSize: 13,
     fontWeight: "700",
+  },
+  next: {
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 6,
   },
   track: {
     height: 4,

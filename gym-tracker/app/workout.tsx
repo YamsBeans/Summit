@@ -30,6 +30,7 @@ import { beginRestNotification, scheduleRestDoneNotification, cancelRestDoneNoti
 import { useUnits, useDistanceUnit, formatVolume } from "@/utils/units";
 import { logError } from "@/utils/log";
 import { createSerialQueue, nextSetNumber, previousSetFor, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
+import { findNextSet } from "@/utils/nextSet";
 import { loadBarWeight, usesBarbell, warmupPlan } from "@/utils/warmups";
 import { notifySuccess } from "@/utils/haptics";
 import CardioSetRow from "@/components/CardioSetRow";
@@ -153,7 +154,10 @@ export default function WorkoutScreen() {
   exercisesRef.current = exercises;
   const [restPickerFor, setRestPickerFor] = useState<any>(null);
 
+  // The exercise the current rest started from, for the banner's "Next" line.
+  const [restFromExerciseId, setRestFromExerciseId] = useState<number | null>(null);
   const startRestTimer = useCallback((sessionExerciseId?: number) => {
+    setRestFromExerciseId(sessionExerciseId ?? null);
     const ex = exercisesRef.current.find((e) => e.session_exercise_id === sessionExerciseId);
     const secs = resolveRest(restOverridesRef.current, ex?.exercise_id, restDuration);
     if (secs <= 0) return; // rest timer turned off for this exercise
@@ -186,6 +190,24 @@ export default function WorkoutScreen() {
   useEffect(() => {
     setRestOnComplete(() => notifySuccess());
   }, [setRestOnComplete]);
+
+  // "Next: Bench Press · Set 2 · 135 lbs × 8" under the rest timer (like
+  // Hevy), from the set's own numbers or else last time's.
+  const restNextText = useMemo(() => {
+    const next = findNextSet(exercises, exerciseSets, restFromExerciseId);
+    if (!next) return exercises.length > 0 ? "All sets done · Finish when ready" : undefined;
+    const sets = exerciseSets[next.exercise.session_exercise_id] ?? [];
+    const label = next.set.is_warmup ? "Warm-up" : `Set ${workingSetNumber(sets, next.index)}`;
+    const parts = [next.exercise.exercise_name, label];
+    if (next.exercise.exercise_type !== "cardio") {
+      const prev = previousSetFor(prevSets[next.exercise.exercise_id], sets, next.index);
+      const w = next.set.weight ?? prev?.weight ?? null;
+      const r = next.set.reps ?? prev?.reps ?? null;
+      if (w != null && w > 0 && r != null) parts.push(`${toDisplay(w)} ${unitLabel} × ${r}`);
+      else if (r != null) parts.push(`${r} reps`);
+    }
+    return `Next: ${parts.join(" · ")}`;
+  }, [exercises, exerciseSets, restFromExerciseId, prevSets, toDisplay, unitLabel]);
 
   const totalVolume = useMemo(() => {
     let total = 0;
@@ -1126,6 +1148,7 @@ export default function WorkoutScreen() {
       <RestTimerBanner
         remaining={restTimer.remaining}
         total={restTimer.total}
+        next={restNextText}
         onSkip={skipRestTimer}
         onAddTime={handleAddRestTime}
       />
@@ -1381,7 +1404,8 @@ const styles = StyleSheet.create({
   statDivider: { width: StyleSheet.hairlineWidth, height: 28, marginHorizontal: 4 },
 
   // Scroll
-  scrollContent: { paddingBottom: 120 },
+  // Room for the rest banner (with its "Next" line) over the last rows.
+  scrollContent: { paddingBottom: 150 },
 
   // Error
   errorBanner: { margin: 16, padding: 12, borderRadius: 10 },
