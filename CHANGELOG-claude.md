@@ -388,3 +388,68 @@ Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jes
 - A photo added on the summary screen while the offline workout is uploading can miss the server copy (narrow race).
 - RPE in Edit Workout and on exercise detail.
 - Swipe-to-delete set rows, share image for Workout Complete, supersets.
+
+## 2026-11-18 (Wed)
+
+Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 378 tests in 45 suites (up from 365 in 44), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode. I used touch emulation for the swipe. A read-only subagent audited the screens earlier runs hadn't covered. Two more reviewed this run's diffs, and I fixed what they found.
+
+### New / UX
+- **Swipe a set row left to delete it** (like Strong/Hevy).
+  - The swipe shows a red Delete button. You tap it to delete, so a stray swipe can't lose a set.
+  - It uses `ReanimatedSwipeable` from `react-native-gesture-handler`. That package and Reanimated were already in package.json. The app root is now wrapped in `GestureHandlerRootView`.
+  - On web it only works on touch screens. With a mouse, a drag that starts on the tick box still clicks it when released. Mouse users can still use Remove Set in the set menu.
+  - Checked: a touch swipe opens the row and deletes the set, a swipe that starts on the tick box doesn't tick it, and scrolling up and down from a row still works.
+- **Workout Complete compares with last time** (like Strong).
+  - Each exercise shows its change since the last time you did it: "+200 lbs vol" in green, or "+2 reps" for bodyweight work.
+  - The Volume tile shows "▲ 6% vs last time". It only counts exercises that have a last time, so a new exercise doesn't count as +100%.
+  - It uses the PREVIOUS-column sets the logger already loads, so there are no extra requests.
+- **The rest timer shows the next set:** "Next: Barbell Bench Press · Set 1 · 95 lbs × 8" (like Hevy).
+  - It looks at the exercise you just did, then the ones after it, then goes back to any skipped sets.
+  - When everything is done it says "All sets done · Finish when ready".
+- **Edit Workout: tap a set number** to get Mark as Warmup, RPE 6–10 and Remove Set, the same menu as the logger. The badge shows the RPE (`@8`).
+  - Exercise detail history lines show RPE too ("135 lbs × 8 reps @8").
+- **Routine editor: move exercises up and down.** The logger could already reorder, but routines couldn't. Moves are saved straight away (like set edits), one at a time. If a save is refused, for example offline, the screen reloads what's really stored.
+
+### Bugs fixed
+- **Password reset link tapped while the app was already open:**
+  - It showed a spinner forever, or treated the old link that had cold-launched the app as expired. This is because `Linking.useURL()` only starts listening after the screen mounts, and expo-router mounts the screen in response to that very link.
+  - The root layout now records incoming links before any screen mounts (`utils/incomingUrl.ts`).
+  - If no link arrives within 15 s, the screen falls back to an error with Back to Sign In.
+  - Tapping the same link a second time now says it's already been used.
+- **Rest notifications:**
+  - On web they can't be scheduled, and every completed set threw an unhandled error. The Notifications toggle is now hidden on web.
+  - While the workout screen is open, the system banner and sound no longer double up with the in-app banner. When the workout is minimized, the system banner is still the cue.
+  - Turning notifications off now cancels one that's already scheduled.
+- **The Android back button** now closes the Settings sheets (Units, Rest Timer, Appearance, About, account changes), the help sheets, and the Discard/Delete confirmations.
+- **Explore:** the back button, iOS swipe-back or browser Back on a program's page used to leave Explore entirely. It now goes back to the program list (the page is now `/explore?program=<id>`). After importing, "Got it" goes Home.
+- **Home:** an error thrown while starting a routine used to leave every Start Routine button disabled. A failed routine load used to spin forever.
+- **Sign-up:** when Supabase requires email confirmation, the message now says to check your email. Before, it said "you can now sign in", which then failed.
+- **Edit Profile:** text typed before Cancel came back looking saved. It now resets to what's saved.
+- **Search:** "ohp" now finds Barbell/Dumbbell Shoulder Press. "bw" now finds bodyweight moves.
+- **Plate calculator:** a typo like 100000 used to freeze the screen drawing thousands of plates. Targets are now capped at 1500 lbs / 700 kg.
+- **Bodyweight program:** Plank (timed) was imported as "30 reps". It's swapped for Dead Bug and Hanging Leg Raise.
+- **Smaller fixes:**
+  - The Rate dialog's "Rate Now" button did nothing. It's now "Send Feedback", since the app isn't in the stores yet.
+  - The About sheet now shows the real app version.
+  - Screen-reader labels added to setting rows, the notifications switch, the minimized workout bar and its discard button, and the routine header buttons.
+
+### Needs Yams's decision or check
+- **Swipe-to-delete on a phone build.** It needs the gesture-handler native module. That module is in package.json, but please check swipe on a real iOS or Android dev build before merging.
+- **Swipe is off for desktop mouse users** on web (see above). Say if you want it on anyway.
+- **"Vs last time" compares working-set volume, leaving out warm-ups.** Workout Complete's total Volume figure includes warm-ups, as before.
+- **The routine editor's "Cancel" also doesn't undo reorders.** This is the same open question as set edits from 11-13: relabel it "Back", or make Cancel undo everything?
+- **Still open from earlier runs:**
+  - RPE is whole numbers only (int4).
+  - Should warm-ups count toward PRs?
+  - `completed = null` counts as done.
+  - `routines.routine_order` isn't in `supabaseSchema.md`.
+  - Offline routine edits are refused rather than queued.
+
+### Not done / ideas for next run
+- **"Last time" (the PREVIOUS column and the new comparison) can be ambiguous.** If last session had the same exercise twice, `getPreviousSessionSets` picks one of the two at random (`limit(1)` on a tied `created_at`). It should skip the comparison or merge both.
+- **The logger's `moveExercise` doesn't queue its moves** like the routine editor's now does. Two quick moves on a slow network could overlap.
+- **Replacing an exercise in a routine doesn't refresh the offline copy** of the routine until Home reloads.
+- Outbox support for routine edits.
+- Idempotent inserts (a client UUID column).
+- A share image for Workout Complete.
+- Supersets.
