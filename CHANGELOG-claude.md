@@ -453,3 +453,50 @@ Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jes
 - Idempotent inserts (a client UUID column).
 - A share image for Workout Complete.
 - Supersets.
+
+## 2026-11-25 (Wed)
+
+Build status: `tsc` is clean, `npm run lint` shows 0 errors and 0 warnings, `jest` passes 398 tests in 48 suites (up from 378 in 45), and `expo export -p web` builds. I checked the changed screens in a headless browser at phone width, in light and dark, in local mode with about 10 weeks of seeded Push/Pull/Legs workouts (Legs has two squat blocks). A read-only subagent audited the 11-13 sync code. A second one reviewed this run's diff, and I fixed what both found.
+
+### Bugs fixed
+- **Same exercise twice in a workout (heavy + back-off squats):**
+  - **PREVIOUS column:** when last workout had two blocks, one was picked at random. `getPreviousSessionSets` now returns every block in order (`instances`), and today's Nth block pairs with last time's Nth (`utils/previousInstances.ts`).
+  - **Workout Complete** skips "vs last time" when last time had two blocks, since there's no like-for-like total.
+  - **Exercise detail** showed each block as its own session: two cards per day in random order, a chart zig-zagging between the top and back-off weights with the same date twice, and per-block Best Volume. Blocks are now merged into one session, which matches how PR volume is already computed.
+- **Offline sync** (found by the audit):
+  - **A workout could upload twice.** If the app was killed after an upload but before the queue was trimmed, start-up forgot the local→server mapping. The next sync then uploaded it again. The mapping is now kept while the workout is still queued.
+  - **Signing out mid-sync left "Syncing…" on screen** until the app restarted.
+  - **Outbox and sign-out:**
+    - A change uploading at sign-out that then failed stayed in the queue and replayed under the next login, where row-level security lost it. It now goes back to its own account's parked list. Both lists are written in one `multiSet`.
+    - If the same account signs back in mid-upload, the change is reclaimed. It isn't run twice, and its dependants aren't dropped.
+  - **Queued changes dropped after a ~8 minute outage.** Five 5xx failures dropped a change, and the 30 s → 5 min backoff used those up quickly. A change is now given up only after 5 failures spread over at least an hour.
+  - **PR rebuilds:**
+    - They were blocked for good by another account's queued workout.
+    - They could run under a different login and throw away the list of records to fix.
+  - **A sync started by a different account** no longer joins the old account's run.
+- **Logger:** Move Up/Down saves run one at a time, like the routine editor's.
+- **Routine editor:** replacing or removing an exercise refreshes the routine's offline copy.
+
+### New / UX
+- **Last time's exercise note in the logger:** "Last time: Belt on, safety pins at 4" under the name when today's note is empty. Tap **Use** to copy it. Notes are paired per block like the sets. No extra requests.
+- **Warm-up Sets in the routine editor** (exercise ••• menu), the same ramp as the logger's. Running it again replaces the routine's warm-ups. Opening an exercise's menu now dismisses the keyboard, so a target still being typed is saved first.
+- **Profile history month headers:** "NOVEMBER · 11 workouts" (the year shows for past years).
+- **History filter empty state:** with the Strength/Cardio filter on and nothing matching, it now says "No cardio workouts", not "No workouts yet".
+
+### Needs Yams's decision or check
+- **Outbox give-up window is 1 hour.** A change failing with 5xx or auth errors is retried for at least an hour before it's dropped. While it's stuck, later changes from this device wait behind it. Longer means less data loss in a long outage; shorter means less waiting behind a change that will never succeed.
+- **Still open from earlier runs:**
+  - Please try swipe-to-delete on a real dev build.
+  - Routine editor "Cancel" vs "Back".
+  - RPE is whole numbers only.
+  - Should warm-ups count toward PRs?
+  - `completed = null` counts as done.
+  - `routines.routine_order` isn't in `supabaseSchema.md`.
+  - Offline routine edits are refused rather than queued.
+
+### Ideas for next run
+- **Top Lifts, the history PR pill and Records** may still treat two blocks of one exercise separately. Check them against the new merge.
+- **The exercise chart's leftmost x-axis label** is clipped ("ct 26") when the chart opens scrolled to the newest sessions.
+- **Idempotent inserts** (a client UUID column). This needs a schema change.
+- Share image for Workout Complete.
+- Supersets.
