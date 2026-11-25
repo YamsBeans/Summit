@@ -24,6 +24,7 @@ import { formatDistance, formatDurationShort, formatPaceIn } from "@/utils/cardi
 import { sessionDurationMins } from "@/utils/duration";
 import { GOAL_CHOICES, useWeeklyGoal, weeklyStreaks, workoutsThisWeek } from "@/utils/streaks";
 import { ModalShell } from "@/components/SettingsUI";
+import { historyMonthHeaders } from "@/utils/historyMonths";
 
 // ─── Stat definitions ─────────────────────────────────────────────────────────
 
@@ -668,12 +669,17 @@ export default function ProfileScreen() {
     </>
   );
 
+  // With workouts logged but none matching the Strength/Cardio filter, say
+  // that, rather than "No workouts yet".
+  const filteredOut = sessions.length > 0 && historyFilter !== 'all';
   const listEmpty = (
     <View style={{ alignItems: "center", paddingVertical: 48, gap: 10, marginHorizontal: 16 }}>
       <Text style={{ fontSize: 48 }}>🏋️</Text>
-      <Text style={{ fontSize: 18, fontWeight: "700", color: colors.textSecondary }}>No workouts yet</Text>
+      <Text style={{ fontSize: 18, fontWeight: "700", color: colors.textSecondary }}>
+        {filteredOut ? `No ${historyFilter} workouts` : "No workouts yet"}
+      </Text>
       <Text style={{ fontSize: 14, color: colors.textTertiary, textAlign: "center" }}>
-        Complete your first workout to see it here
+        {filteredOut ? "Tap All to see every workout" : "Complete your first workout to see it here"}
       </Text>
     </View>
   );
@@ -683,6 +689,8 @@ export default function ProfileScreen() {
     : historyFilter === 'cardio'
     ? sessions.filter((s) => s.hasCardio)
     : sessions.filter((s) => !s.hasCardio);
+  // "November · 12 workouts" above each month's first workout.
+  const monthHeaders = historyMonthHeaders(filteredSessions);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
@@ -695,8 +703,21 @@ export default function ProfileScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadProfile(true)} tintColor={colors.primary} />}
         ListHeaderComponent={listHeader}
         ListEmptyComponent={listEmpty}
-        renderItem={({ item }) => (
+        renderItem={({ item, index }) => (
           <View style={{ marginHorizontal: 16 }}>
+            {monthHeaders[index] && (
+              <View
+                style={[styles.monthHeader, index === 0 && { paddingTop: 0 }]}
+                accessibilityRole="header"
+              >
+                <Text style={[styles.monthLabel, { color: colors.textSecondary }]}>
+                  {monthHeaders[index]!.label}
+                </Text>
+                <Text style={[styles.monthCount, { color: colors.textTertiary }]}>
+                  {monthHeaders[index]!.count} {monthHeaders[index]!.count === 1 ? "workout" : "workouts"}
+                </Text>
+              </View>
+            )}
             <WorkoutHistoryCard
               session_id={item.session_id}
               sessionName={item.session_name}
@@ -904,6 +925,9 @@ const styles = StyleSheet.create({
 
   sectionHeader: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10 },
   sectionTitle: { fontSize: 20, fontWeight: "700" },
+  monthHeader: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", paddingTop: 12, paddingBottom: 8, paddingHorizontal: 4 },
+  monthLabel: { fontSize: 13, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase" },
+  monthCount: { fontSize: 12, fontWeight: "600" },
 
   // Customizer modal
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
