@@ -17,6 +17,8 @@ import { useUnits, useDistanceUnit } from "@/utils/units";
 import { formatNumberInput, parseDecimalInput, parseIntInput } from "@/utils/numberInput";
 import { createSerialQueue, nextSetNumber, renumberChanges, workingSetNumber } from "@/utils/setNumbers";
 import { logError } from "@/utils/log";
+import { showAlert } from "@/utils/alert";
+import { loadBarWeight, usesBarbell, warmupPlan } from "@/utils/warmups";
 import { digitsToSeconds, formatDigits, formatDistance, formatDuration, kmToMeters, metersToDisplay, milesToMeters, secondsToDigits } from "@/utils/cardioUtils";
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -32,7 +34,7 @@ export default function RoutineScreen() {
   } = useLocalSearchParams<{ routineId: string; routineName: string; description?: string; mode?: string }>();
   const routineId = parseInt(routineIdParam, 10);
   const { colors } = useTheme();
-  const { label: unitLabel } = useUnits();
+  const { label: unitLabel, unit, toDisplay, toStorage } = useUnits();
   const { distanceUnit } = useDistanceUnit();
 
   const scrollRef = useRef<ScrollView>(null);
@@ -200,6 +202,9 @@ export default function RoutineScreen() {
   });
 
   const openExerciseOptions = useCallback((ex: any) => {
+    // Blur a target still being typed so it saves before a menu action
+    // (Warm-up Sets reads it); taps reach the menu with the box focused.
+    Keyboard.dismiss();
     setSelectedExerciseForOptions(ex);
     setExerciseOptionsVisible(true);
   }, []);
@@ -314,6 +319,57 @@ export default function RoutineScreen() {
       if (numErr) logError("routine.deleteSet.renumber", numErr);
     }
   }), [reloadSetsForExercise, setJobs]);
+
+  // "Warm-up Sets" (the logger has the same): plan the ramp up to the first
+  // working set's target once, in the routine, instead of every workout.
+  // The routine's existing warm-ups are replaced.
+  const addWarmupSets = useGuardedPress((ex: any) => setJobs(ex.routine_exercise_id, async () => {
+    const id = ex.routine_exercise_id;
+    const sets = [...(exerciseSetsRef.current[id] ?? [])].sort((a, b) => a.set_number - b.set_number);
+    const firstWork = sets.find((s) => !s.is_warmup);
+    const working = toDisplay(firstWork?.target_weight ?? null);
+    if (working == null || working <= 0) {
+      showAlert("Add a working weight", "Type the target weight for your first working set, then add warm-up sets.");
+      return;
+    }
+    const bar = usesBarbell(ex.exercise_id) ? await loadBarWeight(unit) : 0;
+    const plan = warmupPlan(working, unit, bar);
+    if (plan.length === 0) {
+      showAlert("No warm-ups needed", `${working} ${unitLabel} is light enough to start with.`);
+      return;
+    }
+    setError(null);
+    const fail = async (message: string) => {
+      setError(message);
+      await reloadSetsForExercise(id);
+    };
+    for (const s of sets.filter((x) => x.is_warmup)) {
+      const { error: err } = await db.deleteRoutineExerciseSet(s.routine_set_id);
+      if (err) return fail(err.message);
+    }
+    // Working sets shift to follow the new warm-ups. Moving down goes last
+    // first and moving up goes first first, so two sets never share a number.
+    const work = sets.filter((s) => !s.is_warmup);
+    const moves = work.map((s, i) => ({ s, n: plan.length + i + 1 })).filter(({ s, n }) => s.set_number !== n);
+    if (moves.length > 0 && moves[0].n > moves[0].s.set_number) moves.reverse();
+    for (const { s, n } of moves) {
+      const { error: err } = await db.updateRoutineExerciseSet(s.routine_set_id, { set_number: n });
+      if (err) return fail(err.message);
+    }
+    for (let i = 0; i < plan.length; i++) {
+      const { error: err } = await db.insertRoutineExerciseSet({
+        routine_exercise_id: id,
+        set_number: i + 1,
+        target_weight: toStorage(plan[i].weight),
+        target_reps: plan[i].reps,
+        is_warmup: true,
+        target_duration_seconds: null,
+        target_distance_meters: null,
+      });
+      if (err) return fail(err.message);
+    }
+    await reloadSetsForExercise(id);
+  }), 300);
 
   const handleUpdateSet = useCallback(async (
     routineSetId: number,
@@ -657,6 +713,23 @@ export default function RoutineScreen() {
                 </View>
               );
             })()}
+            {selectedExerciseForOptions && selectedExerciseForOptions.exercise_type !== "cardio" && selectedExerciseForOptions.exercise_type !== "stretching" && (
+              <Pressable
+                style={[modalStyles.option, { borderBottomColor: colors.border }]}
+                onPress={() => {
+                  const ex = selectedExerciseForOptions;
+                  closeExerciseOptions();
+                  addWarmupSets(ex);
+                }}
+                accessibilityRole="button"
+              >
+                <View style={[modalStyles.iconWrap, { backgroundColor: colors.primaryLight }]}>
+                  <Ionicons name="flame-outline" size={16} color={colors.primary} />
+                </View>
+                <Text style={[modalStyles.optionLabel, { color: colors.text }]}>Warm-up Sets</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+              </Pressable>
+            )}
             <Pressable
               style={[modalStyles.option, { borderBottomColor: colors.border }]}
               onPress={() => {
