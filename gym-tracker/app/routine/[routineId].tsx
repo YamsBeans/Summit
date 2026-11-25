@@ -347,14 +347,17 @@ export default function RoutineScreen() {
       const { error: err } = await db.deleteRoutineExerciseSet(s.routine_set_id);
       if (err) return fail(err.message);
     }
-    // Working sets shift to follow the new warm-ups. Moving down goes last
-    // first and moving up goes first first, so two sets never share a number.
+    // Working sets shift to follow the new warm-ups. Each goes past every
+    // number in use first, then to its place, so two sets never share one.
     const work = sets.filter((s) => !s.is_warmup);
     const moves = work.map((s, i) => ({ s, n: plan.length + i + 1 })).filter(({ s, n }) => s.set_number !== n);
-    if (moves.length > 0 && moves[0].n > moves[0].s.set_number) moves.reverse();
-    for (const { s, n } of moves) {
-      const { error: err } = await db.updateRoutineExerciseSet(s.routine_set_id, { set_number: n });
-      if (err) return fail(err.message);
+    const parkAt = Math.max(0, ...sets.map((s) => s.set_number), plan.length + work.length) + 1;
+    for (const pass of [0, 1]) {
+      for (let i = 0; i < moves.length; i++) {
+        const { s, n } = moves[i];
+        const { error: err } = await db.updateRoutineExerciseSet(s.routine_set_id, { set_number: pass === 0 ? parkAt + i : n });
+        if (err) return fail(err.message);
+      }
     }
     for (let i = 0; i < plan.length; i++) {
       const { error: err } = await db.insertRoutineExerciseSet({

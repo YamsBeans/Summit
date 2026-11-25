@@ -236,7 +236,7 @@ it("shows offline edits on the edit screen's batch read", async () => {
   expect(sets.map((s: any) => s.reps)).toEqual([12, 10]);
 });
 
-it("keeps retrying server trouble for a day before giving up on a change", async () => {
+it("keeps retrying server trouble for an hour before giving up on a change", async () => {
   await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 1, values: {} });
   const dropped: any[] = [];
   const exec = async () => ({ ok: false, retry: false, transient: true });
@@ -248,7 +248,7 @@ it("keeps retrying server trouble for a day before giving up on a change", async
     for (let i = 0; i < 8; i++) {
       expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(1);
     }
-    now.mockReturnValue(start + 25 * 60 * 60_000);
+    now.mockReturnValue(start + 61 * 60_000);
     expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(0);
     expect(dropped).toHaveLength(1);
   } finally {
@@ -256,9 +256,9 @@ it("keeps retrying server trouble for a day before giving up on a change", async
   }
 });
 
-it("gives up only after enough tries spread over a day", () => {
+it("gives up only after enough tries spread over an hour", () => {
   const t0 = 1_000_000;
-  const day = 24 * 60 * 60_000;
+  const day = 60 * 60_000;
   expect(outbox.shouldGiveUp({ attempts: 4, firstFailedAt: t0 }, t0 + 60_000)).toBe(false);
   expect(outbox.shouldGiveUp({ attempts: 1, firstFailedAt: t0 }, t0 + 2 * day)).toBe(false);
   expect(outbox.shouldGiveUp({ attempts: 4, firstFailedAt: t0 }, t0 + day)).toBe(true);
@@ -370,6 +370,22 @@ describe("changes queued before a sign-out", () => {
     await outbox.flushOutbox(async (op: any) => { sent.push(op.id); return { ok: true }; });
     expect(sent).toEqual([1, 2]);
     expect(await outbox.pendingOpCount()).toBe(0);
+  });
+
+  it("keeps a failed upload queued when its account signed out and back in with nothing else parked", async () => {
+    await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 1, values: {} });
+    let release: () => void = () => {};
+    const flush = outbox.flushOutbox(async () => {
+      await new Promise<void>((r) => { release = r; });
+      return { ok: false, retry: true };
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await outbox.parkOps("u1")).toBe(0);
+    expect(await outbox.unparkOps("u1")).toBe(0);
+    release();
+    await flush;
+    // Still queued for the signed-in account, not hidden in its parked list.
+    expect(await outbox.pendingOpCount()).toBe(1);
   });
 
   it("puts parked changes ahead of newer ones, once", async () => {

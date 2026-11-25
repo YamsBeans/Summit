@@ -32,9 +32,11 @@ export type OutboxOp = {
 // A change that keeps failing on the server's side is given up on only after
 // MAX_ATTEMPTS failures spread over at least GIVE_UP_AFTER_MS. Counting tries
 // alone dropped queued sets after a ~8 minute outage, since the sync retries
-// on a 30 s → 5 min backoff and every logged set also starts a flush.
+// on a 30 s → 5 min backoff and every logged set also starts a flush. The
+// window is kept short because a change that will never go through (a bad
+// row) holds up everything queued behind it until it's given up.
 const MAX_ATTEMPTS = 5;
-const GIVE_UP_AFTER_MS = 24 * 60 * 60_000;
+const GIVE_UP_AFTER_MS = 60 * 60_000;
 
 /** True when a server-side failure (this one included) should end the change. */
 export function shouldGiveUp(op: Pick<OutboxOp, "attempts" | "firstFailedAt">, now = Date.now()): boolean {
@@ -241,7 +243,7 @@ export function flushOutbox(
             // Its account signed out mid-upload: set it aside with the rest
             // of that account's changes instead of replaying it for whoever
             // is signed in now.
-            if (owner != null && at >= 0 && (await addToParkedFront(owner, op))) ops.splice(at, 1);
+            if (owner != null && at >= 0 && (await moveToParkedFront(owner, op))) return;
             await persist();
             return;
           }
@@ -270,13 +272,22 @@ export function flushOutbox(
 
 const PARKED_PREFIX = "@gym_tracker_outbox_parked:";
 
-/** Put one change at the front of `owner`'s parked list. Call inside the lock. */
-async function addToParkedFront(owner: string, op: OutboxOp): Promise<boolean> {
+/**
+ * Move one queued change to the front of `owner`'s parked list. Call inside
+ * the lock. Both lists are written in one multiSet, so a crash can't leave
+ * the change in both (uploaded twice) or in neither (lost).
+ */
+async function moveToParkedFront(owner: string, op: OutboxOp): Promise<boolean> {
   const key = PARKED_PREFIX + owner;
   try {
     const raw = await AsyncStorage.getItem(key);
     const parked: OutboxOp[] = raw ? JSON.parse(raw) : [];
-    await AsyncStorage.setItem(key, JSON.stringify([op, ...parked]));
+    const rest = ops.filter((o) => o !== op);
+    await AsyncStorage.multiSet([
+      [key, JSON.stringify([op, ...parked])],
+      [OPS_KEY, JSON.stringify(rest)],
+    ]);
+    ops = rest;
     return true;
   } catch {
     return false;
@@ -314,6 +325,12 @@ export function parkOps(owner: string): Promise<number> {
 export function unparkOps(owner: string): Promise<number> {
   return withLock(async () => {
     await ensureLoaded();
+    // This account is signed in again, so a change of its own still
+    // uploading is its own again, even when nothing else was parked.
+    // Otherwise a failed upload was parked while the account was signed in,
+    // and later changes that depended on it were dropped.
+    const ownInFlight = inFlight != null && inFlightOwner === owner && ops.includes(inFlight);
+    if (inFlightOwner === owner) inFlightOwner = null;
     const key = PARKED_PREFIX + owner;
     let parked: OutboxOp[] = [];
     try {
@@ -324,9 +341,8 @@ export function unparkOps(owner: string): Promise<number> {
     }
     if (parked.length === 0) return 0;
     const before = ops;
-    // This account's change still uploading came before everything it
-    // parked, so it stays first, and is now this account's again.
-    const ownInFlight = inFlight != null && inFlightOwner === owner && ops.includes(inFlight);
+    // Its change still uploading came before everything it parked, so it
+    // stays first.
     ops = ownInFlight
       ? [inFlight!, ...parked, ...ops.filter((o) => o !== inFlight)]
       : [...parked, ...ops];
@@ -337,7 +353,6 @@ export function unparkOps(owner: string): Promise<number> {
       ops = before;
       return 0;
     }
-    if (ownInFlight) inFlightOwner = null;
     await persist();
     return parked.length;
   });
