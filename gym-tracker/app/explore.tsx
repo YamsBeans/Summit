@@ -4,9 +4,10 @@ import {
   StyleSheet, Text, View,
 } from "react-native";
 import { showAlert } from "@/utils/alert";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "@/theme/ThemeContext";
+import { useHeaderTop } from "@/utils/useHeaderTop";
 import { db } from "@/backend/db";
 import { PROGRAMS, Program, ProgramRoutine } from "@/utils/programsData";
 
@@ -34,13 +35,20 @@ const EQUIP_LABELS: Record<EquipFilter, string> = {
 };
 
 export default function ExploreScreen() {
+  const headerTop = useHeaderTop();
   const router = useRouter();
+  const navigation = useNavigation();
   const { colors } = useTheme();
 
   const [levelFilter, setLevelFilter] = useState<LevelFilter>('all');
   const [goalFilter, setGoalFilter] = useState<GoalFilter>('all');
   const [equipFilter, setEquipFilter] = useState<EquipFilter>('all');
-  const [selectedProgram, setSelectedProgram] = useState<Program | null>(null);
+  // The detail view is its own history entry (/explore?program=<id>), so
+  // Android back, iOS swipe-back and the browser's Back return to the list
+  // instead of leaving Explore.
+  const { program: programParam } = useLocalSearchParams<{ program?: string }>();
+  const selectedProgram = programParam ? PROGRAMS.find((p) => p.id === programParam) ?? null : null;
+  const openProgram = (program: Program) => router.push({ pathname: "/explore", params: { program: program.id } });
   const [importing, setImporting] = useState(false);
 
   const filtered = PROGRAMS.filter((p) => {
@@ -52,6 +60,18 @@ export default function ExploreScreen() {
 
   const importProgram = async (program: Program) => {
     setImporting(true);
+    // All or nothing: if any part fails, remove the routines already created
+    // so a retry doesn't leave duplicates or half-filled routines behind.
+    const created: number[] = [];
+    const fail = async (message: string) => {
+      const results = await Promise.all(created.map((id) =>
+        db.deleteRoutine(id).then((r: any) => !r?.error, () => false)));
+      setImporting(false);
+      const leftovers = results.filter((ok) => !ok).length;
+      showAlert("Couldn't add program", leftovers > 0
+        ? `${message}\n\n${leftovers} partly added routine${leftovers > 1 ? "s" : ""} couldn't be removed. You may want to delete ${leftovers > 1 ? "them" : "it"} from My Routines.`
+        : message);
+    };
     try {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
@@ -67,11 +87,8 @@ export default function ExploreScreen() {
           description: `Part of ${program.name}`,
           user_id: userId,
         });
-        if (routineErr || !newRoutine) {
-          showAlert("Error", routineErr?.message ?? "Failed to create routine.");
-          setImporting(false);
-          return;
-        }
+        if (routineErr || !newRoutine) return fail(routineErr?.message ?? "Failed to create routine.");
+        created.push(newRoutine.routine_id);
 
         for (let exIdx = 0; exIdx < routine.exercises.length; exIdx++) {
           const ex = routine.exercises[exIdx];
@@ -82,16 +99,17 @@ export default function ExploreScreen() {
             exercise_order: exIdx + 1,
             exercise_type: 'strength',
           });
-          if (exErr || !newEx) continue;
+          if (exErr || !newEx) return fail(exErr?.message ?? `Failed to add ${ex.exercise_name}.`);
 
           for (let setIdx = 0; setIdx < ex.sets; setIdx++) {
-            await db.insertRoutineExerciseSet({
+            const { error: setErr } = await db.insertRoutineExerciseSet({
               routine_exercise_id: newEx.routine_exercise_id,
               set_number: setIdx + 1,
               target_weight: null,
               target_reps: ex.reps,
               is_warmup: false,
             });
+            if (setErr) return fail(setErr.message ?? "Failed to add sets.");
           }
         }
       }
@@ -100,11 +118,20 @@ export default function ExploreScreen() {
       showAlert(
         "Program Added!",
         `${program.routines.length} routine${program.routines.length > 1 ? 's' : ''} from "${program.name}" have been added to My Routines.`,
-        [{ text: "Got it", onPress: () => router.back() }]
+        // Back past the program list too, to My Routines.
+        [{
+          text: "Got it",
+          // After a web refresh/deep link there's no Home underneath to pop
+          // back to; dismissTo would push it on top of Explore instead.
+          onPress: () => {
+            const homeBelow = navigation.getState()?.routes.some((r) => r.name === "(tabs)");
+            if (homeBelow) router.dismissTo("/(tabs)");
+            else router.replace("/(tabs)");
+          },
+        }]
       );
     } catch (e: any) {
-      setImporting(false);
-      showAlert("Error", e?.message ?? "Something went wrong.");
+      await fail(e?.message ?? "Something went wrong.");
     }
   };
 
@@ -113,7 +140,7 @@ export default function ExploreScreen() {
       <ProgramDetail
         program={selectedProgram}
         importing={importing}
-        onBack={() => setSelectedProgram(null)}
+        onBack={() => (router.canGoBack() ? router.back() : router.replace("/explore"))}
         onImport={() => importProgram(selectedProgram)}
         colors={colors}
       />
@@ -123,7 +150,7 @@ export default function ExploreScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Pressable onPress={() => router.back()} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </Pressable>
@@ -183,7 +210,7 @@ export default function ExploreScreen() {
               <Pressable
                 key={program.id}
                 style={[styles.card, { backgroundColor: colors.surface }]}
-                onPress={() => setSelectedProgram(program)}
+                onPress={() => openProgram(program)}
               >
                 {/* Colored label box */}
                 <View style={[styles.labelBox, { backgroundColor: program.labelColor + '22' }]}>
@@ -229,11 +256,12 @@ function ProgramDetail({
   const levelLabel = program.level === 'beginner' ? 'Beginner' : 'Intermediate';
   const goalLabel = program.goal === 'hypertrophy' ? 'Muscle' : program.goal === 'strength' ? 'Strength' : 'Weight Loss';
   const equipLabel = program.equipment === 'gym' ? 'Gym Equipment' : 'Equipment-Free';
+  const headerTop = useHeaderTop();
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: headerTop, borderBottomColor: colors.border }]}>
         <Pressable onPress={onBack} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </Pressable>

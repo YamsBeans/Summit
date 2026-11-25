@@ -5,8 +5,19 @@ export const networkStatus = {
   isConnected: true,
 };
 
+const listeners = new Set<(connected: boolean) => void>();
+
+/** Be told when connectivity changes (for UI such as the Offline badge). */
+export function subscribeNetworkStatus(fn: (connected: boolean) => void): () => void {
+  listeners.add(fn);
+  return () => { listeners.delete(fn); };
+}
+
 const update = (state: { isConnected: boolean | null; isInternetReachable: boolean | null }) => {
-  networkStatus.isConnected = !!(state.isConnected && state.isInternetReachable !== false);
+  const next = !!(state.isConnected && state.isInternetReachable !== false);
+  if (next === networkStatus.isConnected) return;
+  networkStatus.isConnected = next;
+  listeners.forEach((fn) => fn(next));
 };
 
 try {

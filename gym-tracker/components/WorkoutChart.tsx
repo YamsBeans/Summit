@@ -4,6 +4,8 @@ import { BarChart } from "react-native-gifted-charts";
 import { useTheme } from "@/theme/ThemeContext";
 import { useUnits } from "@/utils/units";
 import { SessionWithMeta } from "./WorkoutHistoryList";
+import { sessionDurationMins } from "@/utils/duration";
+import { niceAxisMax } from "@/utils/chartScale";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +17,8 @@ const RANGE_WEEKS: Record<Range, number> = {
 };
 
 const Y_AXIS_LABEL_WIDTH = 38;
+// Week labels are wider than a bar ("Sep 20"), so they're drawn this wide.
+const LABEL_WIDTH = 44;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,13 +41,9 @@ function shortLabel(d: Date): string {
 }
 
 function durationMinutes(session: SessionWithMeta): number {
-  if (!session.end_time) return 0;
-  const toSec = (t: string) => {
-    const [h, m, s] = t.split(":").map(Number);
-    return h * 3600 + m * 60 + (s ?? 0);
-  };
-  return Math.max(0, (toSec(session.end_time) - toSec(session.start_time)) / 60);
+  return sessionDurationMins(session.session_date, session.start_time, session.end_time) ?? 0;
 }
+
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -65,14 +65,24 @@ export default function WorkoutChart({ sessions }: Props) {
 
   const chartBodyWidth = Math.max(100, screenWidth - 32 - 32 - Y_AXIS_LABEL_WIDTH);
   const barSpacing = 4;
+  // A label centred under the first or last bar sticks out past it by about
+  // half a label; leave that much room at both ends so it isn't clipped.
+  // (Solved for the bar width the gutter itself leaves room for.)
+  const roughBarWidth = (chartBodyWidth - numWeeks * barSpacing) / numWeeks;
+  const edgeGutter = Math.max(0, Math.ceil(LABEL_WIDTH / 2 - roughBarWidth / 2) + 2);
   const barWidth = Math.max(
     1,
-    Math.floor((chartBodyWidth - numWeeks * barSpacing) / numWeeks)
+    Math.floor((chartBodyWidth - 2 * edgeGutter - numWeeks * barSpacing) / numWeeks)
   );
+  // gifted-charts starts a label at the bar's left edge, so a label wider
+  // than its bar sat ~half a label to the right of it. Shift it back.
+  const labelShift = (barWidth - LABEL_WIDTH) / 2;
 
   const { barData, periodTotal, weekLabels } = useMemo(() => {
+    // The last `numWeeks` weeks, ending with this one. (It used to centre on
+    // today, so half the chart was empty future weeks.)
     const nowSunday = weekSunday(new Date());
-    const leftWeeks = Math.floor((numWeeks - 1) / 2);
+    const leftWeeks = numWeeks - 1;
 
     const weeks: Date[] = [];
     for (let i = -leftWeeks; i < numWeeks - leftWeeks; i++) {
@@ -92,7 +102,7 @@ export default function WorkoutChart({ sessions }: Props) {
       weekMap.set(key, (weekMap.get(key) ?? 0) + val);
     }
 
-    const labelEvery = 2;
+    const labelEvery = 3;
 
     // Full human-readable label for every week (used in header when bar is selected)
     const weekLabels: string[] = [];
@@ -105,7 +115,11 @@ export default function WorkoutChart({ sessions }: Props) {
       weekLabels.push(shortLabel(weekDate));
       return {
         value,
-        label: i % labelEvery === 0 ? shortLabel(weekDate) : "",
+        // Count back from the current week, so this week is always labelled.
+        label: (weeks.length - 1 - i) % labelEvery === 0 ? shortLabel(weekDate) : "",
+        // Labels default to the bar's width, which truncated them to "Au…".
+        labelWidth: LABEL_WIDTH,
+        labelTextStyle: { color: colors.textSecondary, fontSize: 9, transform: [{ translateX: labelShift }] },
         // frontColor updated after selectedIndex is known — patched below
         frontColor: value > 0 ? colors.primary : colors.surfaceSecondary,
         onPress: () => {
@@ -115,7 +129,7 @@ export default function WorkoutChart({ sessions }: Props) {
     });
 
     return { barData, periodTotal: total, weekLabels };
-  }, [sessions, metric, range, numWeeks, colors, toDisplay]);
+  }, [sessions, metric, numWeeks, colors, toDisplay, labelShift]);
 
   // Apply selection-aware colors without rerunning the full memo
   const coloredBarData = barData.map((item, i) => {
@@ -130,7 +144,7 @@ export default function WorkoutChart({ sessions }: Props) {
     return { ...item, frontColor };
   });
 
-  const maxValue = Math.max(...barData.map((d) => d.value), 1);
+  const maxValue = niceAxisMax(Math.max(...barData.map((d) => d.value), 0));
 
   const metricLabels: Record<Metric, string> = {
     reps: "Reps",
@@ -150,7 +164,7 @@ export default function WorkoutChart({ sessions }: Props) {
   const displayLabel =
     selectedIndex !== null
       ? `week of ${weekLabels[selectedIndex]}`
-      : "this period";
+      : "last 3 months";
 
   return (
     <View style={[styles.card, { backgroundColor: colors.surface }]}>
@@ -194,7 +208,8 @@ export default function WorkoutChart({ sessions }: Props) {
         width={chartBodyWidth}
         barWidth={barWidth}
         spacing={barSpacing}
-        initialSpacing={0}
+        initialSpacing={edgeGutter}
+        endSpacing={edgeGutter}
         roundedTop
         maxValue={maxValue}
         noOfSections={4}

@@ -1,23 +1,40 @@
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 
-// Notification shown when received in foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+/** Rest notifications are phone-only: expo-notifications can't schedule on web. */
+export const NOTIFICATIONS_SUPPORTED = Platform.OS !== "web";
 
-const REST_NOTIF_ID_KEY = "_restTimerNotifId";
+// True while the workout screen (with its rest banner and haptic) is showing.
+let restUiVisible = false;
+/** The workout screen reports focus here, so the system alert isn't doubled up. */
+export function setRestUiVisible(visible: boolean) {
+  restUiVisible = visible;
+}
+
+// The rest notification is for when the workout screen isn't in view. With
+// it open, the in-app banner and haptic already signal the end of rest, so
+// don't add a system banner and sound on top; just keep it in the list.
+// (Minimized to Home or Records, the system banner is the only cue.)
+if (NOTIFICATIONS_SUPPORTED) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => {
+      const foreground = AppState.currentState === "active" && restUiVisible;
+      return {
+        shouldShowAlert: !foreground,
+        shouldPlaySound: !foreground,
+        shouldSetBadge: false,
+        shouldShowBanner: !foreground,
+        shouldShowList: true,
+      };
+    },
+  });
+}
+
 let scheduledNotifId: string | null = null;
 
 export async function requestNotificationPermissions(): Promise<boolean> {
-  if (!Device.isDevice) return false;
+  if (!NOTIFICATIONS_SUPPORTED || !Device.isDevice) return false;
 
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync("rest-timer", {
@@ -35,28 +52,61 @@ export async function requestNotificationPermissions(): Promise<boolean> {
   return status === "granted";
 }
 
-export async function scheduleRestDoneNotification(seconds: number): Promise<void> {
-  // Cancel any previous rest timer notification
-  await cancelRestDoneNotification();
+// Every start/adjust/skip bumps the generation; a schedule that finishes
+// after a newer call (two quick +30s taps, or Skip while the settings read
+// was pending) is dropped instead of firing early. Calls run one at a time.
+let generation = 0;
+let chain: Promise<unknown> = Promise.resolve();
+const serial = (job: () => Promise<void>) => {
+  const run = chain.then(job, job);
+  chain = run.catch(() => {});
+  return run;
+};
 
-  const id = await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "Rest complete",
-      body: "Time to lift! Your rest period is over.",
-      sound: "default",
-    },
-    trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds,
-    },
-  });
-
-  scheduledNotifId = id;
+/** Claim the next rest notification; pass the token to schedule it later. */
+export function beginRestNotification(): number {
+  return ++generation;
 }
 
-export async function cancelRestDoneNotification(): Promise<void> {
+export function scheduleRestDoneNotification(seconds: number, token: number = beginRestNotification()): Promise<void> {
+  return serial(async () => {
+    if (token !== generation || !NOTIFICATIONS_SUPPORTED) return;
+    await cancelScheduled();
+    if (!(seconds >= 1)) return;
+    const id = await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Rest complete",
+        body: "Time to lift! Your rest period is over.",
+        sound: "default",
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        seconds: Math.round(seconds),
+        // Use the high-importance channel created in requestNotificationPermissions
+        // so the alert actually pops up on Android instead of landing silently.
+        ...(Platform.OS === "android" ? { channelId: "rest-timer" } : {}),
+      },
+    });
+    if (token !== generation) {
+      // Superseded while scheduling.
+      await Notifications.cancelScheduledNotificationAsync(id).catch(() => {});
+      return;
+    }
+    scheduledNotifId = id;
+    // Best-effort: a refused permission or a missing native module must not
+    // surface as an unhandled rejection on every completed set.
+  }).catch(() => {});
+}
+
+async function cancelScheduled() {
   if (scheduledNotifId) {
-    await Notifications.cancelScheduledNotificationAsync(scheduledNotifId).catch(() => {});
+    const id = scheduledNotifId;
     scheduledNotifId = null;
+    await Notifications.cancelScheduledNotificationAsync(id).catch(() => {});
   }
+}
+
+export function cancelRestDoneNotification(): Promise<void> {
+  generation++;
+  return serial(cancelScheduled);
 }

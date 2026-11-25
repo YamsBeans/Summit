@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from "react-native";
 import { useRouter } from "expo-router";
-import * as Linking from "expo-linking";
+import { consumeIncomingUrl, latestIncomingUrlConsumed, useIncomingUrl } from "@/utils/incomingUrl";
 import { db } from "@/backend/db";
 import { useTheme } from "@/theme/ThemeContext";
 
@@ -11,7 +11,7 @@ import { useTheme } from "@/theme/ThemeContext";
 export default function ResetPassword() {
   const { colors } = useTheme();
   const router = useRouter();
-  const nativeUrl = Linking.useURL();
+  const nativeUrl = useIncomingUrl();
   const handledUrl = useRef<string | null>(null);
 
   const [status, setStatus] = useState<"verifying" | "ready" | "invalid" | "done">("verifying");
@@ -22,14 +22,25 @@ export default function ResetPassword() {
 
   useEffect(() => {
     const url = Platform.OS === "web" && typeof window !== "undefined" ? window.location.href : nativeUrl;
-    if (!url || handledUrl.current === url) return;
+    if (!url) {
+      // The same link tapped again while the app is running: its one-time
+      // token is already spent, so say so now instead of spinning.
+      if (Platform.OS !== "web" && handledUrl.current === null && latestIncomingUrlConsumed()) {
+        setError("This reset link has already been used. Request a new one.");
+        setStatus("invalid");
+      }
+      return;
+    }
+    if (handledUrl.current === url) return;
     handledUrl.current = url;
+    consumeIncomingUrl(url);
 
     db.recoverSessionFromUrl(url).then(({ error: linkError }) => {
       if (linkError) {
         setError(linkError);
         setStatus("invalid");
       } else {
+        setError(null);
         setStatus("ready");
         // Drop the one-time tokens from the browser's address bar.
         if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -38,6 +49,19 @@ export default function ResetPassword() {
       }
     });
   }, [nativeUrl]);
+
+  // Never leave the spinner up with no way out when no link arrives: fall
+  // back to the "invalid" state with Back to Sign In. Not while a link is
+  // being checked, so a slow success can't land after the user gave up.
+  useEffect(() => {
+    if (status !== "verifying" || handledUrl.current !== null) return;
+    const t = setTimeout(() => {
+      if (handledUrl.current !== null) return; // a link arrived meanwhile
+      setError("Couldn't open the reset link. Request a new one, or try the link again.");
+      setStatus("invalid");
+    }, 15000);
+    return () => clearTimeout(t);
+  }, [status]);
 
   const handleSave = async () => {
     setError(null);
