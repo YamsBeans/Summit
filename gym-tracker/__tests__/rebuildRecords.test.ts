@@ -23,7 +23,13 @@ const mockLocal = {
   getExerciseHistory: jest.fn(async () => ({ data: [], error: null })),
 };
 
-jest.mock("../backend/supabaseClient", () => ({ supabase: { auth: {}, from: (t: string) => mockFrom(t) } }));
+const mockAuth = { user: "u1" as string | null };
+jest.mock("../backend/supabaseClient", () => ({
+  supabase: {
+    auth: { getSession: async () => ({ data: { session: mockAuth.user ? { user: { id: mockAuth.user } } : null } }) },
+    from: (t: string) => mockFrom(t),
+  },
+}));
 jest.mock("../backend/networkStatus", () => ({ networkStatus: mockNet }));
 jest.mock("../backend/localDb", () => ({ localDb: mockLocal, isLocalId: () => false, loadLocalDb: async () => {} }));
 jest.mock("@react-native-async-storage/async-storage", () => ({
@@ -77,6 +83,36 @@ describe("online", () => {
     mockUpserts.length = 0;
     await db.rebuildStrengthRecords("u1", []);
     expect(mockUpserts).toEqual([]);
+  });
+
+  it("waits when another account is signed in now, keeping the list to fix", async () => {
+    mockAuth.user = "u2";
+    try {
+      await db.rebuildStrengthRecords("u1", ["deadlift"]);
+    } finally {
+      mockAuth.user = "u1";
+    }
+    expect(mockUpserts).toEqual([]);
+    mockResults.personal_records = { data: [{ exercise_id: "deadlift", pr_type: "strength", max_weight: 900, max_volume: 900 }], error: null };
+    mockResults.session_exercises = { data: [{ session_exercise_id: 9, workout_sessions: { session_id: 3, session_date: "2026-11-01" } }], error: null };
+    mockResults.session_exercise_sets = { data: [{ session_exercise_id: 9, weight: 405, reps: 1, completed: true }], error: null };
+    await db.rebuildStrengthRecords("u1", []);
+    expect(mockUpserts.find((u) => u.table === "personal_records")?.values).toMatchObject({ exercise_id: "deadlift", max_weight: 405 });
+  });
+
+  it("isn't blocked by another account's workout waiting to upload", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const queue = require("../backend/offlineQueue");
+    await queue.enqueuePendingSession({
+      local_session_id: 1e12 + 9,
+      session: { routine_id: null, session_name: "A's", session_date: "2026-11-09", start_time: "18:00:00", end_time: "19:00:00", notes: null, user_id: "someone-else" },
+      exercises: [], sets: [],
+    });
+    mockResults.personal_records = { data: [{ exercise_id: "bench", pr_type: "strength", max_weight: 2250, max_volume: 11250 }], error: null };
+    mockResults.session_exercises = { data: [{ session_exercise_id: 7, workout_sessions: { session_id: 1, session_date: "2026-11-01" } }], error: null };
+    mockResults.session_exercise_sets = { data: [{ session_exercise_id: 7, weight: 225, reps: 5, completed: true }], error: null };
+    await db.rebuildStrengthRecords("u1", ["bench"]);
+    expect(mockUpserts.find((u) => u.table === "personal_records")?.values).toMatchObject({ max_weight: 225 });
   });
 
   it("never writes when the history read fails", async () => {

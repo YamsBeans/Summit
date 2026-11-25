@@ -223,3 +223,16 @@ describe("useSyncManager — retry while changes are still waiting", () => {
     expect(retryDelay(10)).toBe(300_000);
   });
 });
+
+describe("useSyncManager — sign-out mid-sync", () => {
+  it("clears the Syncing banner when the account signs out during a sync", async () => {
+    mockGetPendingCount.mockResolvedValue(1);
+    let finish: (v: any) => void = () => {};
+    mockSync.mockReturnValue(new Promise((r) => { finish = r; }));
+    const { result, rerender } = renderHook(({ id }: { id: string | null }) => useSyncManager(id), { initialProps: { id: "u1" as string | null } });
+    await waitFor(() => expect(result.current.isSyncing).toBe(true));
+    rerender({ id: null });
+    await act(async () => { finish({ synced: 0, errors: 0 }); });
+    expect(result.current.isSyncing).toBe(false);
+  });
+});

@@ -23,11 +23,25 @@ export type OutboxOp = {
   values?: Record<string, any>;
   /** For upserts: the unique columns to match on. */
   onConflict?: string;
-  /** Server-side failures so far (a 5xx, an expired login); dropped after MAX_ATTEMPTS. */
+  /** Server-side failures so far (a 5xx, an expired login). */
   attempts?: number;
+  /** When the first of those failures happened (ms since epoch). */
+  firstFailedAt?: number;
 };
 
+// A change that keeps failing on the server's side is given up on only after
+// MAX_ATTEMPTS failures spread over at least GIVE_UP_AFTER_MS. Counting tries
+// alone dropped queued sets after a ~8 minute outage, since the sync retries
+// on a 30 s → 5 min backoff and every logged set also starts a flush.
 const MAX_ATTEMPTS = 5;
+const GIVE_UP_AFTER_MS = 24 * 60 * 60_000;
+
+/** True when a server-side failure (this one included) should end the change. */
+export function shouldGiveUp(op: Pick<OutboxOp, "attempts" | "firstFailedAt">, now = Date.now()): boolean {
+  const attempts = (op.attempts ?? 0) + 1;
+  const since = op.firstFailedAt ?? now;
+  return attempts >= MAX_ATTEMPTS && now - since >= GIVE_UP_AFTER_MS;
+}
 
 export const PRIMARY_KEY: Record<OutboxTable, string> = {
   workout_sessions: "session_id",
@@ -168,6 +182,9 @@ let flushing: Promise<{ done: number; dropped: number; remaining: number }> | nu
 // The change being uploaded right now (outside the lock). parkOps leaves it
 // in the queue, or it would be parked and uploaded a second time later.
 let inFlight: OutboxOp | null = null;
+// Whoever signed out while `inFlight` was uploading. If the upload doesn't
+// go through, it's theirs to retry, not the next account's.
+let inFlightOwner: string | null = null;
 let flushAgain = false;
 
 /**
@@ -195,24 +212,40 @@ export function flushOutbox(
         const ready = translateOp(op, idMap);
         // A change to a row whose creation was refused can never apply.
         inFlight = op;
+        inFlightOwner = null;
         let result: ExecuteResult;
         try {
           result = ready ? await execute(ready) : { ok: false, retry: false };
-        } finally {
+        } catch (e) {
           inFlight = null;
+          inFlightOwner = null;
+          throw e;
         }
-        if (!result.ok && result.retry) break;
-        if (!result.ok && result.transient && (op.attempts ?? 0) + 1 < MAX_ATTEMPTS) {
-          await withLock(async () => {
-            op.attempts = (op.attempts ?? 0) + 1;
-            await persist();
-          });
-          break;
-        }
-        if (!result.ok) onDrop?.(op, result.error);
+        const transient = !result.ok && !result.retry && result.transient === true;
+        const keep = !result.ok && (result.retry || (transient && !shouldGiveUp(op)));
+        if (!result.ok && !keep) onDrop?.(op, result.error);
+        // `inFlight` stays set until here, inside the lock, so a sign-out
+        // can't park this op in the gap and upload it a second time.
         await withLock(async () => {
-          // Sign-out may have parked the queue while this op was in flight.
-          if (ops[0] === op) ops.shift();
+          const owner = inFlightOwner;
+          inFlight = null;
+          inFlightOwner = null;
+          // By identity: a sign-in during the upload may have put parked
+          // changes in front of it, and a sign-out may have parked the rest.
+          const at = ops.indexOf(op);
+          if (keep) {
+            if (transient) {
+              op.attempts = (op.attempts ?? 0) + 1;
+              op.firstFailedAt = op.firstFailedAt ?? Date.now();
+            }
+            // Its account signed out mid-upload: set it aside with the rest
+            // of that account's changes instead of replaying it for whoever
+            // is signed in now.
+            if (owner != null && at >= 0 && (await addToParkedFront(owner, op))) ops.splice(at, 1);
+            await persist();
+            return;
+          }
+          if (at >= 0) ops.splice(at, 1);
           if (result.ok) {
             done++;
             if (op.tempId != null && result.id != null) idMap[String(op.tempId)] = result.id;
@@ -221,6 +254,7 @@ export function flushOutbox(
           }
           await persist();
         });
+        if (keep) break;
       }
     } while (flushAgain);
     return { done, dropped, remaining: ops.length };
@@ -236,10 +270,24 @@ export function flushOutbox(
 
 const PARKED_PREFIX = "@gym_tracker_outbox_parked:";
 
+/** Put one change at the front of `owner`'s parked list. Call inside the lock. */
+async function addToParkedFront(owner: string, op: OutboxOp): Promise<boolean> {
+  const key = PARKED_PREFIX + owner;
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    const parked: OutboxOp[] = raw ? JSON.parse(raw) : [];
+    await AsyncStorage.setItem(key, JSON.stringify([op, ...parked]));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Set aside every queued change for `owner` (on sign-out). Returns how many. */
 export function parkOps(owner: string): Promise<number> {
   return withLock(async () => {
     await ensureLoaded();
+    if (inFlight && inFlightOwner == null && ops.includes(inFlight)) inFlightOwner = owner;
     const toPark = ops.filter((o) => o !== inFlight);
     if (toPark.length === 0) return 0;
     const key = PARKED_PREFIX + owner;
@@ -275,14 +323,21 @@ export function unparkOps(owner: string): Promise<number> {
       return 0;
     }
     if (parked.length === 0) return 0;
-    ops = [...parked, ...ops];
+    const before = ops;
+    // This account's change still uploading came before everything it
+    // parked, so it stays first, and is now this account's again.
+    const ownInFlight = inFlight != null && inFlightOwner === owner && ops.includes(inFlight);
+    ops = ownInFlight
+      ? [inFlight!, ...parked, ...ops.filter((o) => o !== inFlight)]
+      : [...parked, ...ops];
     // Drop the parked copy first, so a failure can't put them back twice.
     try {
       await AsyncStorage.removeItem(key);
     } catch {
-      ops = ops.slice(parked.length);
+      ops = before;
       return 0;
     }
+    if (ownInFlight) inFlightOwner = null;
     await persist();
     return parked.length;
   });
@@ -297,6 +352,7 @@ export function __resetOutboxForTests() {
   flushing = null;
   flushAgain = false;
   inFlight = null;
+  inFlightOwner = null;
   lastTemp = 0;
 }
 

@@ -135,7 +135,10 @@ export async function initLocalStore(): Promise<void> {
     }
   }
   await removeLocalSessions(safe);
-  await forgetSyncedLocalSessions(safe.filter((id) => synced[String(id)] != null));
+  // Keep the local→server mapping while the workout is still queued: it's
+  // how the next sync knows the upload already happened (the app closed
+  // before the queue was trimmed). Forgetting it here uploaded it twice.
+  await forgetSyncedLocalSessions(safe.filter((id) => synced[String(id)] != null && !inQueue.has(id)));
 }
 
 // A change to a finished offline workout (photo, notes, name). The local
@@ -157,6 +160,7 @@ async function updateFinishedLocalSession(sessionId: number, updates: Record<str
 // gets one more run afterwards, so a workout queued mid-sync isn't skipped.
 let syncInFlight: Promise<{ synced: number; errors: number }> | null = null;
 let syncAgain = false;
+let syncUser: string | null = null;
 
 const OFFLINE_AUTH_ERROR = { message: "You're offline. Connect to the internet to sign in or create an account." };
 
@@ -1646,7 +1650,15 @@ export const db = {
     // history and writing the record; straight from Supabase (never the read
     // cache) and abandoned on any error, since this may lower a record.
     await inOutboxOrder(async () => {
-      if (!networkStatus.isConnected || (await hasPendingOps()) || (await getPendingCount()) > 0) return;
+      // Only this account's queued workouts matter: another account's wait
+      // for it to sign in here again, which may be never, and blocked every
+      // PR fix for whoever is signed in now.
+      if (!networkStatus.isConnected || (await hasPendingOps())) return;
+      if ((await getPendingQueue()).some((p) => !p.session.user_id || p.session.user_id === userId)) return;
+      // Another account signed in since this was asked for: row-level
+      // security would hide this account's rows, and the empty reads would
+      // count as done and drop its list of records to fix.
+      if ((await sessionUser())?.id !== userId) return;
       const { data: records, error: recErr } = await supabase
         .from("personal_records").select("*").eq("user_id", userId).eq("pr_type", "strength");
       if (recErr) { logError("rebuildStrengthRecords.read", recErr); return; }
@@ -1795,9 +1807,15 @@ export const db = {
   // Sync offline-queued sessions to Supabase when reconnected
   syncPendingSessions: (userId: string): Promise<{ synced: number; errors: number }> => {
     if (syncInFlight) {
+      // A different account signed in while a sync runs: its workouts get a
+      // run of their own afterwards, instead of joining the old account's.
+      if (syncUser !== userId) {
+        return syncInFlight.catch(() => undefined).then(() => db.syncPendingSessions(userId));
+      }
       syncAgain = true;
       return syncInFlight;
     }
+    syncUser = userId;
     syncInFlight = (async () => {
       const total = { synced: 0, errors: 0 };
       do {

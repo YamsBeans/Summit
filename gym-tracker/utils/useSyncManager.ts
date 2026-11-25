@@ -98,6 +98,10 @@ export function useSyncManager(userId: string | null) {
 
     return () => {
       cancelled = true;
+      // A sync still running for this account no longer updates the banner
+      // (the finally above is skipped), so clear it here; otherwise signing
+      // out mid-sync left "Syncing…" up until the app restarted.
+      setIsSyncing(false);
       if (retryTimer) clearTimeout(retryTimer);
       unsubscribe?.();
       appSub?.remove();

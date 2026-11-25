@@ -236,15 +236,32 @@ it("shows offline edits on the edit screen's batch read", async () => {
   expect(sets.map((s: any) => s.reps)).toEqual([12, 10]);
 });
 
-it("retries server trouble a few times before giving up on a change", async () => {
+it("keeps retrying server trouble for a day before giving up on a change", async () => {
   await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 1, values: {} });
   const dropped: any[] = [];
   const exec = async () => ({ ok: false, retry: false, transient: true });
-  for (let i = 0; i < 4; i++) {
-    expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(1);
+  const start = Date.now();
+  const now = jest.spyOn(Date, "now").mockReturnValue(start);
+  try {
+    // An outage of a few minutes with the 30 s → 5 min backoff used to use
+    // up the five tries and lose the change.
+    for (let i = 0; i < 8; i++) {
+      expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(1);
+    }
+    now.mockReturnValue(start + 25 * 60 * 60_000);
+    expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(0);
+    expect(dropped).toHaveLength(1);
+  } finally {
+    now.mockRestore();
   }
-  expect((await outbox.flushOutbox(exec, (op: any) => dropped.push(op))).remaining).toBe(0);
-  expect(dropped).toHaveLength(1);
+});
+
+it("gives up only after enough tries spread over a day", () => {
+  const t0 = 1_000_000;
+  const day = 24 * 60 * 60_000;
+  expect(outbox.shouldGiveUp({ attempts: 4, firstFailedAt: t0 }, t0 + 60_000)).toBe(false);
+  expect(outbox.shouldGiveUp({ attempts: 1, firstFailedAt: t0 }, t0 + 2 * day)).toBe(false);
+  expect(outbox.shouldGiveUp({ attempts: 4, firstFailedAt: t0 }, t0 + day)).toBe(true);
 });
 
 it("keeps a PR set offline and uploads it with the rest", async () => {
@@ -313,6 +330,46 @@ describe("changes queued before a sign-out", () => {
     await outbox.unparkOps("u1");
     await outbox.flushOutbox(async (op: any) => { sent.push(op.id); return { ok: true }; });
     expect(sent).toEqual([1, 2]);
+  });
+
+  it("sets aside a change whose upload failed after its account signed out", async () => {
+    await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 1, values: {} });
+    let release: () => void = () => {};
+    const flush = outbox.flushOutbox(async () => {
+      await new Promise<void>((r) => { release = r; });
+      return { ok: false, retry: true };
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    await outbox.parkOps("u1");
+    release();
+    await flush;
+    // Not left for the next account to replay under its login…
+    expect(await outbox.pendingOpCount()).toBe(0);
+    // …but back for u1.
+    expect(await outbox.unparkOps("u1")).toBe(1);
+    const seen: number[] = [];
+    await outbox.flushOutbox(async (op: any) => { seen.push(op.id); return { ok: true }; });
+    expect(seen).toEqual([1]);
+  });
+
+  it("doesn't run an upload twice when its account signs back in mid-upload", async () => {
+    await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 1, values: {} });
+    await outbox.enqueueOp({ kind: "update", table: "session_exercise_sets", id: 2, values: {} });
+    let release: () => void = () => {};
+    const sent: number[] = [];
+    const flush = outbox.flushOutbox(async (op: any) => {
+      sent.push(op.id);
+      if (op.id === 1) await new Promise<void>((r) => { release = r; });
+      return { ok: true };
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    await outbox.parkOps("u1");
+    await outbox.unparkOps("u1");
+    release();
+    await flush;
+    await outbox.flushOutbox(async (op: any) => { sent.push(op.id); return { ok: true }; });
+    expect(sent).toEqual([1, 2]);
+    expect(await outbox.pendingOpCount()).toBe(0);
   });
 
   it("puts parked changes ahead of newer ones, once", async () => {
