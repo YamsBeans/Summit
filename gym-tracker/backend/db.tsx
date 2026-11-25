@@ -22,7 +22,7 @@ import { buildExerciseIdMap, remapSetsForInsert } from "./syncMapping";
 import { bestOfRecords, strengthRecordDateFromHistory, strengthRecordFromHistory } from "@/utils/prDetection";
 import { matchRoutineExercises, matchRoutineSets } from "@/utils/routineMatch";
 import { fetchAllPages, fetchInChunks } from "./paging";
-import { groupInstances } from "@/utils/previousInstances";
+import { groupInstances, instanceNotes } from "@/utils/previousInstances";
 import { cachedRead, clearReadCache, isNetworkError, readCache, writeCache, writeCacheMany } from "./readCache";
 import {
   OutboxOp,
@@ -1545,11 +1545,11 @@ export const db = {
   // the exercise in that workout apart, in order (heavy + back-off squats).
   getPreviousSessionSets: async (
     exerciseId: string, userId: string, excludeSessionId: number,
-  ): Promise<{ data: any[]; instances: any[][]; error: any }> => {
+  ): Promise<{ data: any[]; instances: any[][]; notes: (string | null)[]; error: any }> => {
     if (shouldUseSupabase()) {
       const { data: rows, error } = await supabase
         .from("session_exercises")
-        .select("session_exercise_id, session_id, exercise_order, workout_sessions!inner(session_id, user_id, end_time)")
+        .select("session_exercise_id, session_id, exercise_order, notes, workout_sessions!inner(session_id, user_id, end_time)")
         .eq("exercise_id", exerciseId)
         .eq("workout_sessions.user_id", userId)
         .not("workout_sessions.end_time", "is", null)
@@ -1558,8 +1558,8 @@ export const db = {
         // Ties (same created_at) resolve the same way every time.
         .order("session_id", { ascending: false })
         .limit(20);
-      if (error) return { data: [], instances: [], error };
-      if (!rows || rows.length === 0) return { data: [], instances: [], error: null };
+      if (error) return { data: [], instances: [], notes: [], error };
+      if (!rows || rows.length === 0) return { data: [], instances: [], notes: [], error: null };
       const latest = rows.filter((r: any) => r.session_id === rows[0].session_id);
       const { data: sets, error: setsErr } = await supabase
         .from("session_exercise_sets")
@@ -1568,9 +1568,9 @@ export const db = {
         // Sets left unticked were never done; don't offer them as last time's numbers.
         .or("completed.is.null,completed.eq.true")
         .order("set_number");
-      if (setsErr) return { data: [], instances: [], error: setsErr };
+      if (setsErr) return { data: [], instances: [], notes: [], error: setsErr };
       const instances = groupInstances(latest, sets ?? []);
-      return { data: instances[0] ?? [], instances, error: null };
+      return { data: instances[0] ?? [], instances, notes: instanceNotes(latest), error: null };
     }
     return localDb.getPreviousSessionSets(exerciseId, userId, excludeSessionId);
   },

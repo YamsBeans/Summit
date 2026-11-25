@@ -1,5 +1,6 @@
 import {
-  groupInstances, instanceNumbers, lastTimeForSummary, previousBySessionExercise, previousForInstance,
+  groupInstances, instanceNotes, instanceNumbers, lastTimeForSummary, previousBySessionExercise, previousForInstance,
+  previousNoteBySessionExercise,
 } from "../utils/previousInstances";
 
 const heavy = [{ session_exercise_id: 10, set_number: 1, weight: 275 }];
@@ -49,5 +50,25 @@ describe("lastTimeForSummary", () => {
     expect(out.bench).toBe(heavy);
     // An instance with nothing completed doesn't make it ambiguous.
     expect(out.row).toBe(backoff);
+  });
+});
+
+describe("last time's notes", () => {
+  const today = [
+    { session_exercise_id: 1, exercise_id: "squat" },
+    { session_exercise_id: 2, exercise_id: "squat" },
+    { session_exercise_id: 3, exercise_id: "bench" },
+  ];
+
+  it("pairs notes like sets and skips blank ones", () => {
+    const out = previousNoteBySessionExercise(today, { squat: ["Belt, pins at 4", null], bench: ["  "] });
+    expect(out).toEqual({ "1": "Belt, pins at 4" });
+  });
+
+  it("keeps notes in instance order", () => {
+    expect(instanceNotes([
+      { session_exercise_id: 11, exercise_order: 2, notes: "back-offs" },
+      { session_exercise_id: 10, exercise_order: 1, notes: null },
+    ])).toEqual([null, "back-offs"]);
   });
 });

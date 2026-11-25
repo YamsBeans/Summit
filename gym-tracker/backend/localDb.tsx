@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { groupInstances } from "@/utils/previousInstances";
+import { groupInstances, instanceNotes } from "@/utils/previousInstances";
 import type {
   User,
   Routine,
@@ -508,12 +508,12 @@ const rawLocalDb = {
       );
       if (prevExs.length > 0) break;
     }
-    if (prevExs.length === 0) return { data: [] as any[], instances: [] as any[][], error: null };
+    if (prevExs.length === 0) return { data: [] as any[], instances: [] as any[][], notes: [] as (string | null)[], error: null };
     const ids = new Set(prevExs.map((e) => e.session_exercise_id));
     // Sets left unticked were never done; don't offer them as last time's numbers.
     const sets = localSessionExerciseSets.filter((s) => ids.has(s.session_exercise_id) && s.completed !== false);
     const instances = groupInstances(prevExs, sets);
-    return { data: instances[0] ?? [], instances, error: null };
+    return { data: instances[0] ?? [], instances, notes: instanceNotes(prevExs), error: null };
   },
 
   // Personal Records

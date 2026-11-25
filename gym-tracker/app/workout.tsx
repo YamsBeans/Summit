@@ -37,7 +37,7 @@ import CardioSetRow from "@/components/CardioSetRow";
 import StrengthSetRow from "@/components/StrengthSetRow";
 import ExerciseNote from "@/components/ExerciseNote";
 import ElapsedTime from "@/components/ElapsedTime";
-import { lastTimeForSummary, previousBySessionExercise, previousForInstance } from "@/utils/previousInstances";
+import { lastTimeForSummary, previousBySessionExercise, previousForInstance, previousNoteBySessionExercise } from "@/utils/previousInstances";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
 
@@ -130,6 +130,8 @@ export default function WorkoutScreen() {
   // Last workout's sets per exercise_id, one list per instance of the
   // exercise in that workout (heavy + back-off squats stay apart).
   const [prevInstances, setPrevInstances] = useState<Record<string, any[][]>>({});
+  // Last workout's exercise notes ("seat 4"), one per instance like the sets.
+  const [prevNotes, setPrevNotes] = useState<Record<string, (string | null)[]>>({});
   // Records as they stood before this workout, for live PR badges.
   const [records, setRecords] = useState<any[] | null>(null);
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
@@ -199,6 +201,10 @@ export default function WorkoutScreen() {
   const prevSets = useMemo(
     () => previousBySessionExercise(exercises, prevInstances),
     [exercises, prevInstances],
+  );
+  const prevNoteFor = useMemo(
+    () => previousNoteBySessionExercise(exercises, prevNotes),
+    [exercises, prevNotes],
   );
 
   // "Next: Bench Press · Set 2 · 135 lbs × 8" under the rest timer (like
@@ -331,10 +337,13 @@ export default function WorkoutScreen() {
     setExerciseSets(setsMap);
 
     const prevMap: Record<string, any[][]> = {};
+    const noteMap: Record<string, (string | null)[]> = {};
     exs.forEach((ex: any, i: number) => {
       prevMap[ex.exercise_id] = (prevResults[i] as any)?.instances ?? [];
+      noteMap[ex.exercise_id] = (prevResults[i] as any)?.notes ?? [];
     });
     setPrevInstances(prevMap);
+    setPrevNotes(noteMap);
 
     setLoading(false);
   };
@@ -348,8 +357,9 @@ export default function WorkoutScreen() {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
       if (!userId) return [];
-      const { instances } = await db.getPreviousSessionSets(exerciseId, userId, session.session_id);
+      const { instances, notes } = await db.getPreviousSessionSets(exerciseId, userId, session.session_id);
       setPrevInstances((prev) => ({ ...prev, [exerciseId]: instances ?? [] }));
+      setPrevNotes((prev) => ({ ...prev, [exerciseId]: notes ?? [] }));
       return instances ?? [];
     } catch (e) { logError("workout.loadPrevSetsFor", e); return []; }
   }, [session]);
@@ -1048,6 +1058,25 @@ export default function WorkoutScreen() {
                 </Pressable>
               </View>
 
+              {/* Last time's note ("seat 4", like Strong/Hevy carry notes
+                  forward); tap to use it for today too. */}
+              {!ex.notes && noteFocus[ex.session_exercise_id] == null && prevNoteFor[ex.session_exercise_id] && (
+                <Pressable
+                  onPress={() => saveExerciseNote(ex.session_exercise_id, prevNoteFor[ex.session_exercise_id]!)}
+                  style={styles.prevNote}
+                  hitSlop={4}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Last time's note: ${prevNoteFor[ex.session_exercise_id]}. Use it today`}
+                >
+                  <Ionicons name="document-text-outline" size={13} color={colors.textTertiary} style={{ marginTop: 1 }} />
+                  <Text numberOfLines={2} style={[styles.prevNoteText, { color: colors.textSecondary }]}>
+                    <Text style={{ fontWeight: "600" }}>Last time: </Text>
+                    {prevNoteFor[ex.session_exercise_id]}
+                  </Text>
+                  <Text style={[styles.prevNoteUse, { color: colors.primary }]}>Use</Text>
+                </Pressable>
+              )}
+
               {(ex.notes || noteFocus[ex.session_exercise_id] != null) && (
                 <ExerciseNote
                   initial={ex.notes ?? ""}
@@ -1446,6 +1475,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, marginRight: 10,
   },
   restPillText: { fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  prevNote: { flexDirection: "row", alignItems: "flex-start", gap: 6, marginHorizontal: 16, marginBottom: 8 },
+  prevNoteText: { flex: 1, fontSize: 12, fontStyle: "italic", lineHeight: 16 },
+  prevNoteUse: { fontSize: 12, fontWeight: "700", lineHeight: 16 },
   restGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, width: "100%", marginBottom: 4 },
   restChoice: {
     flexBasis: "18%", flexGrow: 1, alignItems: "center", paddingVertical: 12,

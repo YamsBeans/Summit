@@ -52,7 +52,7 @@ it("keeps each instance of an exercise apart, in workout order", async () => {
   const blocks: [number, number][] = [[2, 185], [1, 275]];
   for (const [order, weight] of blocks) {
     const { data: ex } = await localDb.insertSessionExercise({
-      session_id: session!.session_id, exercise_id: "squat", exercise_name: "Squat", exercise_order: order, notes: null,
+      session_id: session!.session_id, exercise_id: "squat", exercise_name: "Squat", exercise_order: order, notes: order === 1 ? "pins at 4" : null,
     });
     await localDb.insertSessionExerciseSet({
       session_exercise_id: ex!.session_exercise_id, set_number: 1, weight, reps: 5, is_warmup: false, completed: true,
@@ -64,6 +64,7 @@ it("keeps each instance of an exercise apart, in workout order", async () => {
   const res = await localDb.getPreviousSessionSets("squat", userId, current!.session_id);
   expect(res.instances.map((i: any[]) => i.map((s) => s.weight))).toEqual([[275], [185]]);
   expect(res.data.map((s: any) => s.weight)).toEqual([275]);
+  expect(res.notes).toEqual(["pins at 4", null]);
 });
 
 afterEach(() => jest.useRealTimers());

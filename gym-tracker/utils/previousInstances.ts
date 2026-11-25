@@ -9,11 +9,14 @@
 type InstanceRow = { session_exercise_id: number | string; exercise_order?: number | null };
 type PrevSet = { session_exercise_id: number | string; set_number?: number | null };
 
+function sortInstances<R extends InstanceRow>(rows: readonly R[]): R[] {
+  return [...rows].sort((a, b) =>
+    (a.exercise_order ?? 0) - (b.exercise_order ?? 0) || Number(a.session_exercise_id) - Number(b.session_exercise_id));
+}
+
 /** Sets grouped per session-exercise, ordered by exercise order, each sorted by set number. */
 export function groupInstances<S extends PrevSet>(rows: readonly InstanceRow[], sets: readonly S[]): S[][] {
-  const ordered = [...rows].sort((a, b) =>
-    (a.exercise_order ?? 0) - (b.exercise_order ?? 0) || Number(a.session_exercise_id) - Number(b.session_exercise_id));
-  return ordered.map((r) =>
+  return sortInstances(rows).map((r) =>
     sets
       .filter((s) => s.session_exercise_id === r.session_exercise_id)
       .sort((a, b) => (a.set_number ?? 0) - (b.set_number ?? 0)));
@@ -24,8 +27,27 @@ export function groupInstances<S extends PrevSet>(rows: readonly InstanceRow[], 
  * the last one is reused (one squat block last time still hints both today).
  */
 export function previousForInstance<S>(instances: readonly S[][] | null | undefined, n: number): S[] | undefined {
-  if (!instances || instances.length === 0) return undefined;
-  return instances[Math.min(Math.max(0, n), instances.length - 1)];
+  return pickInstance(instances, n);
+}
+
+/** The Nth entry, or the last one when there are fewer. */
+export function pickInstance<T>(list: readonly T[] | null | undefined, n: number): T | undefined {
+  if (!list || list.length === 0) return undefined;
+  return list[Math.min(Math.max(0, n), list.length - 1)];
+}
+
+/** Last time's note for each of today's session exercises ("seat 4"), paired like the sets. */
+export function previousNoteBySessionExercise(
+  exercises: readonly { session_exercise_id: number | string; exercise_id: string }[],
+  notesByExercise: Record<string, readonly (string | null | undefined)[] | undefined>,
+): Record<string, string | undefined> {
+  const nums = instanceNumbers(exercises);
+  const out: Record<string, string | undefined> = {};
+  for (const ex of exercises) {
+    const note = pickInstance(notesByExercise[ex.exercise_id], nums.get(ex.session_exercise_id) ?? 0)?.trim();
+    if (note) out[String(ex.session_exercise_id)] = note;
+  }
+  return out;
 }
 
 /** Today's instance number of each session exercise (0 for the first squat block, 1 for the second). */
@@ -67,4 +89,9 @@ export function lastTimeForSummary<S>(instancesByExercise: Record<string, S[][] 
     out[id] = real.length === 1 ? real[0] : undefined;
   }
   return out;
+}
+
+/** Each instance's note, in the same order as groupInstances. */
+export function instanceNotes(rows: readonly (InstanceRow & { notes?: string | null })[]): (string | null)[] {
+  return sortInstances(rows).map((r) => r.notes ?? null);
 }
