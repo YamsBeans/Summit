@@ -14,6 +14,7 @@ import ExerciseAbout from "@/components/ExerciseAbout";
 import { buildRepRecords } from "@/utils/repRecords";
 import { workingSetNumber } from "@/utils/setNumbers";
 import exercisesData from "@/assets/data/exercises.json";
+import { mergeSameSession } from "@/utils/exerciseHistory";
 
 type HistorySet = {
   weight: number | null; reps: number | null; completed: boolean; is_warmup?: boolean | null;
@@ -21,6 +22,7 @@ type HistorySet = {
   distance_meters?: number | null; duration_seconds?: number | null; pace_sec_per_km?: number | null;
 };
 type HistoryPoint = {
+  session_id?: number | null;
   session_date: string;
   sets: HistorySet[];
 };
@@ -82,7 +84,8 @@ export default function ExerciseDetailScreen() {
         ]);
         if (cancelled) return;
 
-        const points = ((histRes.data ?? []) as HistoryPoint[])
+        // One entry per workout, even when the exercise was done twice in it.
+        const points = mergeSameSession((histRes.data ?? []) as HistoryPoint[])
           .filter((h) => h.sets.length > 0)
           .sort((a, b) => a.session_date.localeCompare(b.session_date));
         setHistory(points);
