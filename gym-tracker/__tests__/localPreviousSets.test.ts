@@ -43,4 +43,27 @@ it("skips newer workouts that don't include the exercise and ignores unticked se
   expect(prev.map((s: any) => s.weight)).toEqual([225]);
 });
 
+it("keeps each instance of an exercise apart, in workout order", async () => {
+  const { data } = await localDb.signUp("a@b.c", "pw", "alex");
+  const userId = data!.user.id;
+  jest.setSystemTime(new Date("2026-11-02T10:00:00Z"));
+  const { data: session } = await localDb.startWorkoutSession({ routine_id: null, session_name: "Legs", user_id: userId });
+  // Back-offs inserted first but ordered second: order decides, not insert time.
+  const blocks: [number, number][] = [[2, 185], [1, 275]];
+  for (const [order, weight] of blocks) {
+    const { data: ex } = await localDb.insertSessionExercise({
+      session_id: session!.session_id, exercise_id: "squat", exercise_name: "Squat", exercise_order: order, notes: null,
+    });
+    await localDb.insertSessionExerciseSet({
+      session_exercise_id: ex!.session_exercise_id, set_number: 1, weight, reps: 5, is_warmup: false, completed: true,
+    });
+  }
+  await localDb.finishWorkoutSession(session!.session_id, null);
+  const { data: current } = await localDb.startWorkoutSession({ routine_id: null, session_name: "Now", user_id: userId });
+
+  const res = await localDb.getPreviousSessionSets("squat", userId, current!.session_id);
+  expect(res.instances.map((i: any[]) => i.map((s) => s.weight))).toEqual([[275], [185]]);
+  expect(res.data.map((s: any) => s.weight)).toEqual([275]);
+});
+
 afterEach(() => jest.useRealTimers());

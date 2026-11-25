@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { groupInstances } from "@/utils/previousInstances";
 import type {
   User,
   Routine,
@@ -499,20 +500,20 @@ const rawLocalDb = {
     // session: Mon legs, Wed push, Fri legs should show Monday's squats).
     const sessions = localWorkoutSessions
       .filter((s) => s.user_id === userId && s.end_time !== null && s.session_id !== excludeSessionId)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    let prevEx: any;
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime() || b.session_id - a.session_id);
+    let prevExs: any[] = [];
     for (const session of sessions) {
-      prevEx = localSessionExercises.find(
+      prevExs = localSessionExercises.filter(
         (e) => e.session_id === session.session_id && e.exercise_id === exerciseId
       );
-      if (prevEx) break;
+      if (prevExs.length > 0) break;
     }
-    if (!prevEx) return { data: [], error: null };
+    if (prevExs.length === 0) return { data: [] as any[], instances: [] as any[][], error: null };
+    const ids = new Set(prevExs.map((e) => e.session_exercise_id));
     // Sets left unticked were never done; don't offer them as last time's numbers.
-    const data = localSessionExerciseSets
-      .filter((s) => s.session_exercise_id === prevEx.session_exercise_id && s.completed !== false)
-      .sort((a, b) => a.set_number - b.set_number);
-    return { data, error: null };
+    const sets = localSessionExerciseSets.filter((s) => ids.has(s.session_exercise_id) && s.completed !== false);
+    const instances = groupInstances(prevExs, sets);
+    return { data: instances[0] ?? [], instances, error: null };
   },
 
   // Personal Records

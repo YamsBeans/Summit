@@ -37,6 +37,7 @@ import CardioSetRow from "@/components/CardioSetRow";
 import StrengthSetRow from "@/components/StrengthSetRow";
 import ExerciseNote from "@/components/ExerciseNote";
 import ElapsedTime from "@/components/ElapsedTime";
+import { lastTimeForSummary, previousBySessionExercise, previousForInstance } from "@/utils/previousInstances";
 import { formatDistance, formatDurationShort } from "@/utils/cardioUtils";
 
 
@@ -126,7 +127,9 @@ export default function WorkoutScreen() {
   const [selectedSet, setSelectedSet] = useState<any>(null);
   const [selectedExerciseId, setSelectedExerciseId] = useState<number | null>(null);
   const [showAddExercise, setShowAddExercise] = useState(false);
-  const [prevSets, setPrevSets] = useState<Record<string, any[]>>({});
+  // Last workout's sets per exercise_id, one list per instance of the
+  // exercise in that workout (heavy + back-off squats stay apart).
+  const [prevInstances, setPrevInstances] = useState<Record<string, any[][]>>({});
   // Records as they stood before this workout, for live PR badges.
   const [records, setRecords] = useState<any[] | null>(null);
   const [exerciseOptionsVisible, setExerciseOptionsVisible] = useState(false);
@@ -191,6 +194,13 @@ export default function WorkoutScreen() {
     setRestOnComplete(() => notifySuccess());
   }, [setRestOnComplete]);
 
+  // PREVIOUS-column sets per session exercise: today's Nth squat block is
+  // paired with last time's Nth.
+  const prevSets = useMemo(
+    () => previousBySessionExercise(exercises, prevInstances),
+    [exercises, prevInstances],
+  );
+
   // "Next: Bench Press · Set 2 · 135 lbs × 8" under the rest timer (like
   // Hevy), from the set's own numbers or else last time's.
   const restNextText = useMemo(() => {
@@ -200,7 +210,7 @@ export default function WorkoutScreen() {
     const label = next.set.is_warmup ? "Warm-up" : `Set ${workingSetNumber(sets, next.index)}`;
     const parts = [next.exercise.exercise_name, label];
     if (next.exercise.exercise_type !== "cardio") {
-      const prev = previousSetFor(prevSets[next.exercise.exercise_id], sets, next.index);
+      const prev = previousSetFor(prevSets[next.exercise.session_exercise_id], sets, next.index);
       const w = next.set.weight ?? prev?.weight ?? null;
       const r = next.set.reps ?? prev?.reps ?? null;
       if (w != null && w > 0 && r != null) parts.push(`${toDisplay(w)} ${unitLabel} × ${r}`);
@@ -320,11 +330,11 @@ export default function WorkoutScreen() {
     });
     setExerciseSets(setsMap);
 
-    const prevMap: Record<string, any[]> = {};
+    const prevMap: Record<string, any[][]> = {};
     exs.forEach((ex: any, i: number) => {
-      prevMap[ex.exercise_id] = (prevResults[i] as any)?.data ?? [];
+      prevMap[ex.exercise_id] = (prevResults[i] as any)?.instances ?? [];
     });
-    setPrevSets(prevMap);
+    setPrevInstances(prevMap);
 
     setLoading(false);
   };
@@ -332,15 +342,15 @@ export default function WorkoutScreen() {
   // Exercises added (or swapped in) mid-workout need last session's numbers
   // too — before, only exercises present when the screen opened got them, so a
   // quick-start workout never showed a "previous" column.
-  const loadPrevSetsFor = useCallback(async (exerciseId: string): Promise<any[]> => {
+  const loadPrevSetsFor = useCallback(async (exerciseId: string): Promise<any[][]> => {
     if (!session) return [];
     try {
       const { data: userData } = await db.getUser();
       const userId = userData?.user?.id;
       if (!userId) return [];
-      const { data } = await db.getPreviousSessionSets(exerciseId, userId, session.session_id);
-      setPrevSets((prev) => ({ ...prev, [exerciseId]: data ?? [] }));
-      return data ?? [];
+      const { instances } = await db.getPreviousSessionSets(exerciseId, userId, session.session_id);
+      setPrevInstances((prev) => ({ ...prev, [exerciseId]: instances ?? [] }));
+      return instances ?? [];
     } catch (e) { logError("workout.loadPrevSetsFor", e); return []; }
   }, [session]);
 
@@ -626,7 +636,7 @@ export default function WorkoutScreen() {
     // iOS won't present the summary while the "Finish Workout?" dialog is
     // still fading out, and the summary is the only way off this screen.
     if (Platform.OS === "ios") await new Promise((r) => setTimeout(r, 400));
-    setSummary({ ...buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds, prevSets), workoutNumber });
+    setSummary({ ...buildWorkoutSummary(exercises, exerciseSets, summaryPRs, durationSeconds, lastTimeForSummary(prevInstances)), workoutNumber });
   }, 1000);
 
   const handleSummaryAddPhoto = useCallback(() => {
@@ -713,7 +723,7 @@ export default function WorkoutScreen() {
   const addWarmupSets = useGuardedPress((ex: any) => setJobs(ex.session_exercise_id, async () => {
     const sets = exerciseSetsRef.current[ex.session_exercise_id] ?? [];
     const firstWorkIdx = sets.findIndex((s) => !s.is_warmup);
-    const prevWork = (prevSets[ex.exercise_id] ?? []).find((p: any) => !p.is_warmup && p.weight != null);
+    const prevWork = (prevSets[ex.session_exercise_id] ?? []).find((p: any) => !p.is_warmup && p.weight != null);
     const workingLbs = (firstWorkIdx >= 0 ? sets[firstWorkIdx].weight : null) ?? prevWork?.weight ?? null;
     const working = toDisplay(workingLbs);
     if (working == null || working <= 0) {
@@ -841,7 +851,7 @@ export default function WorkoutScreen() {
           distance_meters: null, duration_seconds: null, pace_sec_per_km: null,
         })));
     }
-    if (!prevSets[exercise.id]) loadPrevSetsFor(exercise.id);
+    if (!prevInstances[exercise.id]) loadPrevSetsFor(exercise.id);
   });
 
   const handleAddExercise = useGuardedPress(async (exercise: any) => {
@@ -864,7 +874,9 @@ export default function WorkoutScreen() {
     // Start the exercise with ready-to-log rows, like Strong/Hevy: as many
     // sets as last time (warmups kept), or one if it's new. Values stay empty
     // so last session's numbers show as placeholders / tap-to-fill.
-    const prev = prevSets[exercise.id] ?? await loadPrevSetsFor(exercise.id);
+    // This becomes today's Nth instance of the exercise; use last time's Nth.
+    const nth = exercises.filter((e) => e.exercise_id === exercise.id).length;
+    const prev = previousForInstance(prevInstances[exercise.id] ?? await loadPrevSetsFor(exercise.id), nth) ?? [];
     const template = prev.length > 0 ? prev.slice(0, 10) : [{ is_warmup: false }];
     // In parallel, so a slow connection doesn't hold the press guard (and
     // swallow the next "Add Exercise" tap) for one round trip per set.
@@ -1067,7 +1079,7 @@ export default function WorkoutScreen() {
                     sessionExerciseId={ex.session_exercise_id}
                     onUpdate={updateSet}
                     onSetNumberPress={openSetOptions}
-                    prevSet={previousSetFor(prevSets[ex.exercise_id], sets, idx)}
+                    prevSet={previousSetFor(prevSets[ex.session_exercise_id], sets, idx)}
                     onComplete={startRestTimer}
                     onDraft={setDraft}
                     distanceUnit={distanceUnit}
@@ -1083,7 +1095,7 @@ export default function WorkoutScreen() {
                     sessionExerciseId={ex.session_exercise_id}
                     onUpdate={updateSet}
                     onSetNumberPress={openSetOptions}
-                    prevSet={previousSetFor(prevSets[ex.exercise_id], sets, idx)}
+                    prevSet={previousSetFor(prevSets[ex.session_exercise_id], sets, idx)}
                     onComplete={startRestTimer}
                     onDraft={setDraft}
                     isPR={prSetIds.has(set.session_set_id)}
@@ -1186,7 +1198,7 @@ export default function WorkoutScreen() {
               const ex = exercises.find((e) => e.session_exercise_id === selectedExerciseId);
               const exSets = exerciseSets[selectedExerciseId ?? -1] ?? [];
               const idx = exSets.findIndex((s) => s.session_set_id === selectedSet?.session_set_id);
-              const prev = ex ? previousSetFor(prevSets[ex.exercise_id], exSets, idx) : null;
+              const prev = ex ? previousSetFor(prevSets[ex.session_exercise_id], exSets, idx) : null;
               const w = toDisplay(selectedSet?.weight ?? prev?.weight ?? null);
               closeSetOptions();
               setTimeout(() => setPlateWeight(w), Platform.OS === "ios" ? 400 : 0);
