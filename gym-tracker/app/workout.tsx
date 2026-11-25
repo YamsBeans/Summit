@@ -810,11 +810,16 @@ export default function WorkoutScreen() {
       prev.find((o) => o.session_exercise_id === e.session_exercise_id)?.exercise_order !== e.exercise_order);
     exercisesRef.current = next;
     setExercises(next);
-    const results = await Promise.all(changed.map((e) =>
-      db.updateSessionExercise(e.session_exercise_id, { exercise_order: e.exercise_order })));
-    const err = results.find((r: any) => r?.error)?.error;
-    if (err) setError(err.message);
-  }, []);
+    // The screen moves at once; the saves run one move at a time, so two
+    // quick taps on a slow network can't land out of order and leave two
+    // exercises on the same position after a reload.
+    await setJobs("order", async () => {
+      const results = await Promise.all(changed.map((e) =>
+        db.updateSessionExercise(e.session_exercise_id, { exercise_order: e.exercise_order })));
+      const err = results.find((r: any) => r?.error)?.error;
+      if (err) setError(err.message);
+    });
+  }, [setJobs]);
 
   const handleReplaceExercise = useGuardedPress(async (exercise: any) => {
     const target = replaceTargetRef.current;

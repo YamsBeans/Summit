@@ -195,6 +195,8 @@ export default function RoutineScreen() {
       delete next[routineExerciseId];
       return next;
     });
+    // Re-read so the offline copy used to start this routine drops it too.
+    db.getRoutineExercises(routineId).catch(() => {});
   });
 
   const openExerciseOptions = useCallback((ex: any) => {
@@ -264,6 +266,8 @@ export default function RoutineScreen() {
         : e
     ));
     replaceTargetRef.current = null;
+    // Re-read so starting this routine offline uses the new exercise.
+    db.getRoutineExercises(routineId).catch(() => {});
   });
 
   // Double-tap guard per exercise. One shared guard held for the whole save
